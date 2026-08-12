@@ -1,0 +1,29 @@
+#!/system/bin/sh
+
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname "$0")" 2>/dev/null && pwd)"
+ROOT_DIR="$(CDPATH= cd -- "$SCRIPT_DIR/.." 2>/dev/null && pwd)"
+COMMAND="${1:-status}"
+
+case "$COMMAND" in
+    status)
+        exec "$ROOT_DIR/status.sh"
+        ;;
+    gaming)
+        echo "Gaming optimization is not implemented yet."
+        echo "No hardware settings were changed."
+        ;;
+    profile)
+        shift
+        exec "$SCRIPT_DIR/profile" "$@"
+        ;;
+    reset)
+        echo "Reset is not implemented yet."
+        echo "No hardware settings were changed."
+        ;;
+    *)
+        echo "Usage: axgo {status|gaming|profile [cool|balanced|performance]|reset}"
+        exit 2
+        ;;
+esac
+
+exit 0

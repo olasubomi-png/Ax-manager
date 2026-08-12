@@ -1,0 +1,6 @@
+id=ax-t615-game-optimizer
+name=AX T615 Game Optimizer
+version=1.0.0
+versionCode=100
+author=AX Manager Project
+description=Tecno POP 9 / Unisoc T7250 (T615) gaming optimization framework. Foundation build only; no FPS increase or hardware tuning is enabled.
