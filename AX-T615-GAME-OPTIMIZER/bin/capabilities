@@ -1,0 +1,37 @@
+#!/system/bin/sh
+
+# Generate a detailed, read-only capability report.
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname "$0")" 2>/dev/null && pwd)"
+DETECTOR="$SCRIPT_DIR/detector"
+LOG_DIR="$SCRIPT_DIR/../logs"
+
+if [ ! -x "$DETECTOR" ]; then
+    echo "Capability detector is unavailable: $DETECTOR" >&2
+    exit 1
+fi
+
+if [ "${1:-}" = "--save" ]; then
+    mkdir -p "$LOG_DIR" 2>/dev/null || {
+        echo "Unable to create diagnostic log directory: $LOG_DIR" >&2
+        exit 1
+    }
+    if command -v date >/dev/null 2>&1; then
+        TIMESTAMP="$(date '+%Y%m%d-%H%M%S' 2>/dev/null)"
+    fi
+    [ -n "$TIMESTAMP" ] || TIMESTAMP="unknown-time"
+    REPORT_FILE="$LOG_DIR/capabilities-$TIMESTAMP.txt"
+    if sh "$DETECTOR" --report > "$REPORT_FILE" 2>/dev/null; then
+        echo "Capability report saved: $REPORT_FILE"
+        exit 0
+    fi
+    rm -f "$REPORT_FILE"
+    echo "Unable to save capability report: $REPORT_FILE" >&2
+    exit 1
+fi
+
+if [ "$#" -gt 0 ]; then
+    echo "Usage: capabilities [--save]" >&2
+    exit 2
+fi
+
+exec sh "$DETECTOR" --report

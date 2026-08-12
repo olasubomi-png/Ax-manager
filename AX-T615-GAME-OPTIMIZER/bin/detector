@@ -1,92 +1,742 @@
 #!/system/bin/sh
 
+# AX-T615 hardware and kernel capability detector.
+# This file is intentionally read-only. It never writes sysfs, procfs,
+# Android properties, or display configuration.
+
+CPU_ROOT="/sys/devices/system/cpu"
+THERMAL_ROOT="/sys/class/thermal"
+
 getprop_safe() {
     if command -v getprop >/dev/null 2>&1; then
         getprop "$1" 2>/dev/null
     fi
 }
 
-first_nonempty() {
-    [ -n "$1" ] && echo "$1" && return 0
-    [ -n "$2" ] && echo "$2" && return 0
-    echo "unknown"
+read_value() {
+    if [ -r "$1" ]; then
+        cat "$1" 2>/dev/null
+    fi
 }
 
-echo "AX-T615 hardware detector (read-only)"
-echo "Manufacturer: $(first_nonempty "$(getprop_safe ro.product.manufacturer)" "$(getprop_safe ro.product.brand)")"
-echo "Model: $(getprop_safe ro.product.model)"
-echo "Android version: $(first_nonempty "$(getprop_safe ro.build.version.release)" "$(getprop_safe ro.build.version.sdk)")"
-echo "SoC: $(first_nonempty "$(getprop_safe ro.soc.model)" "$(getprop_safe ro.board.platform)")"
+first_nonempty() {
+    [ -n "$1" ] && printf '%s\n' "$1" && return 0
+    [ -n "$2" ] && printf '%s\n' "$2" && return 0
+    printf '%s\n' "unknown"
+}
 
-if command -v getconf >/dev/null 2>&1; then
-    CPU_CORES="$(getconf _NPROCESSORS_ONLN 2>/dev/null)"
-fi
-[ -n "$CPU_CORES" ] || CPU_CORES="$(grep -c '^processor' /proc/cpuinfo 2>/dev/null)"
-echo "CPU cores: ${CPU_CORES:-unknown}"
-
-echo "CPU frequencies:"
-CPU_FOUND="no"
-for CPU_DIR in /sys/devices/system/cpu/cpu[0-9]*; do
-    [ -d "$CPU_DIR/cpufreq" ] || continue
-    CPU_FOUND="yes"
-    CPU_NAME="${CPU_DIR##*/}"
-    CURRENT=""
-    MAXIMUM=""
-    if [ -r "$CPU_DIR/cpufreq/cpuinfo_cur_freq" ]; then
-        CURRENT="$(cat "$CPU_DIR/cpufreq/cpuinfo_cur_freq" 2>/dev/null)"
-    elif [ -r "$CPU_DIR/cpufreq/scaling_cur_freq" ]; then
-        CURRENT="$(cat "$CPU_DIR/cpufreq/scaling_cur_freq" 2>/dev/null)"
+path_state() {
+    if [ ! -e "$1" ]; then
+        printf '%s' "unavailable"
+    elif [ -r "$1" ]; then
+        printf '%s' "readable"
+    else
+        printf '%s' "permission denied"
     fi
-    [ -r "$CPU_DIR/cpufreq/cpuinfo_max_freq" ] && MAXIMUM="$(cat "$CPU_DIR/cpufreq/cpuinfo_max_freq" 2>/dev/null)"
-    [ -n "$MAXIMUM" ] || [ ! -r "$CPU_DIR/cpufreq/scaling_max_freq" ] || MAXIMUM="$(cat "$CPU_DIR/cpufreq/scaling_max_freq" 2>/dev/null)"
-    echo "  $CPU_NAME: current=${CURRENT:-unknown} max=${MAXIMUM:-unknown}"
-done
-[ "$CPU_FOUND" = "yes" ] || echo "  unavailable"
+}
 
-echo "Available governors:"
-GOVERNOR_FOUND="no"
-for GOVERNOR_FILE in /sys/devices/system/cpu/cpu[0-9]*/cpufreq/scaling_available_governors; do
-    [ -r "$GOVERNOR_FILE" ] || continue
-    GOVERNOR_FOUND="yes"
-    echo "  $(dirname "$GOVERNOR_FILE"): $(cat "$GOVERNOR_FILE" 2>/dev/null)"
-done
-[ "$GOVERNOR_FOUND" = "yes" ] || echo "  unavailable"
+write_state() {
+    if [ ! -e "$1" ]; then
+        printf '%s' "unavailable"
+    elif [ -w "$1" ]; then
+        printf '%s' "yes"
+    else
+        printf '%s' "no"
+    fi
+}
 
-echo "GPU:"
-GPU_INFO="$(getprop_safe ro.hardware.egl)"
-[ -n "$GPU_INFO" ] || GPU_INFO="$(getprop_safe ro.hardware.vulkan)"
-echo "  properties: ${GPU_INFO:-unknown}"
-GPU_FOUND="no"
-for GPU_PATH in /sys/class/misc/mali0 /sys/devices/platform/*mali* /sys/class/devfreq/*gpu*; do
-    if [ -e "$GPU_PATH" ]; then
+is_number() {
+    case "$1" in
+        ''|*[!0-9-]*) return 1 ;;
+        *) return 0 ;;
+    esac
+}
+
+format_temp() {
+    TEMP="$1"
+    if ! is_number "$TEMP"; then
+        printf '%s' "${TEMP:-unknown}"
+    elif [ "$TEMP" -gt 1000 ] 2>/dev/null; then
+        if command -v awk >/dev/null 2>&1; then
+            awk -v value="$TEMP" 'BEGIN { printf "%.1f°C", value / 1000 }'
+        else
+            printf '%s°C' "$((TEMP / 1000))"
+        fi
+    else
+        printf '%s°C' "$TEMP"
+    fi
+}
+
+human_bytes() {
+    BYTES="$1"
+    if ! is_number "$BYTES"; then
+        printf '%s' "${BYTES:-unknown}"
+    elif command -v awk >/dev/null 2>&1; then
+        awk -v value="$BYTES" 'BEGIN {
+            if (value >= 1073741824) printf "%.2f GiB", value / 1073741824;
+            else if (value >= 1048576) printf "%.1f MiB", value / 1048576;
+            else if (value >= 1024) printf "%.1f KiB", value / 1024;
+            else printf "%d bytes", value;
+        }'
+    else
+        printf '%s bytes' "$BYTES"
+    fi
+}
+
+human_kb() {
+    KB="$1"
+    if ! is_number "$KB"; then
+        printf '%s' "${KB:-unknown}"
+    elif command -v awk >/dev/null 2>&1; then
+        awk -v value="$KB" 'BEGIN {
+            if (value >= 1048576) printf "%.2f GiB", value / 1048576;
+            else if (value >= 1024) printf "%.1f MiB", value / 1024;
+            else printf "%d KiB", value;
+        }'
+    else
+        printf '%s KiB' "$KB"
+    fi
+}
+
+print_property() {
+    LABEL="$1"
+    PROPERTY="$2"
+    VALUE="$(getprop_safe "$PROPERTY")"
+    printf '%-22s: %s\n' "$LABEL" "${VALUE:-unknown}"
+}
+
+cpu_part_for() {
+    CPU_NUMBER="$1"
+    if [ -r /proc/cpuinfo ] && command -v awk >/dev/null 2>&1; then
+        awk -v target="$CPU_NUMBER" '
+            $1 == "processor" { current = $3 }
+            current == target && $1 == "CPU" && $2 == "part" {
+                print $4
+                exit
+            }
+        ' /proc/cpuinfo 2>/dev/null
+    fi
+}
+
+cpu_model_for() {
+    CPU_NUMBER="$1"
+    if [ -r /proc/cpuinfo ] && command -v awk >/dev/null 2>&1; then
+        awk -v target="$CPU_NUMBER" '
+            $1 == "processor" { current = $3 }
+            current == target && ($1 == "Processor" || $1 == "model" || $1 == "Model") {
+                line = $0
+                sub(/^[^:]*:[[:space:]]*/, "", line)
+                print line
+                exit
+            }
+        ' /proc/cpuinfo 2>/dev/null
+    fi
+}
+
+cpu_label_for() {
+    CPU_NUMBER="$1"
+    PART="$(cpu_part_for "$CPU_NUMBER")"
+    MODEL="$(cpu_model_for "$CPU_NUMBER")"
+    LOWER="$(printf '%s %s' "$PART" "$MODEL" | tr '[:upper:]' '[:lower:]')"
+    case "$LOWER" in
+        *0xd05*|*cortex-a55*) printf '%s' "Cortex-A55" ;;
+        *0xd0a*|*cortex-a75*) printf '%s' "Cortex-A75" ;;
+        *) printf '%s' "unidentified" ;;
+    esac
+}
+
+cpu_count() {
+    COUNT=0
+    for CPU_DIR in "$CPU_ROOT"/cpu[0-9]*; do
+        [ -d "$CPU_DIR" ] || continue
+        COUNT=$((COUNT + 1))
+    done
+    if [ "$COUNT" -eq 0 ] && [ -r /proc/cpuinfo ]; then
+        COUNT="$(grep -c '^processor' /proc/cpuinfo 2>/dev/null)"
+    fi
+    printf '%s' "$COUNT"
+}
+
+cpu_online_state() {
+    CPU_DIR="$1"
+    if [ -r "$CPU_DIR/online" ]; then
+        ONLINE="$(read_value "$CPU_DIR/online")"
+        [ "$ONLINE" = "1" ] && printf '%s' "online" || printf '%s' "offline"
+    else
+        # CPU0 commonly has no online file and is online when present.
+        [ "${CPU_DIR##*/}" = "cpu0" ] && printf '%s' "online" || printf '%s' "unknown"
+    fi
+}
+
+print_device() {
+    echo "DEVICE"
+    echo "----------------------------------------"
+    print_property "Manufacturer" "ro.product.manufacturer"
+    print_property "Brand" "ro.product.brand"
+    print_property "Model" "ro.product.model"
+    print_property "Device" "ro.product.device"
+    print_property "Product name" "ro.product.name"
+    print_property "Android release" "ro.build.version.release"
+    print_property "Android SDK" "ro.build.version.sdk"
+    print_property "Build incremental" "ro.build.version.incremental"
+    print_property "CPU ABI" "ro.product.cpu.abi"
+    SOC="$(getprop_safe ro.soc.model)"
+    [ -n "$SOC" ] || SOC="$(getprop_safe ro.board.platform)"
+    [ -n "$SOC" ] || SOC="$(getprop_safe ro.hardware)"
+    printf '%-22s: %s\n' "SoC" "${SOC:-unknown}"
+    printf '%-22s: %s\n' "Kernel version" "$(uname -r 2>/dev/null || printf '%s' unknown)"
+    printf '%-22s: %s\n' "Kernel release state" "$(path_state /proc/version)"
+    echo
+}
+
+print_cpu() {
+    echo "CPU"
+    echo "----------------------------------------"
+    printf '%-22s: %s\n' "CPU sysfs" "$(path_state "$CPU_ROOT")"
+    ALL_CORES="$(cpu_count)"
+    if [ "$ALL_CORES" = "0" ] && [ -r /proc/cpuinfo ]; then
+        ALL_CORES="$(grep -c '^processor' /proc/cpuinfo 2>/dev/null)"
+    fi
+    printf '%-22s: %s\n' "Core count" "${ALL_CORES:-unknown}"
+
+    ONLINE_LIST=""
+    OFFLINE_LIST=""
+    UNKNOWN_LIST=""
+    ONLINE_COUNT=0
+    OFFLINE_COUNT=0
+    for CPU_DIR in "$CPU_ROOT"/cpu[0-9]*; do
+        [ -d "$CPU_DIR" ] || continue
+        CPU_NAME="${CPU_DIR##*/}"
+        STATE="$(cpu_online_state "$CPU_DIR")"
+        case "$STATE" in
+            online)
+                ONLINE_COUNT=$((ONLINE_COUNT + 1))
+                ONLINE_LIST="${ONLINE_LIST}${ONLINE_LIST:+ }${CPU_NAME#cpu}"
+                ;;
+            offline)
+                OFFLINE_COUNT=$((OFFLINE_COUNT + 1))
+                OFFLINE_LIST="${OFFLINE_LIST}${OFFLINE_LIST:+ }${CPU_NAME#cpu}"
+                ;;
+            *)
+                UNKNOWN_LIST="${UNKNOWN_LIST}${UNKNOWN_LIST:+ }${CPU_NAME#cpu}"
+                ;;
+        esac
+    done
+    printf '%-22s: %s (%s)\n' "Online CPUs" "${ONLINE_COUNT:-0}" "${ONLINE_LIST:-unknown}"
+    printf '%-22s: %s (%s)\n' "Offline CPUs" "${OFFLINE_COUNT:-0}" "${OFFLINE_LIST:-none}"
+    [ -n "$UNKNOWN_LIST" ] && printf '%-22s: %s\n' "Unknown CPU state" "$UNKNOWN_LIST"
+
+    echo "CPU model information:"
+    if [ -r /proc/cpuinfo ]; then
+        grep -E '^(Hardware|CPU architecture|CPU implementer|CPU variant|CPU part|CPU revision|Model|model name|Processor)' /proc/cpuinfo 2>/dev/null | head -n 20
+    else
+        echo "  /proc/cpuinfo: $(path_state /proc/cpuinfo)"
+    fi
+
+    echo "CPU topology:"
+    TOPOLOGY_FOUND="no"
+    for CPU_DIR in "$CPU_ROOT"/cpu[0-9]*; do
+        [ -d "$CPU_DIR" ] || continue
+        CPU_NAME="${CPU_DIR##*/}"
+        CORE_ID="$(read_value "$CPU_DIR/topology/core_id")"
+        CLUSTER_ID="$(read_value "$CPU_DIR/topology/cluster_id")"
+        PACKAGE_ID="$(read_value "$CPU_DIR/topology/physical_package_id")"
+        RELATED="$(read_value "$CPU_DIR/topology/core_siblings_list")"
+        [ -n "$RELATED" ] || RELATED="$(read_value "$CPU_DIR/topology/thread_siblings_list")"
+        if [ -n "$CORE_ID$CLUSTER_ID$PACKAGE_ID$RELATED" ]; then
+            TOPOLOGY_FOUND="yes"
+            printf '  %s: core_id=%s cluster_id=%s package_id=%s siblings=%s model=%s\n' \
+                "$CPU_NAME" "${CORE_ID:-unknown}" "${CLUSTER_ID:-unknown}" \
+                "${PACKAGE_ID:-unknown}" "${RELATED:-unknown}" \
+                "$(cpu_label_for "${CPU_NAME#cpu}")"
+        fi
+    done
+    [ "$TOPOLOGY_FOUND" = "yes" ] || echo "  unavailable"
+
+    echo "CPU frequency by CPU:"
+    FREQ_FOUND="no"
+    for CPU_DIR in "$CPU_ROOT"/cpu[0-9]*; do
+        [ -d "$CPU_DIR/cpufreq" ] || continue
+        FREQ_FOUND="yes"
+        CPU_NAME="${CPU_DIR##*/}"
+        CUR="$(read_value "$CPU_DIR/cpufreq/cpuinfo_cur_freq")"
+        [ -n "$CUR" ] || CUR="$(read_value "$CPU_DIR/cpufreq/scaling_cur_freq")"
+        MIN="$(read_value "$CPU_DIR/cpufreq/cpuinfo_min_freq")"
+        [ -n "$MIN" ] || MIN="$(read_value "$CPU_DIR/cpufreq/scaling_min_freq")"
+        MAX="$(read_value "$CPU_DIR/cpufreq/cpuinfo_max_freq")"
+        [ -n "$MAX" ] || MAX="$(read_value "$CPU_DIR/cpufreq/scaling_max_freq")"
+        printf '  %s: current=%s kHz min=%s kHz max=%s kHz\n' \
+            "$CPU_NAME" "${CUR:-unknown}" "${MIN:-unknown}" "${MAX:-unknown}"
+    done
+    [ "$FREQ_FOUND" = "yes" ] || echo "  unavailable"
+
+    echo "Related cpufreq policies:"
+    POLICY_FOUND="no"
+    for POLICY in "$CPU_ROOT"/cpufreq/policy[0-9]*; do
+        [ -d "$POLICY" ] || continue
+        POLICY_FOUND="yes"
+        POLICY_NAME="${POLICY##*/}"
+        RELATED="$(read_value "$POLICY/related_cpus")"
+        [ -n "$RELATED" ] || RELATED="$(read_value "$POLICY/affected_cpus")"
+        FIRST_CPU="$(printf '%s\n' "$RELATED" | awk '{print $1}')"
+        LABEL="unidentified"
+        [ -n "$FIRST_CPU" ] && LABEL="$(cpu_label_for "$FIRST_CPU")"
+        CUR="$(read_value "$POLICY/scaling_cur_freq")"
+        [ -n "$CUR" ] || CUR="$(read_value "$POLICY/cpuinfo_cur_freq")"
+        MIN="$(read_value "$POLICY/scaling_min_freq")"
+        MAX="$(read_value "$POLICY/scaling_max_freq")"
+        printf '  %s (%s): CPUs=%s current=%s kHz min=%s kHz max=%s kHz\n' \
+            "$POLICY_NAME" "$LABEL" "${RELATED:-unknown}" \
+            "${CUR:-unknown}" "${MIN:-unknown}" "${MAX:-unknown}"
+        printf '    available frequencies: %s\n' \
+            "$(read_value "$POLICY/scaling_available_frequencies" || printf '%s' unavailable)"
+        printf '    available governors: %s\n' \
+            "$(read_value "$POLICY/scaling_available_governors" || printf '%s' unavailable)"
+        printf '    current governor: %s\n' \
+            "$(read_value "$POLICY/scaling_governor" || printf '%s' unavailable)"
+        printf '    policy path: readable=%s writable=%s\n' \
+            "$(path_state "$POLICY")" "$(write_state "$POLICY")"
+    done
+    [ "$POLICY_FOUND" = "yes" ] || echo "  unavailable"
+    echo
+}
+
+gpu_node_value() {
+    GPU_PATH="$1"
+    NODE="$2"
+    VALUE="$(read_value "$GPU_PATH/$NODE")"
+    [ -n "$VALUE" ] && printf '%s' "$VALUE" || printf '%s' unavailable
+}
+
+print_gpu_path() {
+    GPU_PATH="$1"
+    [ -e "$GPU_PATH" ] || return 0
+    echo "  interface: $GPU_PATH"
+    printf '    state: readable=%s writable=%s\n' \
+        "$(path_state "$GPU_PATH")" "$(write_state "$GPU_PATH")"
+    for NODE in name driver cur_freq min_freq max_freq available_frequencies \
+        governor available_governors load gpu_busy_percentage utilization; do
+        if [ -e "$GPU_PATH/$NODE" ]; then
+            printf '    %-24s: %s (readable=%s writable=%s)\n' "$NODE" \
+                "$(gpu_node_value "$GPU_PATH" "$NODE")" \
+                "$(path_state "$GPU_PATH/$NODE")" "$(write_state "$GPU_PATH/$NODE")"
+        fi
+    done
+    if [ -L "$GPU_PATH/driver" ] && command -v readlink >/dev/null 2>&1; then
+        printf '    driver link            : %s\n' "$(readlink "$GPU_PATH/driver" 2>/dev/null)"
+    fi
+}
+
+print_gpu() {
+    echo "GPU"
+    echo "----------------------------------------"
+    printf '%-22s: %s\n' "EGL property" "$(first_nonempty "$(getprop_safe ro.hardware.egl)" unknown)"
+    printf '%-22s: %s\n' "Vulkan property" "$(first_nonempty "$(getprop_safe ro.hardware.vulkan)" unknown)"
+    printf '%-22s: %s\n' "Graphics property" "$(first_nonempty "$(getprop_safe ro.hardware.gralloc)" unknown)"
+    printf '%-22s: %s\n' "GPU sysfs roots" \
+        "kgsl=$(path_state /sys/class/kgsl), devfreq=$(path_state /sys/class/devfreq)"
+
+    GPU_FOUND="no"
+    if [ -d /sys/class/kgsl ]; then
         GPU_FOUND="yes"
-        echo "  path: $GPU_PATH"
+        echo "KGSL interface (reported only; not assumed):"
+        for NODE in /sys/class/kgsl/*; do
+            [ -e "$NODE" ] || continue
+            printf '  %s: readable=%s writable=%s\n' "$NODE" \
+                "$(path_state "$NODE")" "$(write_state "$NODE")"
+        done
     fi
-done
-[ "$GPU_FOUND" = "yes" ] || echo "  discoverable sysfs path: unavailable"
 
-echo "Thermal zones:"
-THERMAL_FOUND="no"
-for ZONE in /sys/class/thermal/thermal_zone[0-9]*; do
-    [ -d "$ZONE" ] || continue
-    THERMAL_FOUND="yes"
-    ZONE_TYPE=""
-    ZONE_TEMP=""
-    [ -r "$ZONE/type" ] && ZONE_TYPE="$(cat "$ZONE/type" 2>/dev/null)"
-    [ -r "$ZONE/temp" ] && ZONE_TEMP="$(cat "$ZONE/temp" 2>/dev/null)"
-    echo "  ${ZONE##*/}: type=${ZONE_TYPE:-unknown} temp=${ZONE_TEMP:-unknown}"
-done
-[ "$THERMAL_FOUND" = "yes" ] || echo "  unavailable"
+    echo "Devfreq GPU interfaces:"
+    DEVFREQ_FOUND="no"
+    for DEVFREQ in /sys/class/devfreq/*; do
+        [ -e "$DEVFREQ" ] || continue
+        NAME="$(printf '%s' "${DEVFREQ##*/}" | tr '[:upper:]' '[:lower:]')"
+        case "$NAME" in
+            *gpu*|*mali*|*g3d*|*3d*|*graphics*|*devfreq*)
+                DEVFREQ_FOUND="yes"
+                GPU_FOUND="yes"
+                print_gpu_path "$DEVFREQ"
+                ;;
+        esac
+    done
+    [ "$DEVFREQ_FOUND" = "yes" ] || echo "  unavailable"
 
-REFRESH_RATE=""
-if command -v settings >/dev/null 2>&1; then
-    REFRESH_RATE="$(settings get system peak_refresh_rate 2>/dev/null)"
-    [ "$REFRESH_RATE" = "null" ] && REFRESH_RATE=""
-fi
-if [ -z "$REFRESH_RATE" ] && command -v dumpsys >/dev/null 2>&1; then
-    REFRESH_RATE="$(dumpsys display 2>/dev/null | grep -m 1 -Eo '[0-9]+(\.[0-9]+)? ?Hz' | head -n 1)"
-fi
-echo "Refresh rate: ${REFRESH_RATE:-unknown}"
-echo "No hardware values were written."
+    echo "GPU-related platform paths:"
+    PLATFORM_FOUND="no"
+    for PLATFORM in /sys/devices/platform/*; do
+        [ -e "$PLATFORM" ] || continue
+        NAME="$(printf '%s' "${PLATFORM##*/}" | tr '[:upper:]' '[:lower:]')"
+        case "$NAME" in
+            *gpu*|*mali*|*g3d*|*kgsl*|*graphics*)
+                PLATFORM_FOUND="yes"
+                GPU_FOUND="yes"
+                print_gpu_path "$PLATFORM"
+                ;;
+        esac
+    done
+    [ "$PLATFORM_FOUND" = "yes" ] || echo "  unavailable"
+    [ "$GPU_FOUND" = "yes" ] || echo "No GPU interface discovered."
+    echo
+}
+
+print_thermal() {
+    echo "THERMAL"
+    echo "----------------------------------------"
+    printf '%-22s: %s\n' "Thermal root" "$(path_state "$THERMAL_ROOT")"
+    ZONE_COUNT=0
+    READABLE_COUNT=0
+    WRITABLE_COUNT=0
+    for ZONE in "$THERMAL_ROOT"/thermal_zone[0-9]*; do
+        [ -d "$ZONE" ] || continue
+        ZONE_COUNT=$((ZONE_COUNT + 1))
+        TYPE="$(read_value "$ZONE/type")"
+        TEMP="$(read_value "$ZONE/temp")"
+        TEMP_STATE="$(path_state "$ZONE/temp")"
+        TEMP_WRITE="$(write_state "$ZONE/temp")"
+        [ "$TEMP_STATE" = "readable" ] && READABLE_COUNT=$((READABLE_COUNT + 1))
+        [ "$TEMP_WRITE" = "yes" ] && WRITABLE_COUNT=$((WRITABLE_COUNT + 1))
+        echo "${ZONE##*/}"
+        printf '  type          : %s\n' "${TYPE:-unknown}"
+        printf '  temperature   : %s\n' "$(format_temp "$TEMP")"
+        printf '  readable      : %s\n' "$([ "$TEMP_STATE" = readable ] && printf yes || printf no)"
+        printf '  writable      : %s\n' "$TEMP_WRITE"
+        echo "  trip points:"
+        TRIP_FOUND="no"
+        for TRIP_TEMP in "$ZONE"/trip_point_*_temp; do
+            [ -e "$TRIP_TEMP" ] || continue
+            TRIP_FOUND="yes"
+            TRIP_NAME="${TRIP_TEMP##*/}"
+            TRIP_ID="${TRIP_NAME#trip_point_}"
+            TRIP_ID="${TRIP_ID%_temp}"
+            TRIP_TYPE="$(read_value "$ZONE/trip_point_${TRIP_ID}_type")"
+            printf '    %s: %s (%s)\n' "$TRIP_ID" \
+                "$(format_temp "$(read_value "$TRIP_TEMP")")" \
+                "${TRIP_TYPE:-unknown}"
+        done
+        [ "$TRIP_FOUND" = "yes" ] || echo "    unavailable"
+        echo "  cooling devices:"
+        COOLING_FOUND="no"
+        for COOLING in "$ZONE"/cdev[0-9]*; do
+            [ -e "$COOLING" ] || continue
+            COOLING_FOUND="yes"
+            CDEV_TYPE="$(read_value "$COOLING/type")"
+            printf '    %s: type=%s state=%s/%s readable=%s writable=%s\n' \
+                "${COOLING##*/}" "${CDEV_TYPE:-unknown}" \
+                "$(read_value "$COOLING/cur_state" || printf '%s' unknown)" \
+                "$(read_value "$COOLING/max_state" || printf '%s' unknown)" \
+                "$(path_state "$COOLING")" "$(write_state "$COOLING")"
+        done
+        [ "$COOLING_FOUND" = "yes" ] || echo "    unavailable"
+    done
+    [ "$ZONE_COUNT" -gt 0 ] || echo "No thermal zones discovered."
+    printf '%-22s: %s\n' "Zones" "$ZONE_COUNT"
+    printf '%-22s: %s\n' "Readable temperatures" "$READABLE_COUNT"
+    printf '%-22s: %s\n' "Writable temperatures" "$WRITABLE_COUNT"
+    echo "Thermal configuration was not changed."
+    echo
+}
+
+meminfo_value() {
+    if [ -r /proc/meminfo ]; then
+        awk -v key="$1" '$1 == key ":" {print $2; exit}' /proc/meminfo 2>/dev/null
+    fi
+}
+
+print_memory() {
+    echo "MEMORY"
+    echo "----------------------------------------"
+    printf '%-22s: %s\n' "/proc/meminfo" "$(path_state /proc/meminfo)"
+    TOTAL_KB="$(meminfo_value MemTotal)"
+    AVAILABLE_KB="$(meminfo_value MemAvailable)"
+    FREE_KB="$(meminfo_value MemFree)"
+    BUFFERS_KB="$(meminfo_value Buffers)"
+    CACHED_KB="$(meminfo_value Cached)"
+    SWAP_TOTAL_KB="$(meminfo_value SwapTotal)"
+    SWAP_FREE_KB="$(meminfo_value SwapFree)"
+    if is_number "$TOTAL_KB"; then
+        printf '%-22s: %s\n' "Total RAM" "$(human_kb "$TOTAL_KB")"
+    else
+        printf '%-22s: unknown\n' "Total RAM"
+    fi
+    printf '%-22s: %s\n' "Available RAM" "$(human_kb "$AVAILABLE_KB")"
+    if is_number "$TOTAL_KB" && is_number "$AVAILABLE_KB"; then
+        printf '%-22s: %s\n' "Used RAM (calculated)" "$(human_kb "$((TOTAL_KB - AVAILABLE_KB))")"
+    elif is_number "$TOTAL_KB" && is_number "$FREE_KB"; then
+        printf '%-22s: %s\n' "Used RAM (calculated)" "$(human_kb "$((TOTAL_KB - FREE_KB - ${BUFFERS_KB:-0} - ${CACHED_KB:-0}))")"
+    else
+        printf '%-22s: unknown\n' "Used RAM (calculated)"
+    fi
+    printf '%-22s: %s\n' "Swap total" "$(human_kb "$SWAP_TOTAL_KB")"
+    printf '%-22s: %s\n' "Swap free" "$(human_kb "$SWAP_FREE_KB")"
+    printf '%-22s: %s\n' "/proc/swaps" "$(path_state /proc/swaps)"
+
+    echo "ZRAM:"
+    ZRAM_FOUND="no"
+    for ZRAM in /sys/block/zram[0-9]*; do
+        [ -d "$ZRAM" ] || continue
+        ZRAM_FOUND="yes"
+        DISK_SIZE="$(read_value "$ZRAM/disksize")"
+        MM_STAT="$(read_value "$ZRAM/mm_stat")"
+        ORIG_DATA=""
+        COMPRESSED_DATA=""
+        USED_MEMORY=""
+        if [ -n "$MM_STAT" ]; then
+            ORIG_DATA="$(printf '%s\n' "$MM_STAT" | awk '{print $1}')"
+            COMPRESSED_DATA="$(printf '%s\n' "$MM_STAT" | awk '{print $2}')"
+            USED_MEMORY="$(printf '%s\n' "$MM_STAT" | awk '{print $3}')"
+        fi
+        printf '  %s: size=%s original=%s compressed=%s memory_used=%s\n' \
+            "${ZRAM##*/}" "$(human_bytes "$DISK_SIZE")" \
+            "$(human_bytes "$ORIG_DATA")" "$(human_bytes "$COMPRESSED_DATA")" \
+            "$(human_bytes "$USED_MEMORY")"
+        printf '    disksize readable=%s writable=%s mm_stat readable=%s writable=%s\n' \
+            "$(path_state "$ZRAM/disksize")" "$(write_state "$ZRAM/disksize")" \
+            "$(path_state "$ZRAM/mm_stat")" "$(write_state "$ZRAM/mm_stat")"
+    done
+    [ "$ZRAM_FOUND" = "yes" ] || echo "  unavailable"
+
+    printf '%-22s: %s\n' "Memory pressure" "$(path_state /proc/pressure/memory)"
+    if [ -r /proc/pressure/memory ]; then
+        sed -n '1,3p' /proc/pressure/memory 2>/dev/null
+    fi
+    echo
+}
+
+print_display() {
+    echo "DISPLAY"
+    echo "----------------------------------------"
+    DISPLAY_DUMP=""
+    if command -v dumpsys >/dev/null 2>&1; then
+        DISPLAY_DUMP="$(dumpsys display 2>/dev/null)"
+    fi
+    PHYSICAL=""
+    LOGICAL=""
+    DENSITY=""
+    if command -v wm >/dev/null 2>&1; then
+        WM_SIZE="$(wm size 2>/dev/null)"
+        WM_DENSITY="$(wm density 2>/dev/null)"
+        PHYSICAL="$(printf '%s\n' "$WM_SIZE" | awk -F': ' '/Physical size:/ {print $2; exit}')"
+        LOGICAL="$(printf '%s\n' "$WM_SIZE" | awk -F': ' '/Override size:|Logical size:/ {print $2; exit}')"
+        DENSITY="$(printf '%s\n' "$WM_DENSITY" | awk -F': ' '/Physical density:|Override density:/ {print $2; exit}')"
+    fi
+    printf '%-22s: %s\n' "Physical resolution" "${PHYSICAL:-unknown}"
+    printf '%-22s: %s\n' "Logical resolution" "${LOGICAL:-unknown}"
+    printf '%-22s: %s\n' "Density" "${DENSITY:-unknown}"
+    printf '%-22s: %s\n' "Display service" "$(command -v dumpsys >/dev/null 2>&1 && printf yes || printf no)"
+    if [ -n "$DISPLAY_DUMP" ]; then
+        echo "Display ID:"
+        printf '%s\n' "$DISPLAY_DUMP" | grep -i -E 'mDisplayId=|displayId=|DisplayDeviceInfo' | head -n 3
+        echo "Current refresh-rate information:"
+        printf '%s\n' "$DISPLAY_DUMP" | grep -i -E 'refreshRate|refresh rate' | head -n 5
+        echo "Supported display modes:"
+        printf '%s\n' "$DISPLAY_DUMP" | grep -i -E 'supportedModes|modeId|supported.*mode|Display.Mode' | head -n 10
+    else
+        echo "Display dump: unavailable or permission denied"
+    fi
+    if command -v settings >/dev/null 2>&1; then
+        PEAK="$(settings get system peak_refresh_rate 2>/dev/null)"
+        MIN_REFRESH="$(settings get system min_refresh_rate 2>/dev/null)"
+        printf '%-22s: %s\n' "Peak refresh setting" "${PEAK:-unknown}"
+        printf '%-22s: %s\n' "Minimum refresh setting" "${MIN_REFRESH:-unknown}"
+    fi
+    echo "Display configuration was not changed."
+    echo
+}
+
+print_game_mode() {
+    echo "GAME MODE / PERFORMANCE APIs"
+    echo "----------------------------------------"
+    CMD_SERVICES=""
+    if command -v cmd >/dev/null 2>&1; then
+        CMD_SERVICES="$(cmd -l 2>/dev/null)"
+    fi
+    GAME_SERVICE="no"
+    if printf '%s\n' "$CMD_SERVICES" | grep -qi '^game$'; then
+        GAME_SERVICE="yes"
+    fi
+    if [ "$GAME_SERVICE" = "yes" ]; then
+        GAME_HELP="$(cmd game help 2>&1)"
+        printf '%-22s: YES\n' "cmd game available"
+        printf '%-22s: %s\n' "cmd game readable" "$( [ -n "$GAME_HELP" ] && printf yes || printf no )"
+        echo "Game mode references:"
+        printf '%s\n' "$GAME_HELP" | grep -i -E 'standard|performance|battery|mode' | head -n 20
+    else
+        printf '%-22s: NO\n' "cmd game available"
+    fi
+
+    GAME_DUMP=""
+    if command -v dumpsys >/dev/null 2>&1; then
+        GAME_DUMP="$(dumpsys game 2>/dev/null)"
+    fi
+    if [ -n "$GAME_DUMP" ]; then
+        printf '%-22s: YES\n' "dumpsys game available"
+        echo "Detected game API modes:"
+        printf '%s\n' "$GAME_DUMP" | grep -i -E 'standard|performance|battery' | head -n 20
+    else
+        printf '%-22s: NO/UNAVAILABLE\n' "dumpsys game"
+    fi
+    echo "No game mode or performance mode was changed."
+    echo
+}
+
+print_performance() {
+    echo "POWER / PERFORMANCE INTERFACES"
+    echo "----------------------------------------"
+    if command -v cmd >/dev/null 2>&1; then
+        SERVICES="$(cmd -l 2>/dev/null | grep -i -E 'power|thermal|game|hint|performance' | head -n 30)"
+        printf '%-22s: %s\n' "Relevant cmd services" "${SERVICES:-none detected}"
+    else
+        printf '%-22s: unavailable\n' "cmd service list"
+    fi
+    if command -v dumpsys >/dev/null 2>&1; then
+        for SERVICE in power thermalservice; do
+            if dumpsys "$SERVICE" >/dev/null 2>&1; then
+                printf '%-22s: available/read-only\n' "dumpsys $SERVICE"
+            else
+                printf '%-22s: unavailable/denied\n' "dumpsys $SERVICE"
+            fi
+        done
+    else
+        echo "dumpsys: unavailable"
+    fi
+    printf '%-22s: %s\n' "/proc/schedstat" "$(path_state /proc/schedstat)"
+    printf '%-22s: %s\n' "scheduler sysctls" "$(path_state /proc/sys/kernel)"
+    SCHED_FILES=""
+    for SCHED_FILE in "$CPU_ROOT"/sched_* /proc/sys/kernel/sched_*; do
+        [ -r "$SCHED_FILE" ] || continue
+        SCHED_FILES="${SCHED_FILES}${SCHED_FILES:+, }${SCHED_FILE}"
+    done
+    printf '%-22s: %s\n' "Scheduler controls" "${SCHED_FILES:-none readable}"
+    echo "Power and performance interfaces were not changed."
+    echo
+}
+
+detect_root() {
+    ROOT_STATUS="NO"
+    ROOT_UID="unknown"
+    if command -v id >/dev/null 2>&1; then
+        ROOT_UID="$(id -u 2>/dev/null)"
+    fi
+    SU_PATH="$(command -v su 2>/dev/null || true)"
+    SU_ACCESS="not tested"
+    if [ "$ROOT_UID" = "0" ]; then
+        ROOT_STATUS="YES"
+        SU_ACCESS="current shell is UID 0"
+    elif [ -n "$SU_PATH" ]; then
+        # `id` is read-only. stdin is closed to avoid interactive prompts.
+        SU_RESULT="$(su -c id </dev/null 2>/dev/null || true)"
+        case "$SU_RESULT" in
+            *"uid=0"*|*"uid=0("*)
+                ROOT_STATUS="YES"
+                SU_ACCESS="yes"
+                ;;
+            *)
+                SU_ACCESS="no"
+                ;;
+        esac
+    else
+        SU_ACCESS="su unavailable"
+    fi
+    printf 'Root: %s\n' "$ROOT_STATUS"
+    printf '  current UID: %s\n' "$ROOT_UID"
+    printf '  su binary: %s\n' "${SU_PATH:-unavailable}"
+    printf '  accessible root shell: %s\n' "$SU_ACCESS"
+}
+
+print_root() {
+    echo "ROOT"
+    echo "----------------------------------------"
+    detect_root
+    echo
+}
+
+cpu_control_status() {
+    FOUND="no"
+    for POLICY in "$CPU_ROOT"/cpufreq/policy[0-9]*; do
+        [ -d "$POLICY" ] || continue
+        if [ -r "$POLICY/scaling_cur_freq" ] || [ -r "$POLICY/scaling_available_governors" ]; then
+            FOUND="yes"
+        fi
+    done
+    [ "$FOUND" = "yes" ] && printf '%s' "AVAILABLE" || printf '%s' "UNAVAILABLE"
+}
+
+gpu_control_status() {
+    FOUND="no"
+    for DEVFREQ in /sys/class/devfreq/*; do
+        [ -e "$DEVFREQ" ] || continue
+        NAME="$(printf '%s' "${DEVFREQ##*/}" | tr '[:upper:]' '[:lower:]')"
+        case "$NAME" in
+            *gpu*|*mali*|*g3d*|*3d*|*graphics*) FOUND="yes" ;;
+        esac
+    done
+    [ "$FOUND" = "yes" ] && printf '%s' "AVAILABLE" || printf '%s' "UNAVAILABLE"
+}
+
+thermal_read_status() {
+    FOUND="no"
+    for ZONE in "$THERMAL_ROOT"/thermal_zone[0-9]*; do
+        [ -r "$ZONE/temp" ] && FOUND="yes"
+    done
+    [ "$FOUND" = "yes" ] && printf '%s' "AVAILABLE" || printf '%s' "UNAVAILABLE"
+}
+
+print_summary() {
+    echo "AX-T615 concise hardware status (read-only)"
+    echo "----------------------------------------"
+    printf 'Device       : %s\n' "$(first_nonempty "$(getprop_safe ro.product.model)" unknown)"
+    printf 'Manufacturer : %s\n' "$(first_nonempty "$(getprop_safe ro.product.manufacturer)" "$(getprop_safe ro.product.brand)")"
+    printf 'Android      : %s\n' "$(first_nonempty "$(getprop_safe ro.build.version.release)" "$(getprop_safe ro.build.version.sdk)")"
+    printf 'Kernel       : %s\n' "$(uname -r 2>/dev/null || printf '%s' unknown)"
+    printf 'CPU ABI      : %s\n' "$(first_nonempty "$(getprop_safe ro.product.cpu.abi)" "$(uname -m 2>/dev/null)")"
+    printf 'CPU cores    : %s\n' "$(cpu_count)"
+    printf 'RAM          : %s\n' "$(human_kb "$(meminfo_value MemTotal)")"
+    printf 'Refresh      : '
+    if command -v settings >/dev/null 2>&1; then
+        printf '%s\n' "$(settings get system peak_refresh_rate 2>/dev/null)"
+    else
+        printf '%s\n' "unknown"
+    fi
+    detect_root
+    printf '/sys writable: %s\n' "$(write_state /sys)"
+    printf 'CPU control  : %s\n' "$(cpu_control_status)"
+    printf 'GPU control  : %s\n' "$(gpu_control_status)"
+    printf 'Thermal read : %s\n' "$(thermal_read_status)"
+    echo "No hardware settings were changed."
+}
+
+case "${1:-report}" in
+    --summary)
+        print_summary
+        ;;
+    --report|report)
+        echo "========================================"
+        echo "AX-T615 HARDWARE CAPABILITY REPORT"
+        echo "========================================"
+        echo "All values below are detected at runtime."
+        echo "READ-ONLY: no hardware or Android configuration was changed."
+        echo
+        print_device
+        print_root
+        print_cpu
+        print_gpu
+        print_thermal
+        print_memory
+        print_display
+        print_game_mode
+        print_performance
+        echo "CAPABILITY SUMMARY"
+        echo "----------------------------------------"
+        printf 'CPU Control  : %s\n' "$(cpu_control_status)"
+        printf 'GPU Control  : %s\n' "$(gpu_control_status)"
+        printf 'Thermal Read : %s\n' "$(thermal_read_status)"
+        echo "========================================"
+        ;;
+    *)
+        echo "Usage: detector [--summary|--report]" >&2
+        exit 2
+        ;;
+esac
 
 exit 0

@@ -6,7 +6,7 @@ SCRIPT_DIR="$(CDPATH= cd -- "$(dirname "$0")" 2>/dev/null && pwd)"
 case "$COMMAND" in
     status)
         if [ -x "$SCRIPT_DIR/status.sh" ]; then
-            exec "$SCRIPT_DIR/status.sh"
+            exec sh "$SCRIPT_DIR/status.sh"
         fi
         echo "Status diagnostics are not available yet."
         ;;
