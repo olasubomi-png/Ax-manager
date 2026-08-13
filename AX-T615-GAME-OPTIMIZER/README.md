@@ -106,6 +106,7 @@ performing hardware optimization. It can:
 - Match only explicitly configured game packages
 - Store multiple game entries and their `cool`, `balanced`, or `performance`
   profile assignments
+- Select profiles in game-specific, global, then balanced-fallback order
 - Start, stop, inspect, and recover logical gaming sessions
 - Poll for foreground changes through `bin/game-monitor`
 - Restore the normal logical state when a game exits
@@ -130,9 +131,12 @@ game monitor unless `GAME_MONITOR_AUTOSTART=false` is set. The monitor uses
 `GAME_MONITOR_INTERVAL="3"` from `config/profiles.conf`, never optimizes an
 unknown application, and avoids starting duplicate sessions.
 
-The game database intentionally contains no guessed package names. Runtime
-state under `runtime/` contains only temporary package, profile, session, and
-monitor state; it does not contain personal information.
+The game database intentionally contains no guessed package names. The empty
+`GAME_*` template and numbered `GAME_1_*`, `GAME_2_*`, and later entries support
+multiple explicitly verified games. Runtime state under `runtime/` contains
+only temporary package, profile, session, and monitor state; it does not
+contain personal information. `logs/game.log` records engine activity with
+bounded rotation.
 
 ## Future development roadmap
 

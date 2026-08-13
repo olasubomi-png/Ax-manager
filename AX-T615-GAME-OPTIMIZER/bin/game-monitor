@@ -55,7 +55,7 @@ process_once() {
     axgo_write_state monitor_foreground "$PACKAGE" || :
 }
 
-if [ "$DAEMON" = "yes" ]; then
+if [ "$DAEMON" = "yes" ] && [ "$ONCE" != "yes" ]; then
     mkdir -p "$AXGO_RUNTIME_DIR" "$AXGO_LOG_DIR" 2>/dev/null || exit 1
     [ "$LOCK_HELD" = "yes" ] && trap cleanup_monitor EXIT HUP INT TERM
     printf '%s\n' "$$" > "$PID_FILE" 2>/dev/null || :

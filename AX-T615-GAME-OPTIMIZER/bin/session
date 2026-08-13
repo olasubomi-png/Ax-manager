@@ -38,6 +38,7 @@ session_start() {
     axgo_write_state current_package "$PACKAGE" || return 1
     axgo_write_state current_profile "$PROFILE" || return 1
     axgo_write_state session_started "$(axgo_now)" || return 1
+    axgo_log INFO "profile selected package=$PACKAGE profile=$PROFILE"
     axgo_log INFO "game started package=$PACKAGE name=${NAME:-unnamed game} profile=$PROFILE"
     echo "Gaming session started"
     echo "Game: ${NAME:-unnamed game}"
@@ -60,6 +61,7 @@ session_stop() {
     axgo_remove_state current_package
     axgo_remove_state current_profile
     axgo_remove_state session_started
+    axgo_write_state current_profile "$(axgo_global_profile)" || :
     echo "Gaming session stopped"
     echo "Restoring normal state"
     echo "No hardware state changes were made."

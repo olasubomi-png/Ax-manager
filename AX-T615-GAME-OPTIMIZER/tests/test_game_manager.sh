@@ -24,6 +24,10 @@ cat > "$MOCK_BIN/dumpsys" <<'EOF'
 #!/bin/sh
 if [ "${MOCK_FOREGROUND:-com.example.game}" = "unknown.app" ]; then
     echo "mResumedActivity: ActivityRecord{1 u0 unknown.app/.MainActivity}"
+elif [ "${MOCK_METHOD:-activity}" = "window" ] && [ "${1:-}" = "window" ]; then
+    echo "mCurrentFocus=Window{1 u0 com.example.game/com.example.game.MainActivity}"
+elif [ "${MOCK_METHOD:-activity}" = "window" ]; then
+    exit 0
 else
     echo "mResumedActivity: ActivityRecord{1 u0 com.example.game/.MainActivity}"
 fi
@@ -40,6 +44,10 @@ UNKNOWN_OUTPUT="$(PATH="$MOCK_BIN:$PATH" MOCK_FOREGROUND=unknown.app AXGO_ROOT="
 printf '%s\n' "$UNKNOWN_OUTPUT" | grep -q "Gaming optimization not activated" &&
     pass "unknown application is not optimized" || fail "unknown application is not optimized"
 
+WINDOW_OUTPUT="$(PATH="$MOCK_BIN:$PATH" MOCK_METHOD=window AXGO_ROOT="$ROOT_DIR" AXGO_DATA_ROOT="$TMP_ROOT" sh "$MANAGER" detect)"
+printf '%s\n' "$WINDOW_OUTPUT" | grep -q "Foreground package: com.example.game" &&
+    pass "window focus fallback detection" || fail "window focus fallback detection"
+
 START_OUTPUT="$(PATH="$MOCK_BIN:$PATH" AXGO_ROOT="$ROOT_DIR" AXGO_DATA_ROOT="$TMP_ROOT" sh "$MANAGER" start)"
 printf '%s\n' "$START_OUTPUT" | grep -q "GAME DETECTED" &&
     pass "game manager starts known game" || fail "game manager starts known game"
@@ -52,6 +60,10 @@ AXGO_ROOT="$ROOT_DIR" AXGO_DATA_ROOT="$TMP_ROOT" sh "$MANAGER" stop >/dev/null
 PATH="$MOCK_BIN:$PATH" AXGO_ROOT="$ROOT_DIR" AXGO_DATA_ROOT="$TMP_ROOT" sh "$MONITOR" --once
 STATE="$(cat "$TMP_ROOT/runtime/gaming.state" 2>/dev/null || :)"
 [ "$STATE" = "active" ] && pass "monitor starts a configured game" || fail "monitor starts a configured game"
+
+PATH="$MOCK_BIN:$PATH" MOCK_FOREGROUND=unknown.app AXGO_ROOT="$ROOT_DIR" AXGO_DATA_ROOT="$TMP_ROOT" sh "$MONITOR" --once
+[ ! -e "$TMP_ROOT/runtime/gaming.state" ] &&
+    pass "monitor stops when game leaves foreground" || fail "monitor stops when game leaves foreground"
 
 PATH="/usr/bin:/bin" AXGO_ROOT="$ROOT_DIR" AXGO_DATA_ROOT="$TMP_ROOT" sh "$MANAGER" detect >/tmp/axgo-manager-missing-command.$$ 2>&1 || :
 grep -q "Foreground package: UNKNOWN" /tmp/axgo-manager-missing-command.$$ &&

@@ -24,10 +24,17 @@ set_profile() {
         echo "Supported profiles: cool, balanced, performance" >&2
         return 2
     }
-    axgo_write_state current_profile "$PROFILE" || {
+    axgo_write_state global_profile "$PROFILE" || {
         echo "Unable to save the logical profile." >&2
         return 1
     }
+    SESSION_STATE="$(axgo_read_state "$AXGO_RUNTIME_DIR/gaming.state")"
+    if [ "$SESSION_STATE" != "active" ]; then
+        axgo_write_state current_profile "$PROFILE" || {
+            echo "Unable to save the current logical profile." >&2
+            return 1
+        }
+    fi
     axgo_log INFO "profile selected profile=$PROFILE"
     print_profile "$PROFILE"
 }

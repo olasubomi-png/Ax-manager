@@ -11,16 +11,21 @@ session_command() {
 
 game_detect() {
     PACKAGE="$(axgo_foreground_package)"
+    axgo_log INFO "foreground detected package=$PACKAGE"
     echo "Foreground package: $PACKAGE"
     if [ "$PACKAGE" = "UNKNOWN" ]; then
+        axgo_log ERROR "foreground detection returned UNKNOWN"
         echo "Unknown application: UNKNOWN"
         echo "Gaming optimization not activated."
         return 0
     fi
     if axgo_game_enabled_for_package "$PACKAGE"; then
+        PROFILE="$(axgo_game_profile_for_package "$PACKAGE")"
+        axgo_log INFO "game detected package=$PACKAGE profile=$PROFILE"
         echo "Configured game: $(axgo_game_name_for_package "$PACKAGE")"
-        echo "Selected profile: $(axgo_profile_upper "$(axgo_game_profile_for_package "$PACKAGE")")"
+        echo "Selected profile: $(axgo_profile_upper "$PROFILE")"
     else
+        axgo_log INFO "unknown application package=$PACKAGE"
         echo "Unknown application: $PACKAGE"
         echo "Gaming optimization not activated."
     fi
@@ -29,6 +34,7 @@ game_detect() {
 game_start() {
     PACKAGE="$(axgo_foreground_package)"
     if [ "$PACKAGE" = "UNKNOWN" ] || ! axgo_game_enabled_for_package "$PACKAGE"; then
+        axgo_log ERROR "game start ignored package=$PACKAGE"
         echo "Gaming session not started: application is not a configured game."
         game_detect
         return 1

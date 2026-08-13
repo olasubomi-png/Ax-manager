@@ -6,6 +6,7 @@ ROOT_DIR="$(CDPATH= cd -- "$TEST_DIR/.." 2>/dev/null && pwd)"
 TMP_ROOT="${TMPDIR:-/tmp}/axgo-session.$$"
 GAME_DB="$ROOT_DIR/bin/game-db"
 SESSION="$ROOT_DIR/bin/session"
+PROFILE="$ROOT_DIR/bin/profile"
 FAILURES=0
 
 cleanup() { rm -rf "$TMP_ROOT"; }
@@ -17,10 +18,13 @@ mkdir -p "$TMP_ROOT/config" "$TMP_ROOT/logs" "$TMP_ROOT/runtime"
 cp "$ROOT_DIR/config/games.conf" "$TMP_ROOT/config/games.conf"
 cp "$ROOT_DIR/config/profiles.conf" "$TMP_ROOT/config/profiles.conf"
 AXGO_ROOT="$ROOT_DIR" AXGO_DATA_ROOT="$TMP_ROOT" sh "$GAME_DB" add com.example.game "Example Game" balanced >/dev/null
+AXGO_ROOT="$ROOT_DIR" AXGO_DATA_ROOT="$TMP_ROOT" sh "$PROFILE" set performance >/dev/null
 
 START_OUTPUT="$(AXGO_ROOT="$ROOT_DIR" AXGO_DATA_ROOT="$TMP_ROOT" sh "$SESSION" start com.example.game)"
 printf '%s\n' "$START_OUTPUT" | grep -q "Gaming session started" &&
     pass "session start" || fail "session start"
+printf '%s\n' "$START_OUTPUT" | grep -q "Profile: balanced" &&
+    pass "game-specific profile overrides global profile" || fail "game-specific profile overrides global profile"
 printf '%s\n' "$START_OUTPUT" | grep -q "Hardware optimization: NOT YET ENABLED" &&
     pass "session does not tune hardware" || fail "session does not tune hardware"
 
@@ -45,6 +49,8 @@ printf '%s\n' "$STOP_OUTPUT" | grep -q "Restoring normal state" &&
 INACTIVE_OUTPUT="$(AXGO_ROOT="$ROOT_DIR" AXGO_DATA_ROOT="$TMP_ROOT" sh "$SESSION" status)"
 printf '%s\n' "$INACTIVE_OUTPUT" | grep -q "Gaming session: INACTIVE" &&
     pass "inactive session status" || fail "inactive session status"
+printf '%s\n' "$INACTIVE_OUTPUT" | grep -q "Profile: PERFORMANCE" &&
+    pass "global profile restored after session" || fail "global profile restored after session"
 
 [ "$FAILURES" -eq 0 ] && {
     echo "All session tests passed."

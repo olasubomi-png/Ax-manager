@@ -93,7 +93,10 @@ axgo_config_value() {
 axgo_game_indexes() {
     [ -r "$AXGO_GAMES_CONFIG" ] || return 0
     if command -v awk >/dev/null 2>&1; then
-        awk -F_ '/^GAME_[0-9]+_PACKAGE=/{print $2}' "$AXGO_GAMES_CONFIG" 2>/dev/null
+        awk -F_ '
+            /^GAME_PACKAGE=/ { print 0 }
+            /^GAME_[0-9]+_PACKAGE=/ { print $2 }
+        ' "$AXGO_GAMES_CONFIG" 2>/dev/null
     fi
 }
 
@@ -101,7 +104,12 @@ axgo_game_field() {
     INDEX="$1"
     FIELD="$2"
     [ -r "$AXGO_GAMES_CONFIG" ] || return 1
-    sed -n "s/^GAME_${INDEX}_${FIELD}=\"\([^\"]*\)\"$/\1/p" \
+    if [ "$INDEX" = "0" ]; then
+        KEY="GAME_${FIELD}"
+    else
+        KEY="GAME_${INDEX}_${FIELD}"
+    fi
+    sed -n "s/^${KEY}=\"\([^\"]*\)\"$/\1/p" \
         "$AXGO_GAMES_CONFIG" 2>/dev/null | head -n 1
 }
 
@@ -134,11 +142,20 @@ axgo_game_profile_for_package() {
     if [ -n "$INDEX" ]; then
         PROFILE="$(axgo_game_field "$INDEX" PROFILE)"
     fi
-    axgo_profile_valid "$PROFILE" && printf '%s' "$PROFILE" || printf '%s' "balanced"
+    if axgo_profile_valid "$PROFILE"; then
+        printf '%s' "$PROFILE"
+    elif [ -z "$PROFILE" ]; then
+        axgo_global_profile
+    else
+        printf '%s' "balanced"
+    fi
 }
 
 axgo_global_profile() {
-    PROFILE="$(axgo_config_value GLOBAL_GAMING_PROFILE)"
+    PROFILE="$(axgo_read_state "$AXGO_RUNTIME_DIR/global_profile")"
+    if ! axgo_profile_valid "$PROFILE"; then
+        PROFILE="$(axgo_config_value GLOBAL_GAMING_PROFILE)"
+    fi
     axgo_profile_valid "$PROFILE" && printf '%s' "$PROFILE" || printf '%s' "balanced"
 }
 
