@@ -1,0 +1,218 @@
+#!/system/bin/sh
+set -u
+
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname "$0")" 2>/dev/null && pwd)"
+AXGO_ROOT="${AXGO_ROOT:-$(CDPATH= cd -- "$SCRIPT_DIR/.." 2>/dev/null && pwd)}"
+. "$AXGO_ROOT/bin/lib"
+
+usage() {
+    echo "Usage:"
+    echo "  game-db list"
+    echo "  game-db add <package> <name> <cool|balanced|performance>"
+    echo "  game-db remove <package>"
+    echo "  game-db get <package>"
+}
+
+ensure_config() {
+    if [ ! -f "$AXGO_GAMES_CONFIG" ]; then
+        mkdir -p "$AXGO_CONFIG_DIR" 2>/dev/null || return 1
+        cat > "$AXGO_GAMES_CONFIG" <<'EOF'
+# Game database configuration.
+GAME_PACKAGE=""
+GAME_NAME=""
+GAME_PROFILE="balanced"
+GAME_ENABLED="false"
+EOF
+    fi
+}
+
+name_valid() {
+    [ -n "$1" ] || return 1
+    if command -v awk >/dev/null 2>&1; then
+        printf '%s\n' "$1" | awk '
+            {
+                valid = !(length($0) == 0 || length($0) > 80 ||
+                    index($0, "\"") || index($0, "\\") ||
+                    index($0, "$") || index($0, "`"))
+            }
+            END { exit(valid ? 0 : 1) }
+        '
+        return $?
+    fi
+    case "$1" in
+        *\"*|*\\*|*\$*|*\`*) return 1 ;;
+        *) return 0 ;;
+    esac
+}
+
+next_index() {
+    MAX_INDEX=0
+    if command -v awk >/dev/null 2>&1 && [ -r "$AXGO_GAMES_CONFIG" ]; then
+        MAX_INDEX="$(awk -F_ '
+            /^GAME_[0-9]+_PACKAGE=/ { if (($2 + 0) > max) max = $2 }
+            END { print max + 0 }
+        ' "$AXGO_GAMES_CONFIG" 2>/dev/null)"
+    fi
+    case "$MAX_INDEX" in
+        ''|*[!0-9]*) MAX_INDEX=0 ;;
+    esac
+    printf '%s' "$((MAX_INDEX + 1))"
+}
+
+rewrite_entry() {
+    INDEX="$1"
+    PACKAGE="$2"
+    NAME="$3"
+    PROFILE="$4"
+    ENABLED="$5"
+    TEMP_FILE="$AXGO_GAMES_CONFIG.tmp.$$"
+
+    if ! command -v awk >/dev/null 2>&1; then
+        echo "game-db requires awk to update the configuration safely." >&2
+        return 1
+    fi
+
+    awk -v idx="$INDEX" -v package="$PACKAGE" -v name="$NAME" \
+        -v profile="$PROFILE" -v enabled="$ENABLED" '
+        BEGIN {
+            prefix = "GAME_" idx "_"
+            package_line = prefix "PACKAGE=\"" package "\""
+            name_line = prefix "NAME=\"" name "\""
+            profile_line = prefix "PROFILE=\"" profile "\""
+            enabled_line = prefix "ENABLED=\"" enabled "\""
+            found = 0
+        }
+        $0 ~ "^" prefix "PACKAGE=" { print package_line; found = 1; next }
+        $0 ~ "^" prefix "NAME=" { print name_line; next }
+        $0 ~ "^" prefix "PROFILE=" { print profile_line; next }
+        $0 ~ "^" prefix "ENABLED=" { print enabled_line; next }
+        { print }
+        END {
+            if (!found) {
+                print package_line
+                print name_line
+                print profile_line
+                print enabled_line
+            }
+        }
+    ' "$AXGO_GAMES_CONFIG" > "$TEMP_FILE" 2>/dev/null || {
+        rm -f "$TEMP_FILE" 2>/dev/null
+        return 1
+    }
+    if ! mv "$TEMP_FILE" "$AXGO_GAMES_CONFIG" 2>/dev/null; then
+        rm -f "$TEMP_FILE" 2>/dev/null
+        return 1
+    fi
+}
+
+list_games() {
+    ensure_config || {
+        echo "Game database is unavailable." >&2
+        return 1
+    }
+    FOUND="no"
+    for INDEX in $(axgo_game_indexes); do
+        PACKAGE="$(axgo_game_field "$INDEX" PACKAGE)"
+        ENABLED="$(axgo_game_field "$INDEX" ENABLED)"
+        [ -n "$PACKAGE" ] && [ "$ENABLED" = "true" ] || continue
+        NAME="$(axgo_game_field "$INDEX" NAME)"
+        PROFILE="$(axgo_game_field "$INDEX" PROFILE)"
+        axgo_profile_valid "$PROFILE" || PROFILE="balanced"
+        FOUND="yes"
+        printf '%s: %s | %s | profile=%s\n' "$INDEX" \
+            "${NAME:-unnamed game}" "$PACKAGE" "$PROFILE"
+    done
+    [ "$FOUND" = "yes" ] || echo "No enabled games configured."
+}
+
+add_game() {
+    PACKAGE="$1"
+    NAME="$2"
+    PROFILE="$3"
+    axgo_package_valid "$PACKAGE" || {
+        echo "Invalid package name: $PACKAGE" >&2
+        return 2
+    }
+    name_valid "$NAME" || {
+        echo "Invalid game name. Use a non-empty name without quotes or shell metacharacters." >&2
+        return 2
+    }
+    axgo_profile_valid "$PROFILE" || {
+        echo "Invalid profile: $PROFILE" >&2
+        return 2
+    }
+    ensure_config || return 1
+    if axgo_game_index_for_package "$PACKAGE" >/dev/null 2>&1; then
+        echo "Game package already exists: $PACKAGE" >&2
+        return 3
+    fi
+    INDEX="$(next_index)"
+    rewrite_entry "$INDEX" "$PACKAGE" "$NAME" "$PROFILE" "true" || {
+        echo "Unable to update game database." >&2
+        return 1
+    }
+    axgo_log INFO "game database added package=$PACKAGE profile=$PROFILE"
+    echo "Game added: $NAME ($PACKAGE), profile=$PROFILE"
+}
+
+remove_game() {
+    PACKAGE="$1"
+    axgo_package_valid "$PACKAGE" || {
+        echo "Invalid package name: $PACKAGE" >&2
+        return 2
+    }
+    ensure_config || return 1
+    INDEX="$(axgo_game_index_for_package "$PACKAGE" 2>/dev/null || :)"
+    [ -n "$INDEX" ] || {
+        echo "Game package not found: $PACKAGE" >&2
+        return 1
+    }
+    rewrite_entry "$INDEX" "" "" "balanced" "false" || {
+        echo "Unable to update game database." >&2
+        return 1
+    }
+    axgo_log INFO "game database removed package=$PACKAGE"
+    echo "Game removed: $PACKAGE"
+}
+
+get_game() {
+    PACKAGE="$1"
+    axgo_package_valid "$PACKAGE" || {
+        echo "Invalid package name: $PACKAGE" >&2
+        return 2
+    }
+    INDEX="$(axgo_game_index_for_package "$PACKAGE" 2>/dev/null || :)"
+    [ -n "$INDEX" ] || {
+        echo "Game package not found: $PACKAGE" >&2
+        return 1
+    }
+    PROFILE="$(axgo_game_field "$INDEX" PROFILE)"
+    axgo_profile_valid "$PROFILE" || PROFILE="balanced"
+    echo "Package: $PACKAGE"
+    echo "Name: $(axgo_game_field "$INDEX" NAME)"
+    echo "Profile: $PROFILE"
+    echo "Enabled: $(axgo_game_field "$INDEX" ENABLED)"
+}
+
+case "${1:-}" in
+    list)
+        [ "$#" -eq 1 ] || { usage >&2; exit 2; }
+        list_games
+        ;;
+    add)
+        [ "$#" -eq 4 ] || { usage >&2; exit 2; }
+        add_game "$2" "$3" "$4"
+        ;;
+    remove)
+        [ "$#" -eq 2 ] || { usage >&2; exit 2; }
+        remove_game "$2"
+        ;;
+    get)
+        [ "$#" -eq 2 ] || { usage >&2; exit 2; }
+        get_game "$2"
+        ;;
+    *)
+        usage >&2
+        exit 2
+        ;;
+esac

@@ -1,0 +1,215 @@
+#!/system/bin/sh
+set -u
+
+# Shared read-only hardware-neutral gaming-engine helpers.
+
+AXGO_DATA_ROOT="${AXGO_DATA_ROOT:-$AXGO_ROOT}"
+AXGO_CONFIG_DIR="$AXGO_DATA_ROOT/config"
+AXGO_RUNTIME_DIR="$AXGO_DATA_ROOT/runtime"
+AXGO_LOG_DIR="$AXGO_DATA_ROOT/logs"
+AXGO_GAMES_CONFIG="$AXGO_CONFIG_DIR/games.conf"
+AXGO_PROFILES_CONFIG="$AXGO_CONFIG_DIR/profiles.conf"
+AXGO_GAME_LOG="$AXGO_LOG_DIR/game.log"
+AXGO_LOG_MAX_BYTES=65536
+
+axgo_ensure_runtime() {
+    mkdir -p "$AXGO_RUNTIME_DIR" "$AXGO_LOG_DIR" 2>/dev/null
+}
+
+axgo_now() {
+    if command -v date >/dev/null 2>&1; then
+        DATE_VALUE="$(date '+%Y-%m-%dT%H:%M:%S%z' 2>/dev/null)"
+        [ -n "$DATE_VALUE" ] && printf '%s' "$DATE_VALUE" && return 0
+    fi
+    printf '%s' "unknown-time"
+}
+
+axgo_log() {
+    axgo_ensure_runtime || return 0
+    if [ -f "$AXGO_GAME_LOG" ] && command -v wc >/dev/null 2>&1; then
+        LOG_SIZE="$(wc -c < "$AXGO_GAME_LOG" 2>/dev/null)"
+        case "$LOG_SIZE" in
+            ''|*[!0-9]*) LOG_SIZE=0 ;;
+        esac
+        if [ "$LOG_SIZE" -ge "$AXGO_LOG_MAX_BYTES" ]; then
+            if [ -f "$AXGO_LOG_DIR/game.log.1" ]; then
+                rm -f "$AXGO_LOG_DIR/game.log.1" 2>/dev/null
+            fi
+            mv "$AXGO_GAME_LOG" "$AXGO_LOG_DIR/game.log.1" 2>/dev/null || :
+        fi
+    fi
+    printf '%s [%s] %s\n' "$(axgo_now)" "${1:-INFO}" "${2:-}" >> "$AXGO_GAME_LOG" 2>/dev/null || :
+}
+
+axgo_read_state() {
+    if [ -r "$1" ]; then
+        cat "$1" 2>/dev/null
+    fi
+}
+
+axgo_write_state() {
+    axgo_ensure_runtime || return 1
+    printf '%s\n' "$2" > "$AXGO_RUNTIME_DIR/$1" 2>/dev/null
+}
+
+axgo_remove_state() {
+    [ -e "$AXGO_RUNTIME_DIR/$1" ] && rm -f "$AXGO_RUNTIME_DIR/$1" 2>/dev/null || :
+}
+
+axgo_profile_valid() {
+    case "$1" in
+        cool|balanced|performance) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+axgo_profile_upper() {
+    printf '%s' "$1" | tr '[:lower:]' '[:upper:]'
+}
+
+axgo_package_valid() {
+    PACKAGE="$1"
+    if command -v awk >/dev/null 2>&1; then
+        printf '%s\n' "$PACKAGE" | awk '
+            /^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z][A-Za-z0-9_]*)+$/ { found = 1 }
+            END { exit(found ? 0 : 1) }
+        '
+        return $?
+    fi
+    case "$PACKAGE" in
+        ''|*[!A-Za-z0-9._]*|.*|*.) return 1 ;;
+        *.*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+axgo_config_value() {
+    KEY="$1"
+    FILE="${2:-$AXGO_PROFILES_CONFIG}"
+    [ -r "$FILE" ] || return 1
+    sed -n "s/^${KEY}=\"\([^\"]*\)\"$/\1/p" "$FILE" 2>/dev/null | head -n 1
+}
+
+axgo_game_indexes() {
+    [ -r "$AXGO_GAMES_CONFIG" ] || return 0
+    if command -v awk >/dev/null 2>&1; then
+        awk -F_ '/^GAME_[0-9]+_PACKAGE=/{print $2}' "$AXGO_GAMES_CONFIG" 2>/dev/null
+    fi
+}
+
+axgo_game_field() {
+    INDEX="$1"
+    FIELD="$2"
+    [ -r "$AXGO_GAMES_CONFIG" ] || return 1
+    sed -n "s/^GAME_${INDEX}_${FIELD}=\"\([^\"]*\)\"$/\1/p" \
+        "$AXGO_GAMES_CONFIG" 2>/dev/null | head -n 1
+}
+
+axgo_game_index_for_package() {
+    TARGET_PACKAGE="$1"
+    for INDEX in $(axgo_game_indexes); do
+        [ "$(axgo_game_field "$INDEX" PACKAGE)" = "$TARGET_PACKAGE" ] && {
+            printf '%s' "$INDEX"
+            return 0
+        }
+    done
+    return 1
+}
+
+axgo_game_enabled_for_package() {
+    INDEX="$(axgo_game_index_for_package "$1" 2>/dev/null || :)"
+    [ -n "$INDEX" ] || return 1
+    [ "$(axgo_game_field "$INDEX" ENABLED)" = "true" ]
+}
+
+axgo_game_name_for_package() {
+    INDEX="$(axgo_game_index_for_package "$1" 2>/dev/null || :)"
+    [ -n "$INDEX" ] || return 1
+    axgo_game_field "$INDEX" NAME
+}
+
+axgo_game_profile_for_package() {
+    INDEX="$(axgo_game_index_for_package "$1" 2>/dev/null || :)"
+    PROFILE=""
+    if [ -n "$INDEX" ]; then
+        PROFILE="$(axgo_game_field "$INDEX" PROFILE)"
+    fi
+    axgo_profile_valid "$PROFILE" && printf '%s' "$PROFILE" || printf '%s' "balanced"
+}
+
+axgo_global_profile() {
+    PROFILE="$(axgo_config_value GLOBAL_GAMING_PROFILE)"
+    axgo_profile_valid "$PROFILE" && printf '%s' "$PROFILE" || printf '%s' "balanced"
+}
+
+axgo_current_profile() {
+    PROFILE="$(axgo_read_state "$AXGO_RUNTIME_DIR/current_profile")"
+    if ! axgo_profile_valid "$PROFILE"; then
+        PROFILE="$(axgo_global_profile)"
+    fi
+    axgo_profile_valid "$PROFILE" && printf '%s' "$PROFILE" || printf '%s' "balanced"
+}
+
+axgo_monitor_interval() {
+    INTERVAL="$(axgo_config_value GAME_MONITOR_INTERVAL)"
+    case "$INTERVAL" in
+        ''|*[!0-9]*|0) printf '%s' "3" ;;
+        *) printf '%s' "$INTERVAL" ;;
+    esac
+}
+
+axgo_extract_package() {
+    if ! command -v awk >/dev/null 2>&1; then
+        return 0
+    fi
+    awk '
+        {
+            for (i = 1; i <= NF; i++) {
+                token = $i
+                sub(/^[^A-Za-z0-9_.]+/, "", token)
+                sub(/[),};].*$/, "", token)
+                if (token ~ /^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z][A-Za-z0-9_]*)+\//) {
+                    split(token, parts, "/")
+                    print parts[1]
+                    exit
+                }
+            }
+        }
+    '
+}
+
+axgo_foreground_package() {
+    [ -n "${AXGO_FOREGROUND_PACKAGE:-}" ] && {
+        printf '%s' "$AXGO_FOREGROUND_PACKAGE"
+        return 0
+    }
+    if command -v dumpsys >/dev/null 2>&1; then
+        PACKAGE="$(dumpsys activity activities 2>/dev/null | \
+            grep -E 'mResumedActivity|mFocusedActivity|topResumedActivity' 2>/dev/null | \
+            head -n 5 | axgo_extract_package | head -n 1)"
+        [ -n "$PACKAGE" ] && {
+            printf '%s' "$PACKAGE"
+            return 0
+        }
+        PACKAGE="$(dumpsys window 2>/dev/null | \
+            grep -E 'mCurrentFocus|mFocusedApp|mObscuringWindow' 2>/dev/null | \
+            head -n 5 | axgo_extract_package | head -n 1)"
+        [ -n "$PACKAGE" ] && {
+            printf '%s' "$PACKAGE"
+            return 0
+        }
+        PACKAGE="$(dumpsys activity top 2>/dev/null | \
+            grep -E 'ACTIVITY|mResumedActivity|mFocusedActivity' 2>/dev/null | \
+            head -n 5 | axgo_extract_package | head -n 1)"
+        [ -n "$PACKAGE" ] && {
+            printf '%s' "$PACKAGE"
+            return 0
+        }
+    fi
+    printf '%s' "UNKNOWN"
+}
+
+axgo_game_monitor_state() {
+    STATE="$(axgo_read_state "$AXGO_RUNTIME_DIR/gaming.state")"
+    [ "$STATE" = "active" ] && printf '%s' "ACTIVE" || printf '%s' "INACTIVE"
+}

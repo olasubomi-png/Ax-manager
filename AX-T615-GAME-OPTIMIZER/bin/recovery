@@ -1,0 +1,56 @@
+#!/system/bin/sh
+set -u
+
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname "$0")" 2>/dev/null && pwd)"
+AXGO_ROOT="${AXGO_ROOT:-$(CDPATH= cd -- "$SCRIPT_DIR/.." 2>/dev/null && pwd)}"
+. "$AXGO_ROOT/bin/lib"
+
+VALUES_FILE="$AXGO_RUNTIME_DIR/recovery.values"
+
+recovery_status() {
+    COUNT=0
+    if [ -r "$VALUES_FILE" ]; then
+        COUNT="$(grep -c '^[A-Za-z0-9_.-][A-Za-z0-9_.-]*=' "$VALUES_FILE" 2>/dev/null || printf '%s' 0)"
+    fi
+    echo "Recovery layer: READY"
+    echo "Registered original values: $COUNT"
+    echo "Hardware restoration: NOT ACTIVE"
+    echo "No hardware changes are currently registered."
+}
+
+recovery_register() {
+    KEY="$1"
+    VALUE="$2"
+    case "$KEY" in
+        ''|*[!A-Za-z0-9_.-]*) echo "Invalid recovery key." >&2; return 2 ;;
+    esac
+    axgo_ensure_runtime || return 1
+    printf '%s=%s\n' "$KEY" "$VALUE" >> "$VALUES_FILE" 2>/dev/null || return 1
+    echo "Recovery value registered: $KEY"
+}
+
+recovery_reset() {
+    axgo_remove_state recovery.values
+    axgo_log INFO "recovery reset requested"
+    echo "Recovery reset complete."
+    echo "No hardware state was changed or restored."
+}
+
+case "${1:-status}" in
+    status)
+        [ "$#" -eq 1 ] || { echo "Usage: recovery status|reset" >&2; exit 2; }
+        recovery_status
+        ;;
+    reset)
+        [ "$#" -eq 1 ] || { echo "Usage: recovery status|reset" >&2; exit 2; }
+        recovery_reset
+        ;;
+    register)
+        [ "$#" -eq 3 ] || { echo "Usage: recovery status|reset" >&2; exit 2; }
+        recovery_register "$2" "$3"
+        ;;
+    *)
+        echo "Usage: recovery status|reset" >&2
+        exit 2
+        ;;
+esac

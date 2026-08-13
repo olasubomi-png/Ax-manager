@@ -1,0 +1,111 @@
+#!/system/bin/sh
+set -u
+
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname "$0")" 2>/dev/null && pwd)"
+AXGO_ROOT="${AXGO_ROOT:-$(CDPATH= cd -- "$SCRIPT_DIR/.." 2>/dev/null && pwd)}"
+. "$AXGO_ROOT/bin/lib"
+
+session_start() {
+    PACKAGE="${1:-$(axgo_foreground_package)}"
+    if [ "$PACKAGE" = "UNKNOWN" ] || ! axgo_package_valid "$PACKAGE"; then
+        echo "Gaming session not started: foreground package is UNKNOWN."
+        axgo_log ERROR "session start failed: unknown foreground package"
+        return 1
+    fi
+    if ! axgo_game_enabled_for_package "$PACKAGE"; then
+        echo "Gaming session not started: package is not an enabled configured game."
+        axgo_log INFO "session start ignored unconfigured package=$PACKAGE"
+        return 1
+    fi
+
+    STATE="$(axgo_read_state "$AXGO_RUNTIME_DIR/gaming.state")"
+    CURRENT_PACKAGE="$(axgo_read_state "$AXGO_RUNTIME_DIR/current_package")"
+    if [ "$STATE" = "active" ] && [ "$CURRENT_PACKAGE" = "$PACKAGE" ]; then
+        echo "Gaming session already active."
+        echo "Game: $(axgo_game_name_for_package "$PACKAGE")"
+        echo "Package: $PACKAGE"
+        echo "Profile: $(axgo_profile_upper "$(axgo_game_profile_for_package "$PACKAGE")")"
+        return 0
+    fi
+    if [ "$STATE" = "active" ]; then
+        session_stop
+    fi
+
+    NAME="$(axgo_game_name_for_package "$PACKAGE")"
+    PROFILE="$(axgo_game_profile_for_package "$PACKAGE")"
+    axgo_write_state gaming.state active || return 1
+    axgo_write_state current_game "${NAME:-unnamed game}" || return 1
+    axgo_write_state current_package "$PACKAGE" || return 1
+    axgo_write_state current_profile "$PROFILE" || return 1
+    axgo_write_state session_started "$(axgo_now)" || return 1
+    axgo_log INFO "game started package=$PACKAGE name=${NAME:-unnamed game} profile=$PROFILE"
+    echo "Gaming session started"
+    echo "Game: ${NAME:-unnamed game}"
+    echo "Package: $PACKAGE"
+    echo "Profile: $PROFILE"
+    echo "Hardware optimization: NOT YET ENABLED"
+}
+
+session_stop() {
+    STATE="$(axgo_read_state "$AXGO_RUNTIME_DIR/gaming.state")"
+    if [ "$STATE" != "active" ]; then
+        echo "No active gaming session."
+        return 0
+    fi
+    PACKAGE="$(axgo_read_state "$AXGO_RUNTIME_DIR/current_package")"
+    NAME="$(axgo_read_state "$AXGO_RUNTIME_DIR/current_game")"
+    axgo_log INFO "game stopped package=${PACKAGE:-unknown} name=${NAME:-unknown}"
+    axgo_remove_state gaming.state
+    axgo_remove_state current_game
+    axgo_remove_state current_package
+    axgo_remove_state current_profile
+    axgo_remove_state session_started
+    echo "Gaming session stopped"
+    echo "Restoring normal state"
+    echo "No hardware state changes were made."
+}
+
+session_status() {
+    STATE="$(axgo_read_state "$AXGO_RUNTIME_DIR/gaming.state")"
+    if [ "$STATE" = "active" ]; then
+        echo "Gaming session: ACTIVE"
+        echo "Current game: $(axgo_read_state "$AXGO_RUNTIME_DIR/current_game")"
+        echo "Package: $(axgo_read_state "$AXGO_RUNTIME_DIR/current_package")"
+        echo "Profile: $(axgo_profile_upper "$(axgo_current_profile)")"
+        echo "Started: $(axgo_read_state "$AXGO_RUNTIME_DIR/session_started")"
+    else
+        echo "Gaming session: INACTIVE"
+        echo "Current game: NONE"
+        echo "Package: NONE"
+        echo "Profile: $(axgo_profile_upper "$(axgo_current_profile)")"
+    fi
+}
+
+session_current() {
+    PACKAGE="$(axgo_foreground_package)"
+    echo "Foreground package: $PACKAGE"
+    session_status
+}
+
+case "${1:-status}" in
+    start)
+        [ "$#" -le 2 ] || { echo "Usage: session start [package]|stop|status|current" >&2; exit 2; }
+        session_start "${2:-}"
+        ;;
+    stop)
+        [ "$#" -eq 1 ] || { echo "Usage: session start [package]|stop|status|current" >&2; exit 2; }
+        session_stop
+        ;;
+    status)
+        [ "$#" -eq 1 ] || { echo "Usage: session start [package]|stop|status|current" >&2; exit 2; }
+        session_status
+        ;;
+    current)
+        [ "$#" -eq 1 ] || { echo "Usage: session start [package]|stop|status|current" >&2; exit 2; }
+        session_current
+        ;;
+    *)
+        echo "Usage: session start [package]|stop|status|current" >&2
+        exit 2
+        ;;
+esac

@@ -1,0 +1,73 @@
+#!/system/bin/sh
+set -u
+
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname "$0")" 2>/dev/null && pwd)"
+AXGO_ROOT="${AXGO_ROOT:-$(CDPATH= cd -- "$SCRIPT_DIR/.." 2>/dev/null && pwd)}"
+. "$AXGO_ROOT/bin/lib"
+
+LOCK_DIR="$AXGO_RUNTIME_DIR/game-monitor.lock"
+PID_FILE="$AXGO_RUNTIME_DIR/game-monitor.pid"
+LOCK_HELD="no"
+DAEMON="no"
+ONCE="no"
+
+for ARG in "$@"; do
+    case "$ARG" in
+        --daemon) DAEMON="yes" ;;
+        --once) ONCE="yes" ;;
+        --lock-held) LOCK_HELD="yes" ;;
+        *) echo "Usage: game-monitor [--once|--daemon] [--lock-held]" >&2; exit 2 ;;
+    esac
+done
+
+cleanup_monitor() {
+    if [ -d "$LOCK_DIR" ]; then
+        rmdir "$LOCK_DIR" 2>/dev/null || :
+    fi
+    if [ -r "$PID_FILE" ] && [ "$(cat "$PID_FILE" 2>/dev/null)" = "$$" ]; then
+        rm -f "$PID_FILE" 2>/dev/null || :
+    fi
+}
+
+if [ "$DAEMON" = "yes" ] && [ "$LOCK_HELD" != "yes" ]; then
+    mkdir -p "$AXGO_RUNTIME_DIR" 2>/dev/null || exit 1
+    if ! mkdir "$LOCK_DIR" 2>/dev/null; then
+        echo "Game monitor is already running."
+        exit 0
+    fi
+    trap cleanup_monitor EXIT HUP INT TERM
+fi
+
+process_once() {
+    PACKAGE="$(axgo_foreground_package)"
+    ACTIVE_STATE="$(axgo_read_state "$AXGO_RUNTIME_DIR/gaming.state")"
+    CURRENT_PACKAGE="$(axgo_read_state "$AXGO_RUNTIME_DIR/current_package")"
+    if [ "$PACKAGE" != "UNKNOWN" ] && axgo_game_enabled_for_package "$PACKAGE"; then
+        if [ "$ACTIVE_STATE" != "active" ] || [ "$CURRENT_PACKAGE" != "$PACKAGE" ]; then
+            if [ "$ACTIVE_STATE" = "active" ]; then
+                sh "$AXGO_ROOT/bin/session" stop >/dev/null 2>&1 || :
+            fi
+            sh "$AXGO_ROOT/bin/session" start "$PACKAGE" >/dev/null 2>&1 || :
+        fi
+    elif [ "$ACTIVE_STATE" = "active" ]; then
+        sh "$AXGO_ROOT/bin/session" stop >/dev/null 2>&1 || :
+    fi
+    axgo_write_state monitor_foreground "$PACKAGE" || :
+}
+
+if [ "$DAEMON" = "yes" ]; then
+    mkdir -p "$AXGO_RUNTIME_DIR" "$AXGO_LOG_DIR" 2>/dev/null || exit 1
+    [ "$LOCK_HELD" = "yes" ] && trap cleanup_monitor EXIT HUP INT TERM
+    printf '%s\n' "$$" > "$PID_FILE" 2>/dev/null || :
+    INTERVAL="$(axgo_monitor_interval)"
+    while :; do
+        process_once
+        if ! command -v sleep >/dev/null 2>&1; then
+            axgo_log ERROR "game monitor stopped: sleep command unavailable"
+            break
+        fi
+        sleep "$INTERVAL"
+    done
+else
+    process_once
+fi

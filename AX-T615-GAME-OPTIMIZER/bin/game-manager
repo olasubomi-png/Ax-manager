@@ -1,0 +1,107 @@
+#!/system/bin/sh
+set -u
+
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname "$0")" 2>/dev/null && pwd)"
+AXGO_ROOT="${AXGO_ROOT:-$(CDPATH= cd -- "$SCRIPT_DIR/.." 2>/dev/null && pwd)}"
+. "$AXGO_ROOT/bin/lib"
+
+session_command() {
+    sh "$AXGO_ROOT/bin/session" "$@"
+}
+
+game_detect() {
+    PACKAGE="$(axgo_foreground_package)"
+    echo "Foreground package: $PACKAGE"
+    if [ "$PACKAGE" = "UNKNOWN" ]; then
+        echo "Unknown application: UNKNOWN"
+        echo "Gaming optimization not activated."
+        return 0
+    fi
+    if axgo_game_enabled_for_package "$PACKAGE"; then
+        echo "Configured game: $(axgo_game_name_for_package "$PACKAGE")"
+        echo "Selected profile: $(axgo_profile_upper "$(axgo_game_profile_for_package "$PACKAGE")")"
+    else
+        echo "Unknown application: $PACKAGE"
+        echo "Gaming optimization not activated."
+    fi
+}
+
+game_start() {
+    PACKAGE="$(axgo_foreground_package)"
+    if [ "$PACKAGE" = "UNKNOWN" ] || ! axgo_game_enabled_for_package "$PACKAGE"; then
+        echo "Gaming session not started: application is not a configured game."
+        game_detect
+        return 1
+    fi
+    STATE="$(axgo_read_state "$AXGO_RUNTIME_DIR/gaming.state")"
+    CURRENT="$(axgo_read_state "$AXGO_RUNTIME_DIR/current_package")"
+    if [ "$STATE" = "active" ] && [ "$CURRENT" = "$PACKAGE" ]; then
+        echo "Gaming session already active."
+        return 0
+    fi
+    echo "GAME DETECTED"
+    echo "------------------------------"
+    echo "Name: $(axgo_game_name_for_package "$PACKAGE")"
+    echo "Package: $PACKAGE"
+    echo "Profile: $(axgo_profile_upper "$(axgo_game_profile_for_package "$PACKAGE")")"
+    echo "Status: STARTING"
+    echo "Hardware optimization: NOT YET ENABLED"
+    echo "------------------------------"
+    session_command start "$PACKAGE"
+}
+
+game_stop() {
+    session_command stop
+}
+
+game_status() {
+    echo "Gaming engine: READY"
+    echo "Game monitor: READY"
+    STATE="$(axgo_read_state "$AXGO_RUNTIME_DIR/gaming.state")"
+    if [ "$STATE" = "active" ]; then
+        echo "Current game: $(axgo_read_state "$AXGO_RUNTIME_DIR/current_game")"
+        echo "Current package: $(axgo_read_state "$AXGO_RUNTIME_DIR/current_package")"
+    else
+        echo "Current game: NONE"
+    fi
+    echo "Current profile: $(axgo_profile_upper "$(axgo_current_profile)")"
+    echo "Hardware tuning: DISABLED"
+}
+
+game_current() {
+    PACKAGE="$(axgo_foreground_package)"
+    echo "Foreground package: $PACKAGE"
+    if [ "$PACKAGE" != "UNKNOWN" ] && axgo_game_enabled_for_package "$PACKAGE"; then
+        echo "Configured game: $(axgo_game_name_for_package "$PACKAGE")"
+        echo "Profile: $(axgo_profile_upper "$(axgo_game_profile_for_package "$PACKAGE")")"
+    else
+        echo "Configured game: NONE"
+    fi
+}
+
+case "${1:-status}" in
+    status)
+        [ "$#" -eq 1 ] || { echo "Usage: game-manager status|detect|start|stop|current" >&2; exit 2; }
+        game_status
+        ;;
+    detect)
+        [ "$#" -eq 1 ] || { echo "Usage: game-manager status|detect|start|stop|current" >&2; exit 2; }
+        game_detect
+        ;;
+    start)
+        [ "$#" -eq 1 ] || { echo "Usage: game-manager status|detect|start|stop|current" >&2; exit 2; }
+        game_start
+        ;;
+    stop)
+        [ "$#" -eq 1 ] || { echo "Usage: game-manager status|detect|start|stop|current" >&2; exit 2; }
+        game_stop
+        ;;
+    current)
+        [ "$#" -eq 1 ] || { echo "Usage: game-manager status|detect|start|stop|current" >&2; exit 2; }
+        game_current
+        ;;
+    *)
+        echo "Usage: game-manager status|detect|start|stop|current" >&2
+        exit 2
+        ;;
+esac

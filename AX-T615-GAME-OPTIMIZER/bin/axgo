@@ -15,20 +15,35 @@ case "$COMMAND" in
         shift
         exec sh "$SCRIPT_DIR/capabilities" "$@"
         ;;
-    gaming)
-        echo "Gaming optimization is not implemented yet."
-        echo "No hardware settings were changed."
+    games)
+        exec sh "$SCRIPT_DIR/game-db" list
+        ;;
+    game)
+        shift
+        exec sh "$SCRIPT_DIR/game-manager" "${1:-status}"
         ;;
     profile)
         shift
         exec sh "$SCRIPT_DIR/profile" "$@"
+        ;;
+    session)
+        shift
+        exec sh "$SCRIPT_DIR/session" "${1:-status}"
+        ;;
+    recovery)
+        shift
+        exec sh "$SCRIPT_DIR/recovery" "${1:-status}"
+        ;;
+    gaming)
+        echo "Gaming optimization is not implemented yet."
+        echo "No hardware settings were changed."
         ;;
     reset)
         echo "Reset is not implemented yet."
         echo "No hardware settings were changed."
         ;;
     *)
-        echo "Usage: axgo {status|detect|capabilities [--save]|gaming|profile [cool|balanced|performance]|reset}"
+        echo "Usage: axgo {status|detect|capabilities [--save]|games|game {status|detect|start|stop|current}|profile [get|set <profile>]|session [start|stop|status|current]|recovery [status|reset]|gaming|reset}"
         exit 2
         ;;
 esac

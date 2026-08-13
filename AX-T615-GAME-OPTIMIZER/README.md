@@ -33,8 +33,10 @@ commands and are never used to force hardware frequencies.
   control paths
 - Concise hardware status through `status.sh`
 - Optional timestamped hardware-only reports through `axgo capabilities --save`
-- Placeholder `cool`, `balanced`, and `performance` profile framework
-- Placeholder action and `axgo` command interfaces
+- Logical `cool`, `balanced`, and `performance` profile framework
+- Game database, foreground detection, session state, monitor, and recovery
+  architecture
+- `axgo` command interfaces for discovery and gaming-engine management
 
 ## Step 2 — Hardware & Kernel Discovery
 
@@ -95,6 +97,43 @@ properties, changes display settings, modifies memory or network settings,
 changes Game Mode, disables thermal throttling, or kills processes. Root is
 never assumed; unprivileged Android-readable information is used first.
 
+## Step 3 — Gaming Engine
+
+The gaming engine manages game identity and logical session state without
+performing hardware optimization. It can:
+
+- Detect the foreground package through multiple `dumpsys` formats
+- Match only explicitly configured game packages
+- Store multiple game entries and their `cool`, `balanced`, or `performance`
+  profile assignments
+- Start, stop, inspect, and recover logical gaming sessions
+- Poll for foreground changes through `bin/game-monitor`
+- Restore the normal logical state when a game exits
+- Rotate `logs/game.log` at a bounded size
+- Keep a recovery registry ready for future original hardware values
+
+Examples:
+
+```sh
+./bin/game-db list
+./bin/game-db add <verified.package> "Game Name" performance
+./bin/game-manager status
+./bin/game-manager detect
+./bin/session status
+./bin/profile get
+./bin/profile set balanced
+./bin/recovery status
+```
+
+`service.sh` initializes runtime/log directories and starts the lightweight
+game monitor unless `GAME_MONITOR_AUTOSTART=false` is set. The monitor uses
+`GAME_MONITOR_INTERVAL="3"` from `config/profiles.conf`, never optimizes an
+unknown application, and avoids starting duplicate sessions.
+
+The game database intentionally contains no guessed package names. Runtime
+state under `runtime/` contains only temporary package, profile, session, and
+monitor state; it does not contain personal information.
+
 ## Future development roadmap
 
 1. Identify the module manager/environment and confirm its packaging contract.
@@ -103,7 +142,7 @@ never assumed; unprivileged Android-readable information is used first.
 3. Document safe bounds and behavior for any controls that are actually
    available and writable.
 4. Add opt-in, guarded tuning with thermal and rollback safety checks.
-5. Add explicitly verified game-package detection and user-facing status.
+5. Test the gaming engine with explicitly verified package names on-device.
 6. Test across supported firmware versions before enabling any default tuning.
 
 Do not proceed to hardware tuning until the target kernel controls have been

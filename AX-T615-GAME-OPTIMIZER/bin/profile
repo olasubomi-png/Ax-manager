@@ -1,16 +1,52 @@
 #!/system/bin/sh
+set -u
 
-PROFILE="${1:-balanced}"
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname "$0")" 2>/dev/null && pwd)"
+AXGO_ROOT="${AXGO_ROOT:-$(CDPATH= cd -- "$SCRIPT_DIR/.." 2>/dev/null && pwd)}"
+. "$AXGO_ROOT/bin/lib"
 
-case "$PROFILE" in
+print_profile() {
+    PROFILE="$1"
+    echo "Current profile: $(axgo_profile_upper "$PROFILE")"
+    echo "Hardware optimization:"
+    echo "CPU: pending Step 4"
+    echo "GPU: pending Step 4"
+    echo "Thermal: pending Step 5"
+    echo "RAM: pending Step 6"
+    echo "Display: pending Step 7"
+    echo "Hardware tuning: DISABLED"
+}
+
+set_profile() {
+    PROFILE="$1"
+    axgo_profile_valid "$PROFILE" || {
+        echo "Invalid profile: $PROFILE" >&2
+        echo "Supported profiles: cool, balanced, performance" >&2
+        return 2
+    }
+    axgo_write_state current_profile "$PROFILE" || {
+        echo "Unable to save the logical profile." >&2
+        return 1
+    }
+    axgo_log INFO "profile selected profile=$PROFILE"
+    print_profile "$PROFILE"
+}
+
+case "${1:-get}" in
+    get)
+        [ "$#" -eq 1 ] || { echo "Usage: profile get|set <cool|balanced|performance>" >&2; exit 2; }
+        print_profile "$(axgo_current_profile)"
+        ;;
+    set)
+        [ "$#" -eq 2 ] || { echo "Usage: profile set <cool|balanced|performance>" >&2; exit 2; }
+        set_profile "$2"
+        ;;
     cool|balanced|performance)
-        echo "Profile: $PROFILE"
-        echo "Profile framework ready; hardware tuning not enabled."
+        [ "$#" -eq 1 ] || { echo "Usage: profile get|set <cool|balanced|performance>" >&2; exit 2; }
+        set_profile "$1"
         ;;
     *)
-        echo "Usage: profile {cool|balanced|performance}"
+        echo "Usage: profile get|set <cool|balanced|performance>" >&2
         exit 2
         ;;
 esac
-
-exit 0
