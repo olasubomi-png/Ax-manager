@@ -1,0 +1,86 @@
+#!/system/bin/sh
+
+# Reusable validation helpers for future CPU controls.
+#
+# This file deliberately contains no write operation. A future caller must
+# validate every requested change before it is allowed to consider a write,
+# and must still perform the write in a separate, explicitly reviewed stage.
+
+cpu_safety_is_uint() {
+    case "${1:-}" in
+        ''|*[!0-9]*) return 1 ;;
+        *) return 0 ;;
+    esac
+}
+
+cpu_safety_has_root() {
+    if [ "${CPU_SAFETY_FORCE_NON_ROOT:-false}" = "true" ]; then
+        return 1
+    fi
+    [ "$(id -u 2>/dev/null)" = "0" ]
+}
+
+cpu_safety_validate_frequency() {
+    CPU_SAFETY_VALUE="${1:-}"
+    CPU_SAFETY_MIN="${2:-}"
+    CPU_SAFETY_MAX="${3:-}"
+    cpu_safety_is_uint "$CPU_SAFETY_VALUE" || return 1
+    cpu_safety_is_uint "$CPU_SAFETY_MIN" || return 1
+    cpu_safety_is_uint "$CPU_SAFETY_MAX" || return 1
+    [ "$CPU_SAFETY_MIN" -le "$CPU_SAFETY_MAX" ] 2>/dev/null || return 1
+    [ "$CPU_SAFETY_VALUE" -ge "$CPU_SAFETY_MIN" ] 2>/dev/null || return 1
+    [ "$CPU_SAFETY_VALUE" -le "$CPU_SAFETY_MAX" ] 2>/dev/null || return 1
+}
+
+cpu_safety_validate_node() {
+    CPU_SAFETY_NODE="${1:-}"
+    [ -n "$CPU_SAFETY_NODE" ] && [ -e "$CPU_SAFETY_NODE" ] &&
+        [ -r "$CPU_SAFETY_NODE" ] && [ -w "$CPU_SAFETY_NODE" ]
+}
+
+cpu_safety_validate_policy() {
+    CPU_SAFETY_REQUESTED="${1:-}"
+    CPU_SAFETY_DISCOVERED="${2:-}"
+    [ -n "$CPU_SAFETY_REQUESTED" ] || return 1
+    for CPU_SAFETY_POLICY in $CPU_SAFETY_DISCOVERED; do
+        [ "$CPU_SAFETY_POLICY" = "$CPU_SAFETY_REQUESTED" ] && return 0
+    done
+    return 1
+}
+
+cpu_safety_validate_governor() {
+    CPU_SAFETY_REQUESTED="${1:-}"
+    CPU_SAFETY_AVAILABLE="${2:-}"
+    [ -n "$CPU_SAFETY_REQUESTED" ] || return 1
+    for CPU_SAFETY_GOVERNOR in $CPU_SAFETY_AVAILABLE; do
+        [ "$CPU_SAFETY_GOVERNOR" = "$CPU_SAFETY_REQUESTED" ] && return 0
+    done
+    return 1
+}
+
+# Validate a future frequency request without performing it.
+cpu_safety_validate_frequency_request() {
+    CPU_SAFETY_POLICY="${1:-}"
+    CPU_SAFETY_NODE="${2:-}"
+    CPU_SAFETY_VALUE="${3:-}"
+    CPU_SAFETY_MIN="${4:-}"
+    CPU_SAFETY_MAX="${5:-}"
+    CPU_SAFETY_DISCOVERED="${6:-}"
+    cpu_safety_has_root || return 1
+    cpu_safety_validate_policy "$CPU_SAFETY_POLICY" "$CPU_SAFETY_DISCOVERED" || return 1
+    cpu_safety_validate_node "$CPU_SAFETY_NODE" || return 1
+    cpu_safety_validate_frequency "$CPU_SAFETY_VALUE" "$CPU_SAFETY_MIN" "$CPU_SAFETY_MAX"
+}
+
+# Validate a future governor request without performing it.
+cpu_safety_validate_governor_request() {
+    CPU_SAFETY_POLICY="${1:-}"
+    CPU_SAFETY_NODE="${2:-}"
+    CPU_SAFETY_GOVERNOR="${3:-}"
+    CPU_SAFETY_AVAILABLE="${4:-}"
+    CPU_SAFETY_DISCOVERED="${5:-}"
+    cpu_safety_has_root || return 1
+    cpu_safety_validate_policy "$CPU_SAFETY_POLICY" "$CPU_SAFETY_DISCOVERED" || return 1
+    cpu_safety_validate_node "$CPU_SAFETY_NODE" || return 1
+    cpu_safety_validate_governor "$CPU_SAFETY_GOVERNOR" "$CPU_SAFETY_AVAILABLE"
+}

@@ -97,6 +97,47 @@ properties, changes display settings, modifies memory or network settings,
 changes Game Mode, disables thermal throttling, or kills processes. Root is
 never assumed; unprivileged Android-readable information is used first.
 
+## Step 4A — CPU Discovery & Safety
+
+Step 4A adds a read-only CPU policy discovery and simulation layer. It does
+not apply CPU settings.
+
+```sh
+./bin/cpu-controller status
+./bin/cpu-controller inspect
+./bin/cpu-controller dry-run performance
+./bin/axgo cpu status
+./bin/axgo cpu inspect
+./bin/axgo cpu dry-run performance
+```
+
+The controller discovers every dynamically present policy below
+`/sys/devices/system/cpu/cpufreq/`, without assuming policy numbering. For
+each policy it reports its CPU list, current/minimum/maximum frequency,
+available frequencies, governors, current governor, scaling driver, and
+readable/writable status. Numeric cpufreq sysfs values are retained as raw
+values and documented using the Linux cpufreq convention of kHz; values with
+an explicit suffix are reported with that suffix.
+
+Cluster identification uses available CPU topology data and `/proc/cpuinfo`.
+It labels a cluster `EFFICIENCY (Cortex-A55)` or
+`PERFORMANCE (Cortex-A75)` only when that model is actually observed.
+Otherwise it reports `UNKNOWN`; CPU IDs and governor names are never guessed.
+
+`bin/cpu-safety` provides reusable validation functions for future CPU
+changes. They reject malformed frequencies, values outside detected
+minimum/maximum bounds, undiscovered policies, unavailable governors,
+nonexistent or non-writable nodes, and requests made without root. Future
+hardware changes must remain inside detected limits and must preserve
+thermal protection.
+
+`dry-run` describes the requested logical `cool`, `balanced`, or `performance`
+profile and planned actions without changing hardware. Step 4A does not write
+to `/sys` or `/proc`, change governors or frequencies, modify Android
+properties, modify ZRAM/RAM/display settings, disable thermal protection, or
+implement CPU apply functionality. Root will be required before any future
+real CPU change is considered.
+
 ## Step 3 — Gaming Engine
 
 The gaming engine manages game identity and logical session state without

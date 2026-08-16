@@ -1,0 +1,312 @@
+#!/system/bin/sh
+set -u
+
+# AX-T615 Step 4A CPU discovery controller.
+# Every operation in this file is read-only. There is intentionally no apply
+# command and no redirection to sysfs or procfs.
+
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname "$0")" 2>/dev/null && pwd)"
+AXGO_ROOT="${AXGO_ROOT:-$(CDPATH= cd -- "$SCRIPT_DIR/.." 2>/dev/null && pwd)}"
+CPU_SYSFS_ROOT="${CPU_SYSFS_ROOT:-/sys/devices/system/cpu}"
+CPUFREQ_ROOT="$CPU_SYSFS_ROOT/cpufreq"
+CPU_PROC_CPUINFO="${CPU_PROC_CPUINFO:-/proc/cpuinfo}"
+. "$SCRIPT_DIR/cpu-safety"
+
+cpu_read() {
+    if [ -r "$1" ]; then
+        cat "$1" 2>/dev/null
+    fi
+}
+
+cpu_node_state() {
+    if [ ! -e "$1" ]; then
+        printf '%s' "unavailable"
+    elif [ -r "$1" ]; then
+        printf '%s' "readable"
+    else
+        printf '%s' "permission denied"
+    fi
+}
+
+cpu_node_write_state() {
+    if [ ! -e "$1" ]; then
+        printf '%s' "unavailable"
+    elif [ -w "$1" ]; then
+        printf '%s' "yes (observed only)"
+    else
+        printf '%s' "no"
+    fi
+}
+
+cpu_node_report() {
+    CPU_LABEL="$1"
+    CPU_NODE="$2"
+    printf '%s: %s (read=%s, writable=%s)\n' "$CPU_LABEL" \
+        "$(cpu_read "$CPU_NODE" | head -n 1)" \
+        "$(cpu_node_state "$CPU_NODE")" \
+        "$(cpu_node_write_state "$CPU_NODE")"
+}
+
+cpu_first_value() {
+    CPU_VALUE="$(cpu_read "$1")"
+    if [ -n "$CPU_VALUE" ]; then
+        printf '%s\n' "$CPU_VALUE" | head -n 1
+        return 0
+    fi
+    CPU_VALUE="$(cpu_read "$2")"
+    [ -n "$CPU_VALUE" ] && printf '%s\n' "$CPU_VALUE" | head -n 1
+}
+
+cpu_policy_paths() {
+    for CPU_POLICY_PATH in "$CPUFREQ_ROOT"/policy*; do
+        [ -d "$CPU_POLICY_PATH" ] || continue
+        printf '%s\n' "$CPU_POLICY_PATH"
+    done
+}
+
+cpu_expand_list() {
+    # related_cpus is normally a space-separated list such as "0-5 6-7".
+    # Expand ranges only for lookup; the reported value remains unchanged.
+    printf '%s\n' "$1" | tr ',' ' ' | awk '{
+        for (i = 1; i <= NF; i++) {
+            if ($i ~ /^[0-9]+-[0-9]+$/) {
+                split($i, range, "-")
+                for (n = range[1]; n <= range[2]; n++) print n
+            } else if ($i ~ /^[0-9]+$/) {
+                print $i
+            }
+        }
+    }'
+}
+
+cpu_model_for_cpu() {
+    CPU_TARGET="$1"
+    if [ -r "$CPU_PROC_CPUINFO" ] && command -v awk >/dev/null 2>&1; then
+        awk -v target="$CPU_TARGET" '
+            /^processor[[:space:]]*:/ {
+                current = $NF
+                model = ""
+            }
+            /^(model name|Processor|Hardware)[[:space:]]*:/ && current == target && model == "" {
+                sub(/^[^:]*:[[:space:]]*/, "", $0)
+                model = $0
+            }
+            current == target && model != "" {
+                print model
+                exit
+            }
+        ' "$CPU_PROC_CPUINFO" 2>/dev/null
+    fi
+}
+
+cpu_policy_cluster() {
+    CPU_CPUS="$1"
+    CPU_CLUSTER="UNKNOWN"
+    CPU_SEEN_MODEL="false"
+    for CPU_ID in $(cpu_expand_list "$CPU_CPUS"); do
+        CPU_MODEL="$(cpu_model_for_cpu "$CPU_ID")"
+        case "$CPU_MODEL" in
+            *Cortex-A55*)
+                if [ "$CPU_CLUSTER" = "UNKNOWN" ] || [ "$CPU_CLUSTER" = "EFFICIENCY (Cortex-A55)" ]; then
+                    CPU_CLUSTER="EFFICIENCY (Cortex-A55)"
+                else
+                    CPU_CLUSTER="UNKNOWN"
+                fi
+                CPU_SEEN_MODEL="true"
+                ;;
+            *Cortex-A75*)
+                if [ "$CPU_CLUSTER" = "UNKNOWN" ] || [ "$CPU_CLUSTER" = "PERFORMANCE (Cortex-A75)" ]; then
+                    CPU_CLUSTER="PERFORMANCE (Cortex-A75)"
+                else
+                    CPU_CLUSTER="UNKNOWN"
+                fi
+                CPU_SEEN_MODEL="true"
+                ;;
+        esac
+    done
+    [ "$CPU_SEEN_MODEL" = "true" ] || CPU_CLUSTER="UNKNOWN"
+    printf '%s' "$CPU_CLUSTER"
+}
+
+cpu_policy_topology_report() {
+    CPU_CPUS="$1"
+    CPU_TOPOLOGY_FOUND="false"
+    for CPU_ID in $(cpu_expand_list "$CPU_CPUS"); do
+        CPU_CAPACITY="$(cpu_read "$CPU_SYSFS_ROOT/cpu$CPU_ID/cpu_capacity" | head -n 1)"
+        CPU_SIBLINGS="$(cpu_read "$CPU_SYSFS_ROOT/cpu$CPU_ID/topology/core_siblings_list" | head -n 1)"
+        if [ -n "$CPU_CAPACITY" ] || [ -n "$CPU_SIBLINGS" ]; then
+            printf 'CPU %s topology: capacity=%s, core_siblings=%s\n' "$CPU_ID" \
+                "${CPU_CAPACITY:-unavailable}" "${CPU_SIBLINGS:-unavailable}"
+            CPU_TOPOLOGY_FOUND="true"
+        fi
+    done
+    [ "$CPU_TOPOLOGY_FOUND" = "true" ] || echo "CPU topology: unavailable"
+}
+
+cpu_frequency_unit() {
+    CPU_FREQUENCY="$1"
+    case "$CPU_FREQUENCY" in
+        *kHz|*KHz|*KHZ) printf '%s' "kHz (explicit)" ;;
+        *MHz|*mhz|*MHZ) printf '%s' "MHz (explicit)" ;;
+        ''|*[!0-9]*) printf '%s' "unknown" ;;
+        *) printf '%s' "kHz (numeric cpufreq sysfs convention)" ;;
+    esac
+}
+
+cpu_policy_report() {
+    CPU_POLICY_PATH="$1"
+    CPU_POLICY_NAME="${CPU_POLICY_PATH##*/}"
+    CPU_CPUS="$(cpu_first_value "$CPU_POLICY_PATH/related_cpus" "$CPU_POLICY_PATH/affected_cpus")"
+    CPU_CURRENT="$(cpu_first_value "$CPU_POLICY_PATH/scaling_cur_freq" "$CPU_POLICY_PATH/cpuinfo_cur_freq")"
+    CPU_MIN="$(cpu_read "$CPU_POLICY_PATH/scaling_min_freq" | head -n 1)"
+    CPU_MAX="$(cpu_read "$CPU_POLICY_PATH/scaling_max_freq" | head -n 1)"
+    CPU_AVAILABLE_FREQS="$(cpu_read "$CPU_POLICY_PATH/scaling_available_frequencies" | head -n 1)"
+    CPU_AVAILABLE_GOVERNORS="$(cpu_read "$CPU_POLICY_PATH/scaling_available_governors" | head -n 1)"
+    CPU_GOVERNOR="$(cpu_read "$CPU_POLICY_PATH/scaling_governor" | head -n 1)"
+    CPU_DRIVER="$(cpu_read "$CPU_POLICY_PATH/scaling_driver" | head -n 1)"
+
+    echo "$CPU_POLICY_NAME"
+    echo "Policy path: $CPU_POLICY_PATH"
+    echo "CPUs: ${CPU_CPUS:-unavailable}"
+    echo "Cluster: $(cpu_policy_cluster "${CPU_CPUS:-}")"
+    cpu_policy_topology_report "${CPU_CPUS:-}"
+    echo "Current frequency: ${CPU_CURRENT:-unavailable}"
+    echo "Minimum frequency: ${CPU_MIN:-unavailable}"
+    echo "Maximum frequency: ${CPU_MAX:-unavailable}"
+    echo "Frequency unit: $(cpu_frequency_unit "${CPU_CURRENT:-$CPU_MAX}")"
+    echo "Available frequencies: ${CPU_AVAILABLE_FREQS:-unavailable}"
+    echo "Available governors: ${CPU_AVAILABLE_GOVERNORS:-unavailable}"
+    echo "Current governor: ${CPU_GOVERNOR:-unavailable}"
+    echo "Scaling driver: ${CPU_DRIVER:-unavailable}"
+    cpu_node_report "related_cpus" "$CPU_POLICY_PATH/related_cpus"
+    cpu_node_report "scaling_cur_freq" "$CPU_POLICY_PATH/scaling_cur_freq"
+    cpu_node_report "scaling_min_freq" "$CPU_POLICY_PATH/scaling_min_freq"
+    cpu_node_report "scaling_max_freq" "$CPU_POLICY_PATH/scaling_max_freq"
+    cpu_node_report "scaling_available_frequencies" "$CPU_POLICY_PATH/scaling_available_frequencies"
+    cpu_node_report "scaling_available_governors" "$CPU_POLICY_PATH/scaling_available_governors"
+    cpu_node_report "scaling_governor" "$CPU_POLICY_PATH/scaling_governor"
+    cpu_node_report "scaling_driver" "$CPU_POLICY_PATH/scaling_driver"
+    echo "Read-only discovery: YES"
+    echo
+}
+
+cpu_inspect() {
+    echo "AX-T615 CPU POLICY DISCOVERY"
+    echo "==========================="
+    echo "CPU policy root: $CPUFREQ_ROOT"
+    echo "Topology source: $CPU_PROC_CPUINFO plus cpu*/topology and cpu_capacity"
+    echo "Frequency units: raw sysfs values are reported; numeric cpufreq values are documented as kHz."
+    echo "Root available: $(cpu_safety_has_root && echo yes || echo no)"
+    echo
+    CPU_POLICY_COUNT=0
+    for CPU_POLICY_PATH in $(cpu_policy_paths); do
+        CPU_POLICY_COUNT=$((CPU_POLICY_COUNT + 1))
+        cpu_policy_report "$CPU_POLICY_PATH"
+    done
+    if [ "$CPU_POLICY_COUNT" -eq 0 ]; then
+        echo "No CPU policies discovered."
+        echo "Policy discovery status: unavailable"
+    else
+        echo "Policies detected: $CPU_POLICY_COUNT"
+    fi
+    echo "No hardware settings were changed."
+}
+
+cpu_status() {
+    echo "AX-T615 CPU STATUS"
+    echo "=================="
+    echo "Policy root: $CPUFREQ_ROOT"
+    CPU_POLICY_COUNT=0
+    for CPU_POLICY_PATH in $(cpu_policy_paths); do
+        CPU_POLICY_COUNT=$((CPU_POLICY_COUNT + 1))
+        CPU_POLICY_NAME="${CPU_POLICY_PATH##*/}"
+        CPU_CPUS="$(cpu_first_value "$CPU_POLICY_PATH/related_cpus" "$CPU_POLICY_PATH/affected_cpus")"
+        CPU_GOVERNOR="$(cpu_read "$CPU_POLICY_PATH/scaling_governor" | head -n 1)"
+        CPU_CURRENT="$(cpu_first_value "$CPU_POLICY_PATH/scaling_cur_freq" "$CPU_POLICY_PATH/cpuinfo_cur_freq")"
+        printf '%s | CPUs=%s | governor=%s | current=%s | cluster=%s\n' \
+            "$CPU_POLICY_NAME" "${CPU_CPUS:-unknown}" "${CPU_GOVERNOR:-unknown}" \
+            "${CPU_CURRENT:-unknown}" "$(cpu_policy_cluster "${CPU_CPUS:-}")"
+    done
+    [ "$CPU_POLICY_COUNT" -gt 0 ] || echo "No CPU policies discovered."
+    echo "Read-only status: YES"
+    echo "No hardware settings were changed."
+}
+
+cpu_profile_description() {
+    case "$1" in
+        cool)
+            echo "COOL"
+            echo "Intent: prioritize efficiency and avoid unnecessary sustained CPU load."
+            ;;
+        balanced)
+            echo "BALANCED"
+            echo "Intent: normal behavior with moderate performance."
+            ;;
+        performance)
+            echo "PERFORMANCE"
+            echo "Intent: prioritize gaming responsiveness within detected limits and thermal protection."
+            ;;
+    esac
+}
+
+cpu_dry_run() {
+    CPU_REQUESTED_PROFILE="${1:-balanced}"
+    case "$CPU_REQUESTED_PROFILE" in
+        cool|balanced|performance) ;;
+        *)
+            echo "Invalid profile: $CPU_REQUESTED_PROFILE" >&2
+            echo "Supported profiles: cool, balanced, performance" >&2
+            return 2
+            ;;
+    esac
+    echo "AX-T615 CPU DRY RUN"
+    echo "==================="
+    echo
+    echo "CPU policies detected:"
+    CPU_POLICY_COUNT=0
+    for CPU_POLICY_PATH in $(cpu_policy_paths); do
+        CPU_POLICY_COUNT=$((CPU_POLICY_COUNT + 1))
+        CPU_POLICY_NAME="${CPU_POLICY_PATH##*/}"
+        CPU_CPUS="$(cpu_first_value "$CPU_POLICY_PATH/related_cpus" "$CPU_POLICY_PATH/affected_cpus")"
+        CPU_GOVERNOR="$(cpu_read "$CPU_POLICY_PATH/scaling_governor" | head -n 1)"
+        CPU_MIN="$(cpu_read "$CPU_POLICY_PATH/scaling_min_freq" | head -n 1)"
+        CPU_MAX="$(cpu_read "$CPU_POLICY_PATH/scaling_max_freq" | head -n 1)"
+        echo "$CPU_POLICY_NAME"
+        echo "CPUs: ${CPU_CPUS:-detected}"
+        echo "Cluster: $(cpu_policy_cluster "${CPU_CPUS:-}")"
+        echo "Governor: ${CPU_GOVERNOR:-detected}"
+        echo "Min: ${CPU_MIN:-detected}"
+        echo "Max: ${CPU_MAX:-detected}"
+        echo
+    done
+    [ "$CPU_POLICY_COUNT" -gt 0 ] || echo "No CPU policies detected."
+    echo "Requested profile: $(cpu_profile_description "$CPU_REQUESTED_PROFILE" | head -n 1)"
+    echo
+    echo "Planned changes:"
+    echo "No real changes."
+    echo
+    echo "Reason:"
+    echo "Step 4A is read-only."
+    echo "Root is required for any future real CPU changes."
+    echo "Thermal protection must remain enabled."
+    echo "No hardware settings were changed."
+}
+
+case "${1:-status}" in
+    status)
+        [ "$#" -eq 1 ] || { echo "Usage: cpu-controller status|inspect|dry-run [cool|balanced|performance]" >&2; exit 2; }
+        cpu_status
+        ;;
+    inspect)
+        [ "$#" -eq 1 ] || { echo "Usage: cpu-controller status|inspect|dry-run [cool|balanced|performance]" >&2; exit 2; }
+        cpu_inspect
+        ;;
+    dry-run)
+        [ "$#" -le 2 ] || { echo "Usage: cpu-controller status|inspect|dry-run [cool|balanced|performance]" >&2; exit 2; }
+        cpu_dry_run "${2:-balanced}"
+        ;;
+    *)
+        echo "Usage: cpu-controller status|inspect|dry-run [cool|balanced|performance]" >&2
+        exit 2
+        ;;
+esac
