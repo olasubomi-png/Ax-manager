@@ -1,10 +1,6 @@
 #!/system/bin/sh
 
-# Reusable validation helpers for future CPU controls.
-#
-# This file deliberately contains no write operation. A future caller must
-# validate every requested change before it is allowed to consider a write,
-# and must still perform the write in a separate, explicitly reviewed stage.
+# Reusable validation helpers for guarded CPU controls.
 
 cpu_safety_is_uint() {
     case "${1:-}" in
@@ -16,6 +12,9 @@ cpu_safety_is_uint() {
 cpu_safety_has_root() {
     if [ "${CPU_SAFETY_FORCE_NON_ROOT:-false}" = "true" ]; then
         return 1
+    fi
+    if [ "${CPU_SAFETY_FORCE_ROOT:-false}" = "true" ]; then
+        return 0
     fi
     [ "$(id -u 2>/dev/null)" = "0" ]
 }
@@ -34,6 +33,7 @@ cpu_safety_validate_frequency() {
 
 cpu_safety_validate_node() {
     CPU_SAFETY_NODE="${1:-}"
+    [ "${CPU_SAFETY_FORCE_READONLY:-false}" != "true" ] || return 1
     [ -n "$CPU_SAFETY_NODE" ] && [ -e "$CPU_SAFETY_NODE" ] &&
         [ -r "$CPU_SAFETY_NODE" ] && [ -w "$CPU_SAFETY_NODE" ]
 }
@@ -58,7 +58,7 @@ cpu_safety_validate_governor() {
     return 1
 }
 
-# Validate a future frequency request without performing it.
+# Validate a frequency request immediately before a guarded write.
 cpu_safety_validate_frequency_request() {
     CPU_SAFETY_POLICY="${1:-}"
     CPU_SAFETY_NODE="${2:-}"
@@ -72,7 +72,7 @@ cpu_safety_validate_frequency_request() {
     cpu_safety_validate_frequency "$CPU_SAFETY_VALUE" "$CPU_SAFETY_MIN" "$CPU_SAFETY_MAX"
 }
 
-# Validate a future governor request without performing it.
+# Validate a governor request immediately before a guarded write.
 cpu_safety_validate_governor_request() {
     CPU_SAFETY_POLICY="${1:-}"
     CPU_SAFETY_NODE="${2:-}"

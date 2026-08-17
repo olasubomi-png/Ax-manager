@@ -47,11 +47,10 @@ case "$COMMAND" in
         echo "No hardware settings were changed."
         ;;
     reset)
-        echo "Reset is not implemented yet."
-        echo "No hardware settings were changed."
+        exec sh "$SCRIPT_DIR/cpu-reset"
         ;;
     *)
-        echo "Usage: axgo {status|detect|capabilities [--save]|cpu [status|inspect|dry-run <profile>]|games|game {status|detect|start|stop|current}|profile [get|set <profile>]|session [start|stop|status|current]|recovery [status|reset]|gaming|reset}"
+        echo "Usage: axgo {status|detect|capabilities [--save]|cpu [status|inspect|dry-run|apply <profile>|restore|reset]|games|game {status|detect|start|stop|current}|profile [get|set <profile>]|session [start|stop|status|current]|recovery [status|reset]|gaming|reset}"
         exit 2
         ;;
 esac

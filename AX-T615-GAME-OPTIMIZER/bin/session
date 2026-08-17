@@ -40,6 +40,14 @@ session_start() {
     axgo_write_state session_started "$(axgo_now)" || return 1
     axgo_log INFO "profile selected package=$PACKAGE profile=$PROFILE"
     axgo_log INFO "game started package=$PACKAGE name=${NAME:-unnamed game} profile=$PROFILE"
+    CPU_APPLY_OUTPUT="$(CPU_DATA_ROOT="$AXGO_DATA_ROOT" sh "$AXGO_ROOT/bin/cpu-controller" apply "$PROFILE" 2>&1)"
+    CPU_APPLY_STATUS=$?
+    printf '%s\n' "$CPU_APPLY_OUTPUT"
+    if [ "$CPU_APPLY_STATUS" -eq 0 ] && printf '%s\n' "$CPU_APPLY_OUTPUT" | grep -q "CPU changes applied safely"; then
+        echo "CPU changes: applied safely"
+    else
+        echo "CPU changes: no CPU changes were applied"
+    fi
     echo "Gaming session started"
     echo "Game: ${NAME:-unnamed game}"
     echo "Package: $PACKAGE"
@@ -56,6 +64,8 @@ session_stop() {
     PACKAGE="$(axgo_read_state "$AXGO_RUNTIME_DIR/current_package")"
     NAME="$(axgo_read_state "$AXGO_RUNTIME_DIR/current_game")"
     axgo_log INFO "game stopped package=${PACKAGE:-unknown} name=${NAME:-unknown}"
+    CPU_RESTORE_OUTPUT="$(CPU_DATA_ROOT="$AXGO_DATA_ROOT" sh "$AXGO_ROOT/bin/cpu-controller" restore 2>&1)"
+    printf '%s\n' "$CPU_RESTORE_OUTPUT"
     axgo_remove_state gaming.state
     axgo_remove_state current_game
     axgo_remove_state current_package
@@ -64,7 +74,7 @@ session_stop() {
     axgo_write_state current_profile "$(axgo_global_profile)" || :
     echo "Gaming session stopped"
     echo "Restoring normal state"
-    echo "No hardware state changes were made."
+    echo "CPU restore was requested; any failed backup remains available for manual recovery."
 }
 
 session_status() {

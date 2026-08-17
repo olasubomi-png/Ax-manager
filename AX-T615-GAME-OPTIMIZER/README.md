@@ -179,6 +179,43 @@ only temporary package, profile, session, and monitor state; it does not
 contain personal information. `logs/game.log` records engine activity with
 bounded rotation.
 
+## Step 4B — CPU Apply & Restore
+
+Step 4B adds a guarded CPU apply, backup, restore, and emergency reset engine.
+The development configuration keeps both governor changes and CPU frequency
+changes disabled:
+
+```sh
+./bin/cpu-controller apply performance
+./bin/cpu-controller restore
+./bin/cpu-reset
+./bin/axgo cpu apply performance
+./bin/axgo cpu reset
+```
+
+The apply command refuses to modify anything unless root is available, the
+policy was discovered, every target node exists and is writable, the value is
+numeric and within the detected minimum/maximum, the requested governor is
+available, thermal temperatures are readable for performance frequency work,
+and the original policy state has been backed up. A failed check aborts the
+change and leaves existing backups intact. Thermal protection and trip points
+are never changed.
+
+Backups are stored as `runtime/cpu/original_policy*.conf` and contain the
+policy path, original governor, original minimum frequency, and original
+maximum frequency. Restore uses those values only, validates the current
+policy and nodes, restores frequency bounds in a safe order, then restores
+the governor. A backup is deleted only after its policy restores completely.
+`bin/cpu-reset` is an emergency entry point for the same backup-only restore
+operation; it never invents default settings.
+
+The engine never overclocks. Known T615 reference ceilings are 1612000 kHz
+for Cortex-A55 and 1820000 kHz for Cortex-A75, while detected lower limits
+take precedence. Performance mode does not automatically force maximum clocks:
+frequency selection is disabled until actual device testing explicitly enables
+a validated profile request. All apply, validation, backup, modification,
+restore, and error events are recorded in `logs/cpu.log`.
+
 ## Future development roadmap
 
 1. Identify the module manager/environment and confirm its packaging contract.

@@ -1,15 +1,20 @@
 #!/system/bin/sh
 set -u
 
-# AX-T615 Step 4A CPU discovery controller.
-# Every operation in this file is read-only. There is intentionally no apply
-# command and no redirection to sysfs or procfs.
+# AX-T615 Step 4B CPU discovery, apply, backup, and restore controller.
+# Hardware writes are reachable only through the explicit apply command and
+# are individually guarded by root, discovery, permissions, bounds, backup,
+# and profile enablement checks.
 
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname "$0")" 2>/dev/null && pwd)"
 AXGO_ROOT="${AXGO_ROOT:-$(CDPATH= cd -- "$SCRIPT_DIR/.." 2>/dev/null && pwd)}"
 CPU_SYSFS_ROOT="${CPU_SYSFS_ROOT:-/sys/devices/system/cpu}"
 CPUFREQ_ROOT="$CPU_SYSFS_ROOT/cpufreq"
 CPU_PROC_CPUINFO="${CPU_PROC_CPUINFO:-/proc/cpuinfo}"
+CPU_DATA_ROOT="${CPU_DATA_ROOT:-${AXGO_DATA_ROOT:-$AXGO_ROOT}}"
+CPU_RUNTIME_DIR="${CPU_RUNTIME_DIR:-$CPU_DATA_ROOT/runtime/cpu}"
+CPU_LOG_FILE="${CPU_LOG_FILE:-$CPU_DATA_ROOT/logs/cpu.log}"
+CPU_THERMAL_ROOT="${CPU_THERMAL_ROOT:-/sys/class/thermal}"
 . "$SCRIPT_DIR/cpu-safety"
 
 cpu_read() {
@@ -232,6 +237,464 @@ cpu_status() {
     echo "No hardware settings were changed."
 }
 
+cpu_log() {
+    mkdir -p "$(dirname "$CPU_LOG_FILE")" 2>/dev/null || :
+    printf '%s [%s] %s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z' 2>/dev/null || echo unknown-time)" \
+        "${1:-INFO}" "${2:-}" >> "$CPU_LOG_FILE" 2>/dev/null || :
+}
+
+cpu_config_value() {
+    CPU_CONFIG_FILE="${CPU_CONFIG_FILE:-$CPU_DATA_ROOT/config/profiles.conf}"
+    [ -r "$CPU_CONFIG_FILE" ] || CPU_CONFIG_FILE="$AXGO_ROOT/config/profiles.conf"
+    sed -n "s/^${1}=\"\([^\"]*\)\"$/\1/p" "$CPU_CONFIG_FILE" 2>/dev/null | head -n 1
+}
+
+cpu_feature_enabled() {
+    [ "$(cpu_config_value "$1")" = "true" ]
+}
+
+cpu_profile_valid() {
+    case "$1" in
+        cool|balanced|performance) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+cpu_profile_upper() {
+    printf '%s' "$1" | tr '[:lower:]' '[:upper:]'
+}
+
+cpu_profile_key() {
+    printf '%s' "$1" | tr '[:lower:]-' '[:upper:]_'
+}
+
+cpu_profile_governor() {
+    CPU_PROFILE_KEY="$(cpu_profile_key "$1")"
+    cpu_config_value "CPU_${CPU_PROFILE_KEY}_GOVERNOR"
+}
+
+cpu_profile_target_max() {
+    CPU_PROFILE_KEY="$(cpu_profile_key "$1")"
+    cpu_config_value "CPU_${CPU_PROFILE_KEY}_TARGET_MAX_FREQ"
+}
+
+cpu_backup_file() {
+    printf '%s/original_%s.conf' "$CPU_RUNTIME_DIR" "${1##*/}"
+}
+
+cpu_backup_field() {
+    sed -n "s/^${1}=//p" "$2" 2>/dev/null | head -n 1
+}
+
+cpu_backup_valid() {
+    CPU_BACKUP="$1"
+    [ -r "$CPU_BACKUP" ] || return 1
+    CPU_BACKUP_PATH="$(cpu_backup_field policy_path "$CPU_BACKUP")"
+    CPU_BACKUP_GOVERNOR="$(cpu_backup_field original_governor "$CPU_BACKUP")"
+    CPU_BACKUP_MIN="$(cpu_backup_field original_min_freq "$CPU_BACKUP")"
+    CPU_BACKUP_MAX="$(cpu_backup_field original_max_freq "$CPU_BACKUP")"
+    [ -n "$CPU_BACKUP_PATH" ] && [ -n "$CPU_BACKUP_GOVERNOR" ] || return 1
+    cpu_safety_is_uint "$CPU_BACKUP_MIN" &&
+        cpu_safety_is_uint "$CPU_BACKUP_MAX" &&
+        [ "$CPU_BACKUP_MIN" -le "$CPU_BACKUP_MAX" ] 2>/dev/null
+}
+
+cpu_save_backup() {
+    CPU_POLICY_PATH="$1"
+    CPU_GOVERNOR="$2"
+    CPU_MIN="$3"
+    CPU_MAX="$4"
+    CPU_BACKUP="$(cpu_backup_file "$CPU_POLICY_PATH")"
+    if cpu_backup_valid "$CPU_BACKUP" &&
+        [ "$(cpu_backup_field policy_path "$CPU_BACKUP")" = "$CPU_POLICY_PATH" ]; then
+        cpu_log INFO "backup preserved policy=$CPU_POLICY_PATH file=$CPU_BACKUP"
+        echo "Backup preserved: $CPU_BACKUP"
+        return 0
+    fi
+    mkdir -p "$CPU_RUNTIME_DIR" 2>/dev/null || {
+        cpu_log ERROR "backup directory unavailable path=$CPU_RUNTIME_DIR"
+        echo "BACKUP FAILED: cannot create $CPU_RUNTIME_DIR"
+        return 1
+    }
+    CPU_BACKUP_TMP="$CPU_BACKUP.tmp.$$"
+    (
+        umask 077
+        printf 'policy_path=%s\n' "$CPU_POLICY_PATH"
+        printf 'original_governor=%s\n' "$CPU_GOVERNOR"
+        printf 'original_min_freq=%s\n' "$CPU_MIN"
+        printf 'original_max_freq=%s\n' "$CPU_MAX"
+    ) > "$CPU_BACKUP_TMP" 2>/dev/null || {
+        rm -f "$CPU_BACKUP_TMP" 2>/dev/null || :
+        cpu_log ERROR "backup write failed policy=$CPU_POLICY_PATH"
+        echo "BACKUP FAILED: cannot write $CPU_BACKUP"
+        return 1
+    }
+    mv "$CPU_BACKUP_TMP" "$CPU_BACKUP" 2>/dev/null || {
+        rm -f "$CPU_BACKUP_TMP" 2>/dev/null || :
+        cpu_log ERROR "backup install failed policy=$CPU_POLICY_PATH"
+        echo "BACKUP FAILED: cannot install $CPU_BACKUP"
+        return 1
+    }
+    cpu_log INFO "backup created policy=$CPU_POLICY_PATH file=$CPU_BACKUP"
+    echo "Backup created: $CPU_BACKUP"
+}
+
+cpu_policy_is_discovered() {
+    CPU_REQUESTED_POLICY="$1"
+    for CPU_DISCOVERED_POLICY in $(cpu_policy_paths); do
+        [ "$CPU_DISCOVERED_POLICY" = "$CPU_REQUESTED_POLICY" ] && return 0
+    done
+    return 1
+}
+
+cpu_reference_limit() {
+    CPU_CLUSTER="$1"
+    case "$CPU_CLUSTER" in
+        *Cortex-A55*) printf '%s' "1612000" ;;
+        *Cortex-A75*) printf '%s' "1820000" ;;
+        *) printf '%s' "" ;;
+    esac
+}
+
+cpu_frequency_bound() {
+    CPU_BOUND_KIND="$1"
+    CPU_BOUND_POLICY="$2"
+    CPU_AVAILABLE="$(cpu_read "$CPU_BOUND_POLICY/scaling_available_frequencies" | head -n 1)"
+    CPU_BOUND_VALUE="$(printf '%s\n' "$CPU_AVAILABLE" | awk -v kind="$CPU_BOUND_KIND" '
+        BEGIN { found = 0 }
+        {
+            for (i = 1; i <= NF; i++) {
+                if ($i ~ /^[0-9]+$/) {
+                    if (!found) { first = $i; last = $i; found = 1 }
+                    if ($i < first) first = $i
+                    if ($i > last) last = $i
+                }
+            }
+        }
+        END { if (found) print (kind == "min" ? first : last) }
+    ')"
+    if cpu_safety_is_uint "$CPU_BOUND_VALUE"; then
+        printf '%s' "$CPU_BOUND_VALUE"
+    elif [ "$CPU_BOUND_KIND" = "min" ]; then
+        cpu_read "$CPU_BOUND_POLICY/scaling_min_freq" | head -n 1
+    else
+        cpu_read "$CPU_BOUND_POLICY/scaling_max_freq" | head -n 1
+    fi
+}
+
+cpu_thermal_guard() {
+    CPU_THERMAL_ZONE_COUNT=0
+    CPU_THERMAL_READABLE_COUNT=0
+    for CPU_THERMAL_ZONE in "$CPU_THERMAL_ROOT"/thermal_zone[0-9]*; do
+        [ -d "$CPU_THERMAL_ZONE" ] || continue
+        CPU_THERMAL_ZONE_COUNT=$((CPU_THERMAL_ZONE_COUNT + 1))
+        CPU_THERMAL_TEMP="$(cpu_read "$CPU_THERMAL_ZONE/temp" | head -n 1)"
+        case "$CPU_THERMAL_TEMP" in
+            ''|*[!0-9-]*) ;;
+            *) CPU_THERMAL_READABLE_COUNT=$((CPU_THERMAL_READABLE_COUNT + 1)) ;;
+        esac
+    done
+    if [ "$CPU_THERMAL_ZONE_COUNT" -gt 0 ] &&
+        [ "$CPU_THERMAL_READABLE_COUNT" -gt 0 ]; then
+        echo "Thermal guard: readable temperatures available"
+        return 0
+    fi
+    echo "Thermal guard: unavailable"
+    return 1
+}
+
+cpu_validate_frequency_change() {
+    CPU_POLICY_PATH="$1"
+    CPU_NODE="$2"
+    CPU_VALUE="$3"
+    CPU_MIN="$4"
+    CPU_MAX="$5"
+    CPU_DISCOVERED="$6"
+    cpu_safety_validate_frequency_request "$CPU_POLICY_PATH" "$CPU_NODE" "$CPU_VALUE" \
+        "$CPU_MIN" "$CPU_MAX" "$CPU_DISCOVERED"
+}
+
+cpu_validate_governor_change() {
+    CPU_POLICY_PATH="$1"
+    CPU_NODE="$2"
+    CPU_VALUE="$3"
+    CPU_AVAILABLE="$4"
+    CPU_DISCOVERED="$5"
+    cpu_safety_validate_governor_request "$CPU_POLICY_PATH" "$CPU_NODE" "$CPU_VALUE" \
+        "$CPU_AVAILABLE" "$CPU_DISCOVERED"
+}
+
+cpu_write_value() {
+    CPU_WRITE_NODE="$1"
+    CPU_WRITE_VALUE="$2"
+    cpu_safety_has_root || return 1
+    cpu_safety_validate_node "$CPU_WRITE_NODE" || return 1
+    printf '%s\n' "$CPU_WRITE_VALUE" > "$CPU_WRITE_NODE" 2>/dev/null
+}
+
+cpu_apply() {
+    CPU_REQUESTED_PROFILE="${1:-balanced}"
+    cpu_profile_valid "$CPU_REQUESTED_PROFILE" 2>/dev/null || {
+        echo "Invalid profile: $CPU_REQUESTED_PROFILE" >&2
+        return 2
+    }
+    cpu_log INFO "apply request profile=$CPU_REQUESTED_PROFILE"
+    echo "AX-T615 CPU APPLY"
+    echo "================="
+    echo "Requested profile: $(cpu_profile_upper "$CPU_REQUESTED_PROFILE")"
+    echo "Root available: $(cpu_safety_has_root && echo yes || echo no)"
+    if ! cpu_safety_has_root; then
+        cpu_log WARN "apply rejected profile=$CPU_REQUESTED_PROFILE reason=root-required"
+        echo "ROOT REQUIRED — CPU changes were NOT applied."
+        echo "NO CHANGES MADE"
+        return 1
+    fi
+
+    CPU_GOVERNOR_ENABLED="$(cpu_feature_enabled CPU_GOVERNOR_CHANGES_ENABLED && echo true || echo false)"
+    CPU_FREQUENCY_ENABLED="$(cpu_feature_enabled CPU_FREQUENCY_CHANGES_ENABLED && echo true || echo false)"
+    CPU_REQUESTED_GOVERNOR="$(cpu_profile_governor "$CPU_REQUESTED_PROFILE")"
+    CPU_REQUESTED_MAX="$(cpu_profile_target_max "$CPU_REQUESTED_PROFILE")"
+    echo "Governor changes: $CPU_GOVERNOR_ENABLED"
+    echo "CPU frequency modification: $CPU_FREQUENCY_ENABLED"
+    echo "Requested governor: ${CPU_REQUESTED_GOVERNOR:-none}"
+    echo "Requested maximum frequency: ${CPU_REQUESTED_MAX:-none}"
+    if [ "$CPU_GOVERNOR_ENABLED" != "true" ] && [ "$CPU_FREQUENCY_ENABLED" != "true" ]; then
+        cpu_log INFO "apply skipped profile=$CPU_REQUESTED_PROFILE reason=controls-disabled"
+        echo "CPU changes are disabled by configuration."
+        echo "NO CHANGES MADE"
+        return 0
+    fi
+    if [ "$CPU_GOVERNOR_ENABLED" = "true" ] && [ -z "$CPU_REQUESTED_GOVERNOR" ] &&
+        [ "$CPU_FREQUENCY_ENABLED" != "true" ]; then
+        echo "No explicitly requested CPU change for this profile."
+        echo "NO CHANGES MADE"
+        return 0
+    fi
+
+    CPU_DISCOVERED_POLICIES="$(cpu_policy_paths)"
+    [ -n "$CPU_DISCOVERED_POLICIES" ] || {
+        cpu_log ERROR "apply rejected profile=$CPU_REQUESTED_PROFILE reason=no-policies"
+        echo "CPU capability unavailable — no discovered policies."
+        echo "NO CHANGES MADE"
+        return 1
+    }
+    if [ "$CPU_REQUESTED_PROFILE" = "performance" ] &&
+        [ "$CPU_FREQUENCY_ENABLED" = "true" ]; then
+        if ! cpu_thermal_guard; then
+            cpu_log ERROR "apply rejected profile=performance reason=thermal-unavailable"
+            echo "Performance frequency change rejected: thermal information is unavailable."
+            echo "NO CHANGES MADE"
+            return 1
+        fi
+    fi
+
+    CPU_CHANGED_COUNT=0
+    echo "Safety validation:"
+    for CPU_POLICY_PATH in $CPU_DISCOVERED_POLICIES; do
+        CPU_POLICY_NAME="${CPU_POLICY_PATH##*/}"
+        CPU_CPUS="$(cpu_first_value "$CPU_POLICY_PATH/related_cpus" "$CPU_POLICY_PATH/affected_cpus")"
+        CPU_CLUSTER="$(cpu_policy_cluster "${CPU_CPUS:-}")"
+        CPU_CURRENT_MIN="$(cpu_read "$CPU_POLICY_PATH/scaling_min_freq" | head -n 1)"
+        CPU_CURRENT_MAX="$(cpu_read "$CPU_POLICY_PATH/scaling_max_freq" | head -n 1)"
+        CPU_AVAILABLE_GOVERNORS="$(cpu_read "$CPU_POLICY_PATH/scaling_available_governors" | head -n 1)"
+        CPU_CURRENT_GOVERNOR="$(cpu_read "$CPU_POLICY_PATH/scaling_governor" | head -n 1)"
+        CPU_CHANGE_FREQ="false"
+        CPU_CHANGE_GOVERNOR="false"
+        CPU_TARGET_MAX="$CPU_REQUESTED_MAX"
+
+        if [ "$CPU_FREQUENCY_ENABLED" = "true" ] && [ -n "$CPU_TARGET_MAX" ]; then
+            CPU_CHANGE_FREQ="true"
+            CPU_REFERENCE_MAX="$(cpu_reference_limit "$CPU_CLUSTER")"
+            if [ -n "$CPU_REFERENCE_MAX" ] &&
+                [ "$CPU_TARGET_MAX" -gt "$CPU_REFERENCE_MAX" ] 2>/dev/null; then
+                cpu_log ERROR "apply rejected policy=$CPU_POLICY_NAME reason=reference-limit"
+                echo "$CPU_POLICY_NAME: REJECTED frequency $CPU_TARGET_MAX exceeds reference ceiling $CPU_REFERENCE_MAX"
+                echo "NO CHANGES MADE"
+                return 1
+            fi
+            if ! cpu_validate_frequency_change "$CPU_POLICY_PATH" \
+                "$CPU_POLICY_PATH/scaling_max_freq" "$CPU_TARGET_MAX" "$CPU_CURRENT_MIN" \
+                "$CPU_CURRENT_MAX" "$CPU_DISCOVERED_POLICIES"; then
+                cpu_log ERROR "apply rejected policy=$CPU_POLICY_NAME reason=frequency-validation"
+                echo "$CPU_POLICY_NAME: REJECTED frequency change (invalid node, value, policy, or bounds)"
+                echo "NO CHANGES MADE"
+                return 1
+            fi
+        fi
+        if [ "$CPU_GOVERNOR_ENABLED" = "true" ] && [ -n "$CPU_REQUESTED_GOVERNOR" ]; then
+            CPU_CHANGE_GOVERNOR="true"
+            if ! cpu_validate_governor_change "$CPU_POLICY_PATH" \
+                "$CPU_POLICY_PATH/scaling_governor" "$CPU_REQUESTED_GOVERNOR" \
+                "$CPU_AVAILABLE_GOVERNORS" "$CPU_DISCOVERED_POLICIES"; then
+                cpu_log ERROR "apply rejected policy=$CPU_POLICY_NAME reason=governor-validation"
+                echo "$CPU_POLICY_NAME: REJECTED governor change (invalid node, value, or governor)"
+                echo "NO CHANGES MADE"
+                return 1
+            fi
+        fi
+        if [ "$CPU_CHANGE_FREQ" != "true" ] && [ "$CPU_CHANGE_GOVERNOR" != "true" ]; then
+            echo "$CPU_POLICY_NAME: no explicitly enabled change"
+            continue
+        fi
+        if ! cpu_save_backup "$CPU_POLICY_PATH" "$CPU_CURRENT_GOVERNOR" \
+            "$CPU_CURRENT_MIN" "$CPU_CURRENT_MAX"; then
+            cpu_log ERROR "apply aborted policy=$CPU_POLICY_NAME reason=backup-failed"
+            echo "ABORTED: backup failed for $CPU_POLICY_NAME"
+            return 1
+        fi
+        if [ "$CPU_CHANGE_FREQ" = "true" ]; then
+            if ! cpu_write_value "$CPU_POLICY_PATH/scaling_max_freq" "$CPU_TARGET_MAX"; then
+                cpu_log ERROR "apply failed policy=$CPU_POLICY_NAME node=scaling_max_freq"
+                echo "$CPU_POLICY_NAME: FAILED to write scaling_max_freq"
+                return 1
+            fi
+            cpu_log INFO "modification successful policy=$CPU_POLICY_NAME node=scaling_max_freq value=$CPU_TARGET_MAX"
+            echo "$CPU_POLICY_NAME: maximum frequency set to $CPU_TARGET_MAX"
+        fi
+        if [ "$CPU_CHANGE_GOVERNOR" = "true" ]; then
+            if ! cpu_write_value "$CPU_POLICY_PATH/scaling_governor" "$CPU_REQUESTED_GOVERNOR"; then
+                cpu_log ERROR "apply failed policy=$CPU_POLICY_NAME node=scaling_governor"
+                echo "$CPU_POLICY_NAME: FAILED to write scaling_governor"
+                return 1
+            fi
+            cpu_log INFO "modification successful policy=$CPU_POLICY_NAME node=scaling_governor value=$CPU_REQUESTED_GOVERNOR"
+            echo "$CPU_POLICY_NAME: governor set to $CPU_REQUESTED_GOVERNOR"
+        fi
+        CPU_CHANGED_COUNT=$((CPU_CHANGED_COUNT + 1))
+    done
+    if [ "$CPU_CHANGED_COUNT" -eq 0 ]; then
+        cpu_log INFO "apply completed profile=$CPU_REQUESTED_PROFILE changes=0"
+        echo "NO CHANGES MADE"
+    else
+        cpu_log INFO "apply completed profile=$CPU_REQUESTED_PROFILE changed_policies=$CPU_CHANGED_COUNT"
+        echo "CPU changes applied safely to $CPU_CHANGED_COUNT policy/policies."
+    fi
+}
+
+cpu_restore_policy() {
+    CPU_BACKUP="$1"
+    CPU_POLICY_PATH="$(cpu_backup_field policy_path "$CPU_BACKUP")"
+    CPU_ORIGINAL_GOVERNOR="$(cpu_backup_field original_governor "$CPU_BACKUP")"
+    CPU_ORIGINAL_MIN="$(cpu_backup_field original_min_freq "$CPU_BACKUP")"
+    CPU_ORIGINAL_MAX="$(cpu_backup_field original_max_freq "$CPU_BACKUP")"
+    if ! cpu_backup_valid "$CPU_BACKUP"; then
+        echo "RESTORE FAILED: invalid backup $CPU_BACKUP"
+        cpu_log ERROR "restore rejected backup=$CPU_BACKUP reason=invalid-backup"
+        return 1
+    fi
+    if ! cpu_policy_is_discovered "$CPU_POLICY_PATH"; then
+        echo "RESTORE FAILED: policy no longer discovered: $CPU_POLICY_PATH"
+        cpu_log ERROR "restore failed policy=$CPU_POLICY_PATH reason=not-discovered"
+        return 1
+    fi
+    CPU_CURRENT_MIN="$(cpu_read "$CPU_POLICY_PATH/scaling_min_freq" | head -n 1)"
+    CPU_CURRENT_MAX="$(cpu_read "$CPU_POLICY_PATH/scaling_max_freq" | head -n 1)"
+    CPU_HARDWARE_MIN="$(cpu_frequency_bound min "$CPU_POLICY_PATH")"
+    CPU_HARDWARE_MAX="$(cpu_frequency_bound max "$CPU_POLICY_PATH")"
+    CPU_DISCOVERED_POLICIES="$(cpu_policy_paths)"
+    CPU_RESTORE_FAILED="false"
+    # Set the bound that makes the other bound legal first.
+    if [ "$CPU_ORIGINAL_MAX" -ge "$CPU_CURRENT_MIN" ] 2>/dev/null; then
+        if [ "$CPU_ORIGINAL_MAX" != "$CPU_CURRENT_MAX" ] &&
+            ! cpu_validate_frequency_change "$CPU_POLICY_PATH" "$CPU_POLICY_PATH/scaling_max_freq" \
+            "$CPU_ORIGINAL_MAX" "$CPU_HARDWARE_MIN" "$CPU_HARDWARE_MAX" "$CPU_DISCOVERED_POLICIES"; then
+            echo "RESTORE FAILED: $CPU_POLICY_PATH scaling_max_freq=$CPU_ORIGINAL_MAX failed validation"
+            CPU_RESTORE_FAILED="true"
+        elif [ "$CPU_ORIGINAL_MAX" != "$CPU_CURRENT_MAX" ] &&
+            ! cpu_write_value "$CPU_POLICY_PATH/scaling_max_freq" "$CPU_ORIGINAL_MAX"; then
+            echo "RESTORE FAILED: $CPU_POLICY_PATH scaling_max_freq write failed"
+            CPU_RESTORE_FAILED="true"
+        fi
+        CPU_CURRENT_MAX="$CPU_ORIGINAL_MAX"
+        if [ "$CPU_RESTORE_FAILED" != "true" ] && [ "$CPU_ORIGINAL_MIN" != "$CPU_CURRENT_MIN" ] &&
+            ! cpu_validate_frequency_change "$CPU_POLICY_PATH" "$CPU_POLICY_PATH/scaling_min_freq" \
+            "$CPU_ORIGINAL_MIN" "$CPU_HARDWARE_MIN" "$CPU_HARDWARE_MAX" "$CPU_DISCOVERED_POLICIES"; then
+            echo "RESTORE FAILED: $CPU_POLICY_PATH scaling_min_freq=$CPU_ORIGINAL_MIN failed validation"
+            CPU_RESTORE_FAILED="true"
+        elif [ "$CPU_RESTORE_FAILED" != "true" ] && [ "$CPU_ORIGINAL_MIN" != "$CPU_CURRENT_MIN" ] &&
+            ! cpu_write_value "$CPU_POLICY_PATH/scaling_min_freq" "$CPU_ORIGINAL_MIN"; then
+            echo "RESTORE FAILED: $CPU_POLICY_PATH scaling_min_freq write failed"
+            CPU_RESTORE_FAILED="true"
+        fi
+    else
+        if [ "$CPU_ORIGINAL_MIN" != "$CPU_CURRENT_MIN" ] &&
+            ! cpu_validate_frequency_change "$CPU_POLICY_PATH" "$CPU_POLICY_PATH/scaling_min_freq" \
+            "$CPU_ORIGINAL_MIN" "$CPU_HARDWARE_MIN" "$CPU_HARDWARE_MAX" "$CPU_DISCOVERED_POLICIES"; then
+            echo "RESTORE FAILED: $CPU_POLICY_PATH scaling_min_freq=$CPU_ORIGINAL_MIN failed validation"
+            CPU_RESTORE_FAILED="true"
+        elif [ "$CPU_ORIGINAL_MIN" != "$CPU_CURRENT_MIN" ] &&
+            ! cpu_write_value "$CPU_POLICY_PATH/scaling_min_freq" "$CPU_ORIGINAL_MIN"; then
+            echo "RESTORE FAILED: $CPU_POLICY_PATH scaling_min_freq write failed"
+            CPU_RESTORE_FAILED="true"
+        fi
+        CPU_CURRENT_MIN="$CPU_ORIGINAL_MIN"
+        if [ "$CPU_RESTORE_FAILED" != "true" ] && [ "$CPU_ORIGINAL_MAX" != "$CPU_CURRENT_MAX" ] &&
+            ! cpu_validate_frequency_change "$CPU_POLICY_PATH" "$CPU_POLICY_PATH/scaling_max_freq" \
+            "$CPU_ORIGINAL_MAX" "$CPU_HARDWARE_MIN" "$CPU_HARDWARE_MAX" "$CPU_DISCOVERED_POLICIES"; then
+            echo "RESTORE FAILED: $CPU_POLICY_PATH scaling_max_freq=$CPU_ORIGINAL_MAX failed validation"
+            CPU_RESTORE_FAILED="true"
+        elif [ "$CPU_RESTORE_FAILED" != "true" ] && [ "$CPU_ORIGINAL_MAX" != "$CPU_CURRENT_MAX" ] &&
+            ! cpu_write_value "$CPU_POLICY_PATH/scaling_max_freq" "$CPU_ORIGINAL_MAX"; then
+            echo "RESTORE FAILED: $CPU_POLICY_PATH scaling_max_freq write failed"
+            CPU_RESTORE_FAILED="true"
+        fi
+    fi
+    CPU_AVAILABLE_GOVERNORS="$(cpu_read "$CPU_POLICY_PATH/scaling_available_governors" | head -n 1)"
+    if [ "$CPU_RESTORE_FAILED" != "true" ] &&
+        [ "$(cpu_read "$CPU_POLICY_PATH/scaling_governor" | head -n 1)" != "$CPU_ORIGINAL_GOVERNOR" ]; then
+        if ! cpu_validate_governor_change "$CPU_POLICY_PATH" "$CPU_POLICY_PATH/scaling_governor" \
+            "$CPU_ORIGINAL_GOVERNOR" "$CPU_AVAILABLE_GOVERNORS" "$CPU_DISCOVERED_POLICIES"; then
+            echo "RESTORE FAILED: $CPU_POLICY_PATH governor=$CPU_ORIGINAL_GOVERNOR failed validation"
+            CPU_RESTORE_FAILED="true"
+        elif ! cpu_write_value "$CPU_POLICY_PATH/scaling_governor" "$CPU_ORIGINAL_GOVERNOR"; then
+            echo "RESTORE FAILED: $CPU_POLICY_PATH scaling_governor write failed"
+            CPU_RESTORE_FAILED="true"
+        fi
+    fi
+    if [ "$CPU_RESTORE_FAILED" = "true" ]; then
+        cpu_log ERROR "restore incomplete policy=$CPU_POLICY_PATH backup-retained=$CPU_BACKUP"
+        return 1
+    fi
+    rm -f "$CPU_BACKUP" 2>/dev/null || {
+        echo "RESTORE FAILED: could not remove successful backup $CPU_BACKUP"
+        cpu_log ERROR "restore completed but backup removal failed policy=$CPU_POLICY_PATH"
+        return 1
+    }
+    cpu_log INFO "restore successful policy=$CPU_POLICY_PATH"
+    echo "Restored: $CPU_POLICY_PATH"
+    return 0
+}
+
+cpu_restore() {
+    cpu_log INFO "restore request"
+    echo "AX-T615 CPU RESTORE"
+    echo "=================="
+    if ! cpu_safety_has_root; then
+        cpu_log WARN "restore rejected reason=root-required"
+        echo "ROOT REQUIRED — CPU changes were NOT restored."
+        return 1
+    fi
+    mkdir -p "$CPU_RUNTIME_DIR" 2>/dev/null || :
+    CPU_BACKUP_COUNT=0
+    CPU_FAILURE_COUNT=0
+    for CPU_BACKUP in "$CPU_RUNTIME_DIR"/original_*.conf; do
+        [ -f "$CPU_BACKUP" ] || continue
+        CPU_BACKUP_COUNT=$((CPU_BACKUP_COUNT + 1))
+        cpu_restore_policy "$CPU_BACKUP" || CPU_FAILURE_COUNT=$((CPU_FAILURE_COUNT + 1))
+    done
+    if [ "$CPU_BACKUP_COUNT" -eq 0 ]; then
+        echo "No CPU backups found. Nothing to restore."
+        return 0
+    fi
+    if [ "$CPU_FAILURE_COUNT" -gt 0 ]; then
+        cpu_log ERROR "restore completed with failures count=$CPU_FAILURE_COUNT"
+        echo "Restore completed with $CPU_FAILURE_COUNT failure(s); failed backups were retained."
+        return 1
+    fi
+    cpu_log INFO "restore completed backups=$CPU_BACKUP_COUNT"
+    echo "CPU restore completed successfully."
+}
+
 cpu_profile_description() {
     case "$1" in
         cool)
@@ -283,30 +746,56 @@ cpu_dry_run() {
     echo "Requested profile: $(cpu_profile_description "$CPU_REQUESTED_PROFILE" | head -n 1)"
     echo
     echo "Planned changes:"
+    CPU_GOVERNOR_ENABLED="$(cpu_feature_enabled CPU_GOVERNOR_CHANGES_ENABLED && echo true || echo false)"
+    CPU_FREQUENCY_ENABLED="$(cpu_feature_enabled CPU_FREQUENCY_CHANGES_ENABLED && echo true || echo false)"
+    CPU_REQUESTED_GOVERNOR="$(cpu_profile_governor "$CPU_REQUESTED_PROFILE")"
+    CPU_REQUESTED_MAX="$(cpu_profile_target_max "$CPU_REQUESTED_PROFILE")"
+    echo "Governor changes enabled: $CPU_GOVERNOR_ENABLED"
+    echo "CPU frequency modification enabled: $CPU_FREQUENCY_ENABLED"
+    echo "Requested governor: ${CPU_REQUESTED_GOVERNOR:-none}"
+    echo "Requested maximum frequency: ${CPU_REQUESTED_MAX:-none}"
+    if [ "$CPU_GOVERNOR_ENABLED" != "true" ] && [ "$CPU_FREQUENCY_ENABLED" != "true" ]; then
+        echo "No changes planned because CPU controls are disabled."
+    else
+        echo "Each requested value would require root, discovery, writable nodes, bounds, backup, and thermal validation."
+    fi
     echo "No real changes."
     echo
+    echo "Safety validation:"
+    echo "Root would be required: yes"
+    echo "Thermal protection remains enabled: yes"
+    echo "Overclocking above detected/reference limits: never"
+    echo "NO CHANGES MADE"
+    echo
     echo "Reason:"
-    echo "Step 4A is read-only."
-    echo "Root is required for any future real CPU changes."
+    echo "Dry-run is planning only."
     echo "Thermal protection must remain enabled."
-    echo "No hardware settings were changed."
+    echo "NO CHANGES MADE"
 }
 
 case "${1:-status}" in
     status)
-        [ "$#" -eq 1 ] || { echo "Usage: cpu-controller status|inspect|dry-run [cool|balanced|performance]" >&2; exit 2; }
+        [ "$#" -eq 1 ] || { echo "Usage: cpu-controller status|inspect|dry-run|apply [cool|balanced|performance]|restore|reset" >&2; exit 2; }
         cpu_status
         ;;
     inspect)
-        [ "$#" -eq 1 ] || { echo "Usage: cpu-controller status|inspect|dry-run [cool|balanced|performance]" >&2; exit 2; }
+        [ "$#" -eq 1 ] || { echo "Usage: cpu-controller status|inspect|dry-run|apply [cool|balanced|performance]|restore|reset" >&2; exit 2; }
         cpu_inspect
         ;;
     dry-run)
         [ "$#" -le 2 ] || { echo "Usage: cpu-controller status|inspect|dry-run [cool|balanced|performance]" >&2; exit 2; }
         cpu_dry_run "${2:-balanced}"
         ;;
+    apply)
+        [ "$#" -eq 2 ] || { echo "Usage: cpu-controller apply cool|balanced|performance" >&2; exit 2; }
+        cpu_apply "$2"
+        ;;
+    restore|reset)
+        [ "$#" -eq 1 ] || { echo "Usage: cpu-controller restore|reset" >&2; exit 2; }
+        cpu_restore
+        ;;
     *)
-        echo "Usage: cpu-controller status|inspect|dry-run [cool|balanced|performance]" >&2
+        echo "Usage: cpu-controller status|inspect|dry-run|apply [cool|balanced|performance]|restore|reset" >&2
         exit 2
         ;;
 esac
