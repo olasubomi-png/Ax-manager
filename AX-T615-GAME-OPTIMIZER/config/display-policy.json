@@ -1,0 +1,22 @@
+{
+  "monitor_interval_seconds": 1,
+  "target_fps": 60,
+  "target_fps_values": [30, 40, 45, 60, 90, 120],
+  "slow_frame_multiplier": 1.25,
+  "spike_frame_time_ms": 32,
+  "jank_low_percent": 1,
+  "jank_moderate_percent": 5,
+  "jank_high_percent": 15,
+  "jank_severe_percent": 30,
+  "frame_pacing_stable_variation_percent": 5,
+  "frame_pacing_variable_variation_percent": 15,
+  "stable_recovery_samples": 3,
+  "read_only": true,
+  "modify_refresh_rate": false,
+  "modify_display_mode": false,
+  "modify_resolution": false,
+  "modify_surfaceflinger": false,
+  "modify_cpu": false,
+  "modify_gpu": false,
+  "modify_thermal": false
+}

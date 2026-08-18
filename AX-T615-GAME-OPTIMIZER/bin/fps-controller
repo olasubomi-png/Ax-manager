@@ -1,0 +1,186 @@
+#!/usr/bin/env sh
+set -u
+
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname "$0")" 2>/dev/null && pwd)"
+AXGO_ROOT="${AXGO_ROOT:-$(CDPATH= cd -- "$SCRIPT_DIR/.." 2>/dev/null && pwd)}"
+DATA_ROOT="${FPS_DATA_ROOT:-${AXGO_DATA_ROOT:-$AXGO_ROOT}}"
+DISPLAY_ROOT="${DISPLAY_DATA_ROOT:-$DATA_ROOT}"
+POLICY_FILE="${DISPLAY_POLICY_FILE:-$AXGO_ROOT/config/display-policy.json}"
+RUNTIME_DIR="${FPS_RUNTIME_DIR:-$DATA_ROOT/runtime/fps}"
+LOG_FILE="${FPS_LOG_FILE:-$DATA_ROOT/logs/fps.log}"
+PACKAGE="${FPS_PACKAGE:-}"
+mkdir -p "$RUNTIME_DIR" "$(dirname "$LOG_FILE")" 2>/dev/null || :
+
+fps_log() { printf '%s [%s] %s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z' 2>/dev/null || printf '%s' UNKNOWN)" "${1:-INFO}" "${2:-}" >> "$LOG_FILE" 2>/dev/null || :; }
+policy_num() { KEY="$1"; DEFAULT="$2"; VALUE="$(sed -n "s/^[[:space:]]*\"$KEY\"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\([.][0-9][0-9]*\)\{0,1\}\).*/\1/p" "$POLICY_FILE" 2>/dev/null | head -n 1)"; case "$VALUE" in ''|*[!0-9.]*) printf '%s' "$DEFAULT" ;; *) printf '%s' "$VALUE" ;; esac; }
+valid_num() { case "$1" in ''|*[!0-9.]*|.*|*.*.*) return 1 ;; *) return 0 ;; esac; }
+
+source_file() {
+    if [ -n "${FPS_SAMPLE_FILE:-}" ] && [ -r "$FPS_SAMPLE_FILE" ]; then printf '%s' "$FPS_SAMPLE_FILE"; return; fi
+    for F in "$DATA_ROOT/fps.samples" "$DATA_ROOT/fps_samples" "$DATA_ROOT/fps.txt" "$DATA_ROOT/frames.csv" "$DATA_ROOT/frame-time.samples" "$DATA_ROOT/frame_time.samples" "$DATA_ROOT/frame-times" "$DATA_ROOT/gfxinfo" "$DATA_ROOT/surfaceflinger"; do
+        [ -r "$F" ] && { printf '%s' "$F"; return; }
+    done
+    printf '%s' ''
+}
+
+system_source() {
+    if [ -n "$PACKAGE" ] && command -v dumpsys >/dev/null 2>&1; then dumpsys gfxinfo "$PACKAGE" 2>/dev/null; return; fi
+    if command -v dumpsys >/dev/null 2>&1; then dumpsys gfxinfo 2>/dev/null; fi
+}
+
+normalize_samples() {
+    FILE="$(source_file)"
+    MODE="${FPS_SAMPLE_MODE:-auto}"
+    case "$FILE" in *frame-time.samples|*frame_time.samples|*frame-times) MODE=frame-time ;; esac
+    if [ -n "$FILE" ]; then
+        awk -v mode="$MODE" '
+        function good(v) { return v ~ /^[0-9]+([.][0-9]+)?$/ && v > 0 }
+        function add(v) { if (good(v) && v <= 100000) { vals[++n]=v } }
+        {
+            line=$0; gsub(/\r/,"",line); low=tolower(line)
+            if (line ~ /^[[:space:]]*#/ || line ~ /^[[:space:]]*$/) next
+            n=0; s=line; gsub(/[^0-9.]+/," ",s); count=split(s, raw, /[[:space:]]+/)
+            for (i=1; i<=count; i++) if (good(raw[i])) add(raw[i])
+            if (n == 0) next
+            fps=""; ft=""; src="MEASURED"
+            if (index(low,"frame") || index(low,"ms") || mode == "frame-time") { ft=vals[n]; if (n >= 2 && index(low,"fps")) fps=vals[1] }
+            else { fps=vals[1]; if (n >= 2 && !index(line,"|") && !index(low,"fps")) ft=vals[2] }
+            if (index(line,"|") && n >= 2) { fps=vals[1]; ft=vals[2] }
+            if (fps == "" && ft == "") next
+            if (fps != "" && !good(fps)) fps=""
+            if (ft != "" && !good(ft)) ft=""
+            if (fps == "" && ft != "") { fps=1000/ft; src="DERIVED" }
+            if (ft == "" && fps != "") { ft=1000/fps }
+            if (fps != "" && ft != "" && mode == "frame-time" && index(low,"ms")) src="DERIVED"
+            if (fps != "" && fps <= 1000 && ft != "" && ft <= 10000) printf "%.4f|%.4f|%s\n", fps, ft, src
+        }' "$FILE"
+        return
+    fi
+    SYSTEM="$(system_source)"
+    if [ -n "$SYSTEM" ]; then
+        printf '%s\n' "$SYSTEM" | awk '
+        function good(v) { return v ~ /^[0-9]+([.][0-9]+)?$/ && v > 0 }
+        { low=tolower($0); if (low ~ /fps[=: ]/ && match($0,/[0-9]+([.][0-9]+)?/)) { v=substr($0,RSTART,RLENGTH); if (good(v) && v <= 1000) printf "%.4f|%.4f|MEASURED\n",v,1000/v } }
+        '
+    fi
+}
+
+stats_from_samples() {
+    SAMPLES="$1"
+    TARGET="$(policy_num target_fps 60)"
+    SLOW_MULTIPLIER="$(policy_num slow_frame_multiplier 1.25)"
+    SPIKE_THRESHOLD="$(policy_num spike_frame_time_ms 32)"
+    JANK_LOW="$(policy_num jank_low_percent 1)"
+    JANK_MODERATE="$(policy_num jank_moderate_percent 5)"
+    JANK_HIGH="$(policy_num jank_high_percent 15)"
+    JANK_SEVERE="$(policy_num jank_severe_percent 30)"
+    awk -F'|' -v target="$TARGET" -v slow="$SLOW_MULTIPLIER" -v spike="$SPIKE_THRESHOLD" -v jl="$JANK_LOW" -v jm="$JANK_MODERATE" -v jh="$JANK_HIGH" -v js="$JANK_SEVERE" '
+    function good(v) { return v ~ /^[0-9]+([.][0-9]+)?$/ && v > 0 }
+    function sort(a,n, i,j,t) { for (i=2;i<=n;i++) { t=a[i]; j=i-1; while(j>=1 && a[j]>t){a[j+1]=a[j];j--} a[j+1]=t } }
+    function pct(a,n,p,idx) { if(n<1)return "UNKNOWN"; idx=int((n-1)*p+0.5)+1; return a[idx] }
+    function out(v) { return sprintf("%.2f",v) }
+    { if(good($1)){nf++; f[nf]=$1; fsum+=$1; if($3=="MEASURED") direct_fps++} if(good($2)){nt++; t[nt]=$2; tsum+=$2; if($3=="MEASURED") direct_ft++} }
+    END {
+        if(nf<1){print "FPS=UNAVAILABLE"; print "FPS_AVERAGE=UNAVAILABLE"; print "FPS_MIN=UNAVAILABLE"; print "FPS_MAX=UNAVAILABLE"; print "FPS_P50=UNAVAILABLE"; print "FPS_P90=UNAVAILABLE"; print "FPS_P95=UNAVAILABLE"; print "FPS_P99=UNAVAILABLE"; print "FPS_SAMPLES=0"} else { sort(f,nf); favg=fsum/nf; print "FPS=" out(favg); print "FPS_AVERAGE=" out(favg); print "FPS_MIN=" out(f[1]); print "FPS_MAX=" out(f[nf]); print "FPS_P50=" out(pct(f,nf,.50)); print "FPS_P90=" out(pct(f,nf,.90)); print "FPS_P95=" out(pct(f,nf,.95)); print "FPS_P99=" out(pct(f,nf,.99)); print "FPS_SAMPLES=" nf }
+        if(nt<1){print "FRAME_TIME=UNAVAILABLE"; print "FRAME_TIME_AVERAGE=UNAVAILABLE"; print "FRAME_TIME_MIN=UNAVAILABLE"; print "FRAME_TIME_MAX=UNAVAILABLE"; print "FRAME_TIME_P50=UNAVAILABLE"; print "FRAME_TIME_P90=UNAVAILABLE"; print "FRAME_TIME_P95=UNAVAILABLE"; print "FRAME_TIME_P99=UNAVAILABLE"; print "FRAME_TIME_SAMPLES=0"} else { sort(t,nt); tavg=tsum/nt; print "FRAME_TIME=" out(tavg); print "FRAME_TIME_AVERAGE=" out(tavg); print "FRAME_TIME_MIN=" out(t[1]); print "FRAME_TIME_MAX=" out(t[nt]); print "FRAME_TIME_P50=" out(pct(t,nt,.50)); print "FRAME_TIME_P90=" out(pct(t,nt,.90)); print "FRAME_TIME_P95=" out(pct(t,nt,.95)); print "FRAME_TIME_P99=" out(pct(t,nt,.99)); print "FRAME_TIME_SAMPLES=" nt }
+        slow_count=0; spike_count=0; spike_sum=0; largest=0; jank_bursts=0; current_burst=0
+        for(i=1;i<=nt;i++){ is_slow=(t[i] > (1000/target)*slow); if(is_slow){slow_count++;current_burst++;if(current_burst==1)jank_bursts++} else {current_burst=0}; if(t[i]>=spike || (tavg>0 && t[i]>=tavg*1.5)){spike_count++;spike_sum+=t[i];if(t[i]>largest)largest=t[i]} }
+        total=nt; if(total<1) total=nf
+        if(total>0) jank_pct=slow_count*100/total; else jank_pct=0
+        if(total<1){jank="UNKNOWN"} else if(jank_pct < jl){jank="NO_JANK"} else if(jank_pct < jm){jank="LOW_JANK"} else if(jank_pct < jh){jank="MODERATE_JANK"} else if(jank_pct < js){jank="HIGH_JANK"} else {jank="SEVERE_JANK"}
+        if(nt<2 || tavg<=0){pacing="UNKNOWN"} else {ss=0; for(i=1;i<=nt;i++)ss+=(t[i]-tavg)*(t[i]-tavg); cv=sqrt(ss/nt)/tavg*100; if(cv<=5)pacing="STABLE"; else if(cv<=15)pacing="VARIABLE"; else pacing="UNSTABLE"}
+        print "SLOW_FRAMES=" slow_count; print "JANKY_FRAMES=" slow_count; print "TOTAL_FRAMES=" total; print "JANK_PERCENT=" out(jank_pct); print "JANK=" jank; print "JANK_BURSTS=" jank_bursts; print "SPIKES=" spike_count; if(spike_count>0) {print "LARGEST_SPIKE=" out(largest); print "AVERAGE_SPIKE=" out(spike_sum/spike_count)} else {print "LARGEST_SPIKE=0.00"; print "AVERAGE_SPIKE=0.00"}; print "SPIKE_FREQUENCY=" (total>0 ? out(spike_count*100/total) : "UNKNOWN"); print "FRAME_PACING=" pacing
+        if(direct_fps>0 || direct_ft>0) print "FPS_SOURCE=MEASURED"; else if(nf>0 || nt>0) print "FPS_SOURCE=DERIVED"; else print "FPS_SOURCE=UNAVAILABLE"
+    }' <<EOF
+$SAMPLES
+EOF
+}
+
+value() { printf '%s\n' "$STATS" | sed -n "s/^$1=//p" | head -n 1; }
+coordination_snapshot() {
+    COORD_ROOT="${AXGO_DATA_ROOT:-$AXGO_ROOT}"
+    if [ -z "${FPS_THERMAL_STATE:-}" ]; then THERMAL_OUTPUT="$(THERMAL_DATA_ROOT="${THERMAL_DATA_ROOT:-$COORD_ROOT}" sh "$SCRIPT_DIR/thermal-guard" check 2>/dev/null || :)"; FPS_THERMAL_STATE="$(printf '%s\n' "$THERMAL_OUTPUT" | sed -n 's/^Thermal guard state: //p' | head -n 1)"; fi
+    if [ -z "${FPS_MEMORY_STATE:-}" ]; then MEMORY_OUTPUT="$(MEMORY_PERFORMANCE_DATA_ROOT="${MEMORY_PERFORMANCE_DATA_ROOT:-$COORD_ROOT}" sh "$SCRIPT_DIR/memory-performance" check 2>/dev/null || :)"; FPS_MEMORY_STATE="$(printf '%s\n' "$MEMORY_OUTPUT" | sed -n 's/^Memory state: //p' | head -n 1)"; fi
+    [ -n "${FPS_THERMAL_STATE:-}" ] || FPS_THERMAL_STATE=UNKNOWN
+    [ -n "${FPS_MEMORY_STATE:-}" ] || FPS_MEMORY_STATE=UNKNOWN
+    [ -n "${FPS_GPU_STATE:-}" ] || FPS_GPU_STATE=UNKNOWN
+    [ -n "${FPS_CPU_STATE:-}" ] || FPS_CPU_STATE=UNKNOWN
+}
+load_display() { DISPLAY_STATUS="$(DISPLAY_DATA_ROOT="$DISPLAY_ROOT" AXGO_ROOT="$AXGO_ROOT" sh "$SCRIPT_DIR/display-controller" status 2>/dev/null || :)"; REFRESH="$(printf '%s\n' "$DISPLAY_STATUS" | sed -n 's/^Refresh rate: //p' | head -n 1)"; RESOLUTION="$(printf '%s\n' "$DISPLAY_STATUS" | sed -n 's/^Resolution: //p' | head -n 1)"; [ -n "$REFRESH" ] || REFRESH=UNAVAILABLE; [ -n "$RESOLUTION" ] || RESOLUTION=UNAVAILABLE; }
+
+collect() { load_display; coordination_snapshot; FILE="$(source_file)"; SAMPLES="$(normalize_samples)"; STATS="$(stats_from_samples "$SAMPLES")"; TARGET="$(policy_num target_fps 60)"; CURRENT_HZ="$(printf '%s' "$REFRESH" | sed -n 's/^[^0-9]*\([0-9][0-9.]*\).*/\1/p')"; TARGET_STATUS=UNKNOWN; if valid_num "$CURRENT_HZ" && valid_num "$TARGET"; then awk -v t="$TARGET" -v r="$CURRENT_HZ" 'BEGIN{exit !(t>r)}' && TARGET_STATUS=TARGET_UNSUPPORTED_BY_DISPLAY || TARGET_STATUS=TARGET_SUPPORTED_BY_DISPLAY; fi; }
+
+print_analysis() {
+    echo 'AX FPS ANALYSIS'
+    echo '==============='
+    echo
+    echo "Package: ${PACKAGE:-SYSTEM}"
+    if [ -n "$PACKAGE" ]; then echo "FPS scope: PACKAGE"; else echo "FPS scope: SYSTEM"; fi
+    echo "Display: $RESOLUTION"
+    echo "Refresh rate: $REFRESH"
+    echo "FPS source: $(value FPS_SOURCE)"
+    if [ -n "$PACKAGE" ]; then if [ "$(value FPS_SOURCE)" = UNAVAILABLE ]; then echo 'PACKAGE FPS: UNAVAILABLE'; else echo "PACKAGE FPS: $(value FPS_AVERAGE)"; fi; else echo "FPS: $(value FPS_AVERAGE)"; fi
+    echo "FPS samples: $(value FPS_SAMPLES)"
+    echo "Average FPS: $(value FPS_AVERAGE)"
+    echo "Minimum FPS: $(value FPS_MIN)"
+    echo "Maximum FPS: $(value FPS_MAX)"
+    echo "FPS P50: $(value FPS_P50)"
+    echo "FPS P90: $(value FPS_P90)"
+    echo "FPS P95: $(value FPS_P95)"
+    echo "FPS P99: $(value FPS_P99)"
+    echo "Average frame-time: $(value FRAME_TIME_AVERAGE) ms"
+    echo "Minimum frame-time: $(value FRAME_TIME_MIN) ms"
+    echo "Maximum frame-time: $(value FRAME_TIME_MAX) ms"
+    echo "Longest frame: $(value FRAME_TIME_MAX) ms"
+    echo "Frame-time P50: $(value FRAME_TIME_P50) ms"
+    echo "Frame-time P90: $(value FRAME_TIME_P90) ms"
+    echo "Frame-time P95: $(value FRAME_TIME_P95) ms"
+    echo "Frame-time P99: $(value FRAME_TIME_P99) ms"
+    echo "Slow frames: $(value SLOW_FRAMES)"
+    echo "Jank: $(value JANK)"
+    echo "Jank percentage: $(value JANK_PERCENT)%"
+    echo "Janky frame count: $(value JANKY_FRAMES)"
+    echo "Total frame count: $(value TOTAL_FRAMES)"
+    echo "Jank bursts: $(value JANK_BURSTS)"
+    echo "Frame-time spikes: $(value SPIKES)"
+    echo "Largest spike: $(value LARGEST_SPIKE) ms"
+    echo "Average spike: $(value AVERAGE_SPIKE) ms"
+    echo "Spike frequency: $(value SPIKE_FREQUENCY)%"
+    echo "Frame pacing: $(value FRAME_PACING)"
+    echo "Target FPS: $TARGET"
+    echo "Target validation: $TARGET_STATUS"
+    echo 'No FPS values were fabricated from refresh rate, CPU frequency, or GPU frequency.'
+    echo 'No display or hardware settings were changed.'
+}
+
+recommend() {
+    AVG="$(value FPS_AVERAGE)"; JANK="$(value JANK)"; PACING="$(value FRAME_PACING)"; THERMAL="${FPS_THERMAL_STATE:-}"; MEMORY="${FPS_MEMORY_STATE:-}"; GPU="${FPS_GPU_STATE:-}"
+    REC=UNKNOWN
+    [ "$AVG" = UNAVAILABLE ] && { echo 'Recommendation: UNKNOWN'; echo 'Recommendation is analytical only; no hardware settings were changed.'; return; }
+    case "$THERMAL" in CRITICAL) REC=PERFORMANCE_BLOCKED ;; CAUTION|THROTTLED|HOT) REC=CONSERVATIVE ;; UNKNOWN) REC=CONSERVATIVE ;; esac
+    case "$MEMORY" in CRITICAL) REC=PERFORMANCE_BLOCKED ;; HIGH_PRESSURE) [ "$REC" = UNKNOWN ] && REC=CONSERVATIVE || : ;; PRESSURE) [ "$REC" = UNKNOWN ] && REC=BALANCED || : ;; UNKNOWN) [ "$REC" = UNKNOWN ] && REC=CONSERVATIVE || : ;; esac
+    if [ "$REC" = UNKNOWN ]; then
+        case "$JANK:$PACING" in SEVERE_JANK:*|HIGH_JANK:UNSTABLE|*:UNSTABLE) REC=CONSERVATIVE ;; NO_JANK:STABLE) REC=BALANCED ;; *) REC=QUALITY ;; esac
+    fi
+    case "$GPU" in UNKNOWN|UNAVAILABLE) : ;; esac
+    echo "Recommendation: $REC"
+    echo 'Recommendation is analytical only; CPU, GPU, thermal, memory, and display settings were not changed.'
+}
+
+session_start() { GAME="${1:-${PACKAGE:-unnamed game}}"; rm -f "$RUNTIME_DIR/session.samples" "$RUNTIME_DIR/session.state" 2>/dev/null || :; collect; printf 'active=1\ngame=%s\npackage=%s\nstart=%s\n' "$GAME" "${PACKAGE:-UNKNOWN}" "$(date '+%s' 2>/dev/null || printf 0)" > "$RUNTIME_DIR/session.state" 2>/dev/null || :; printf '%s\n' "$SAMPLES" > "$RUNTIME_DIR/session.samples" 2>/dev/null || :; echo "FPS session started: $GAME"; echo "Package: ${PACKAGE:-UNKNOWN}"; echo "Display: $RESOLUTION"; echo "Refresh rate: $REFRESH"; echo "Initial FPS: $(value FPS_AVERAGE)"; echo "Initial frame-time: $(value FRAME_TIME_AVERAGE) ms"; echo "Thermal state: $FPS_THERMAL_STATE"; echo "Memory state: $FPS_MEMORY_STATE"; echo "GPU state: $FPS_GPU_STATE"; echo "CPU state: $FPS_CPU_STATE"; }
+session_sample() { [ -r "$RUNTIME_DIR/session.state" ] || return 0; collect; [ -n "$SAMPLES" ] && printf '%s\n' "$SAMPLES" >> "$RUNTIME_DIR/session.samples" 2>/dev/null || :; }
+session_stop() { [ -r "$RUNTIME_DIR/session.state" ] || { echo 'No active FPS session.'; return 0; }; session_sample; SAMPLES="$(cat "$RUNTIME_DIR/session.samples" 2>/dev/null)"; STATS="$(stats_from_samples "$SAMPLES")"; GAME="$(sed -n 's/^game=//p' "$RUNTIME_DIR/session.state" | head -n 1)"; PACKAGE="$(sed -n 's/^package=//p' "$RUNTIME_DIR/session.state" | head -n 1)"; START="$(sed -n 's/^start=//p' "$RUNTIME_DIR/session.state" | head -n 1)"; NOW="$(date '+%s' 2>/dev/null || printf 0)"; DURATION=UNKNOWN; valid_num "$START" && valid_num "$NOW" && DURATION="$((NOW-START)) seconds"; echo 'FPS PERFORMANCE REPORT'; echo '====================='; echo; echo "Game: ${GAME:-UNKNOWN}"; echo "Package: ${PACKAGE:-UNKNOWN}"; echo "Duration: $DURATION"; echo "Display: $RESOLUTION"; echo "Refresh rate: $REFRESH"; echo "Average FPS: $(value FPS_AVERAGE)"; echo "Minimum FPS: $(value FPS_MIN)"; echo "Maximum FPS: $(value FPS_MAX)"; echo "FPS P95: $(value FPS_P95)"; echo "Average frame-time: $(value FRAME_TIME_AVERAGE) ms"; echo "Maximum frame-time: $(value FRAME_TIME_MAX) ms"; echo "Longest frame: $(value FRAME_TIME_MAX) ms"; echo "Janky frames: $(value SLOW_FRAMES)"; echo "Jank percentage: $(value JANK_PERCENT)%"; echo "Frame-time spikes: $(value SPIKES)"; echo "Frame pacing: $(value FRAME_PACING)"; echo "Performance classification: $(classification)"; echo "Thermal state: ${FPS_THERMAL_STATE:-UNKNOWN}"; echo "Memory state: ${FPS_MEMORY_STATE:-UNKNOWN}"; echo "GPU state: ${FPS_GPU_STATE:-UNKNOWN}"; echo "CPU state: ${FPS_CPU_STATE:-UNKNOWN}"; echo 'No display or hardware settings were changed.'; fps_log INFO "session stop game=${GAME:-UNKNOWN} package=${PACKAGE:-UNKNOWN} fps=$(value FPS_AVERAGE) jank=$(value JANK) pacing=$(value FRAME_PACING)"; rm -f "$RUNTIME_DIR/session.samples" "$RUNTIME_DIR/session.state" 2>/dev/null || :; }
+classification() { J="$(value JANK)"; P="$(value FRAME_PACING)"; AVG="$(value FPS_AVERAGE)"; [ "$AVG" = UNKNOWN ] || [ "$AVG" = UNAVAILABLE ] && { printf UNKNOWN; return; }; case "$J:$P" in SEVERE_JANK:*|*:UNSTABLE) printf CRITICAL ;; HIGH_JANK:*|MODERATE_JANK:UNSTABLE) printf POOR ;; MODERATE_JANK:*|*:VARIABLE) printf UNSTABLE ;; LOW_JANK:STABLE) printf GOOD ;; NO_JANK:STABLE) printf EXCELLENT ;; *) printf STABLE ;; esac; }
+
+case "${1:-status}" in
+    status) [ "$#" -eq 1 ] || exit 2; collect; print_analysis ;;
+    inspect) [ "$#" -eq 1 ] || exit 2; collect; print_analysis ;;
+    analyze) shift; while [ "$#" -gt 0 ]; do case "$1" in --package) PACKAGE="${2:-}"; shift 2 ;; *) echo 'Usage: fps-controller analyze [--package package]' >&2; exit 2 ;; esac; done; collect; print_analysis ;;
+    monitor) shift; INTERVAL=1; while [ "$#" -gt 0 ]; do case "$1" in --package) PACKAGE="${2:-}"; shift 2 ;; --interval) INTERVAL="${2:-}"; shift 2 ;; *) exit 2 ;; esac; done; case "$INTERVAL" in ''|*[!0-9]*|0) exit 2 ;; esac; echo 'AX FPS MONITOR'; echo "Interval: ${INTERVAL}s"; while :; do collect; echo "FPS: $(value FPS_AVERAGE)"; echo "Frame-time: $(value FRAME_TIME_AVERAGE) ms"; echo "Jank: $(value JANK)"; echo "Frame pacing: $(value FRAME_PACING)"; echo "Thermal: ${FPS_THERMAL_STATE:-UNKNOWN}"; echo "Memory: ${FPS_MEMORY_STATE:-UNKNOWN}"; echo "Recommendation: $(recommend | sed -n 's/^Recommendation: //p')"; echo; [ "${FPS_MONITOR_ONCE:-false}" = true ] && break; sleep "$INTERVAL" || break; done ;;
+    session-start) [ "$#" -le 2 ] || exit 2; session_start "${2:-}" ;;
+    session-stop) [ "$#" -eq 1 ] || exit 2; session_stop ;;
+    session-sample) [ "$#" -eq 1 ] || exit 2; session_sample ;;
+    report) [ "$#" -eq 1 ] || exit 2; [ -r "$RUNTIME_DIR/fps.report" ] && cat "$RUNTIME_DIR/fps.report" || { collect; print_analysis; } ;;
+    recommend) [ "$#" -eq 1 ] || exit 2; collect; recommend ;;
+    *) echo 'Usage: fps-controller status|inspect|monitor [--package package] [--interval seconds]|analyze [--package package]|session-start [game]|session-stop|report|recommend' >&2; exit 2 ;;
+esac

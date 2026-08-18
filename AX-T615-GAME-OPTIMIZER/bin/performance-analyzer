@@ -1,0 +1,104 @@
+#!/usr/bin/env sh
+set -u
+
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname "$0")" 2>/dev/null && pwd)"
+AXGO_ROOT="${AXGO_ROOT:-$(CDPATH= cd -- "$SCRIPT_DIR/.." 2>/dev/null && pwd)}"
+FPS_CONTROLLER="$SCRIPT_DIR/fps-controller"
+
+get_first() { printf '%s\n' "$1" | sed -n "s/^$2: *//p" | head -n 1; }
+
+ANALYSIS_OUTPUT="$(AXGO_ROOT="$AXGO_ROOT" FPS_DATA_ROOT="${FPS_DATA_ROOT:-${AXGO_DATA_ROOT:-$AXGO_ROOT}}" DISPLAY_DATA_ROOT="${DISPLAY_DATA_ROOT:-${AXGO_DATA_ROOT:-$AXGO_ROOT}}" FPS_PACKAGE="${FPS_PACKAGE:-}" sh "$FPS_CONTROLLER" analyze 2>/dev/null || :)"
+AVG_FPS="$(get_first "$ANALYSIS_OUTPUT" 'Average FPS')"
+JANK="$(get_first "$ANALYSIS_OUTPUT" 'Jank')"
+PACING="$(get_first "$ANALYSIS_OUTPUT" 'Frame pacing')"
+REFRESH="$(get_first "$ANALYSIS_OUTPUT" 'Refresh rate')"
+TARGET_STATUS="$(get_first "$ANALYSIS_OUTPUT" 'Target validation')"
+
+read_thermal() {
+    THERMAL_STATE="${PERFORMANCE_ANALYZER_THERMAL_STATE:-}"
+    if [ -z "$THERMAL_STATE" ]; then
+        OUT="$(THERMAL_DATA_ROOT="${THERMAL_DATA_ROOT:-${AXGO_DATA_ROOT:-$AXGO_ROOT}}" sh "$SCRIPT_DIR/thermal-guard" check 2>/dev/null || :)"
+        THERMAL_STATE="$(printf '%s\n' "$OUT" | sed -n 's/^Thermal guard state: //p' | head -n 1)"
+    fi
+    [ -n "$THERMAL_STATE" ] || THERMAL_STATE="${FPS_THERMAL_STATE:-UNKNOWN}"
+    [ -n "$THERMAL_STATE" ] || THERMAL_STATE=UNKNOWN
+}
+read_memory() {
+    MEMORY_STATE="${PERFORMANCE_ANALYZER_MEMORY_STATE:-}"
+    if [ -z "$MEMORY_STATE" ]; then
+        OUT="$(MEMORY_PERFORMANCE_DATA_ROOT="${MEMORY_PERFORMANCE_DATA_ROOT:-${AXGO_DATA_ROOT:-$AXGO_ROOT}}" sh "$SCRIPT_DIR/memory-performance" check 2>/dev/null || :)"
+        MEMORY_STATE="$(printf '%s\n' "$OUT" | sed -n 's/^Memory state: //p' | head -n 1)"
+    fi
+    [ -n "$MEMORY_STATE" ] || MEMORY_STATE="${FPS_MEMORY_STATE:-UNKNOWN}"
+    [ -n "$MEMORY_STATE" ] || MEMORY_STATE=UNKNOWN
+}
+read_gpu() {
+    GPU_ROOT="${GPU_DATA_ROOT:-${AXGO_DATA_ROOT:-$AXGO_ROOT}}"
+    OUT="$(GPU_DATA_ROOT="$GPU_ROOT" sh "$SCRIPT_DIR/gpu-controller" status 2>/dev/null || :)"
+    GPU_UTILIZATION="${PERFORMANCE_ANALYZER_GPU_UTILIZATION:-${GPU_UTILIZATION:-}}"
+    if [ -z "$GPU_UTILIZATION" ]; then
+        for F in "$GPU_ROOT/gpu-utilization" "$GPU_ROOT/gpu_utilization" "$GPU_ROOT/utilization" "$GPU_ROOT/gpu-status" "$GPU_ROOT/gpu.conf"; do
+            [ -r "$F" ] && GPU_UTILIZATION="$(cat "$F" 2>/dev/null | sed -n -E 's/.*([0-9]+([.][0-9]+)?)%.*/\1/p' | head -n 1)" && break
+        done
+    fi
+    [ -n "$GPU_UTILIZATION" ] || GPU_UTILIZATION="$(printf '%s\n' "$OUT" | sed -n -E 's/.*[Uu]tilization[^0-9]*([0-9]+([.][0-9]+)?)%.*/\1/p' | head -n 1)"
+    GPU_STATE="${FPS_GPU_STATE:-}"
+    [ -n "$GPU_STATE" ] || GPU_STATE="$(printf '%s\n' "$OUT" | sed -n -E 's/^(GPU state|State|GPU control):[[:space:]]*//p' | head -n 1)"
+    [ -n "$GPU_STATE" ] || GPU_STATE=UNKNOWN
+}
+read_cpu() {
+    CPU_ROOT="${CPU_DATA_ROOT:-${AXGO_DATA_ROOT:-$AXGO_ROOT}}"
+    OUT="$(CPU_DATA_ROOT="$CPU_ROOT" sh "$SCRIPT_DIR/cpu-controller" status 2>/dev/null || :)"
+    CPU_UTILIZATION="${PERFORMANCE_ANALYZER_CPU_UTILIZATION:-${CPU_UTILIZATION:-}}"
+    if [ -z "$CPU_UTILIZATION" ]; then
+        for F in "$CPU_ROOT/cpu-utilization" "$CPU_ROOT/cpu_utilization" "$CPU_ROOT/cpu-status" "$CPU_ROOT/cpu.conf"; do
+            [ -r "$F" ] && CPU_UTILIZATION="$(cat "$F" 2>/dev/null | sed -n -E 's/.*([0-9]+([.][0-9]+)?)%.*/\1/p' | head -n 1)" && break
+        done
+    fi
+    [ -n "$CPU_UTILIZATION" ] || CPU_UTILIZATION="$(printf '%s\n' "$OUT" | sed -n -E 's/.*[Uu]tilization[^0-9]*([0-9]+([.][0-9]+)?)%.*/\1/p' | head -n 1)"
+    CPU_STATE="${FPS_CPU_STATE:-UNKNOWN}"
+    printf '%s\n' "$OUT" | grep -qiE 'thermal|thrott' && CPU_STATE=NORMAL || :
+}
+
+likely_unknown() { printf 'UNKNOWN'; }
+
+classify() {
+    BOTTLENECK=UNKNOWN; CONFIDENCE=UNKNOWN; EVIDENCE='insufficient valid telemetry'
+    case "$THERMAL_STATE" in
+        CRITICAL) BOTTLENECK=LIKELY_THERMAL_LIMIT; CONFIDENCE=HIGH; EVIDENCE='critical thermal guard state' ;;
+        THROTTLED|HOT) BOTTLENECK=LIKELY_THERMAL_LIMIT; CONFIDENCE=MEDIUM; EVIDENCE='thermal guard reports throttling or hot state' ;;
+        *)
+            case "$MEMORY_STATE" in
+                CRITICAL) BOTTLENECK=LIKELY_MEMORY_PRESSURE; CONFIDENCE=HIGH; EVIDENCE='critical memory state' ;;
+                HIGH_PRESSURE) BOTTLENECK=LIKELY_MEMORY_PRESSURE; CONFIDENCE=MEDIUM; EVIDENCE='high memory pressure state' ;;
+                *)
+                    if [ -n "$GPU_UTILIZATION" ] && [ "$GPU_UTILIZATION" -ge 90 ] 2>/dev/null && [ "$AVG_FPS" != UNAVAILABLE ] && [ -n "$AVG_FPS" ]; then BOTTLENECK=LIKELY_GPU_PRESSURE; CONFIDENCE=HIGH; EVIDENCE="GPU utilization ${GPU_UTILIZATION}% with measured FPS";
+                    elif [ -n "$CPU_UTILIZATION" ] && [ "$CPU_UTILIZATION" -ge 90 ] 2>/dev/null && [ "$AVG_FPS" != UNAVAILABLE ] && [ -n "$AVG_FPS" ]; then BOTTLENECK=LIKELY_CPU_PRESSURE; CONFIDENCE=HIGH; EVIDENCE="CPU utilization ${CPU_UTILIZATION}% with measured FPS";
+                    elif [ "$PACING" = UNSTABLE ] || [ "$JANK" = HIGH_JANK ] || [ "$JANK" = SEVERE_JANK ]; then BOTTLENECK=LIKELY_FRAME_PACING; CONFIDENCE=MEDIUM; EVIDENCE="jank=$JANK frame_pacing=$PACING";
+                    elif [ "$TARGET_STATUS" = TARGET_UNSUPPORTED_BY_DISPLAY ]; then BOTTLENECK=LIKELY_DISPLAY_LIMIT; CONFIDENCE=HIGH; EVIDENCE="target FPS exceeds detected refresh rate $REFRESH";
+                    elif [ "$AVG_FPS" = UNAVAILABLE ] || [ "$THERMAL_STATE" = UNKNOWN ] || [ "$MEMORY_STATE" = UNKNOWN ]; then BOTTLENECK=UNKNOWN; CONFIDENCE=UNKNOWN; EVIDENCE='one or more telemetry sources unavailable';
+                    else BOTTLENECK=UNKNOWN; CONFIDENCE=LOW; EVIDENCE='available telemetry does not isolate a bottleneck'; fi
+                    ;;
+            esac
+            ;;
+    esac
+}
+
+read_thermal; read_memory; read_gpu; read_cpu; classify
+echo 'AX PERFORMANCE ANALYZER'
+echo '======================='
+echo
+echo "Average FPS: ${AVG_FPS:-UNAVAILABLE}"
+echo "Frame pacing: ${PACING:-UNKNOWN}"
+echo "Jank: ${JANK:-UNKNOWN}"
+echo "Refresh rate: ${REFRESH:-UNAVAILABLE}"
+echo "Thermal state: $THERMAL_STATE"
+echo "Memory state: $MEMORY_STATE"
+echo "GPU utilization: ${GPU_UTILIZATION:-UNKNOWN}"
+echo "CPU utilization: ${CPU_UTILIZATION:-UNKNOWN}"
+echo
+echo "Bottleneck: $BOTTLENECK"
+echo "Confidence: $CONFIDENCE"
+echo "Evidence: $EVIDENCE"
+echo 'Analysis is probabilistic and uses available telemetry only.'
+echo 'No CPU, GPU, thermal, memory, display, /proc, or /sys settings were modified.'

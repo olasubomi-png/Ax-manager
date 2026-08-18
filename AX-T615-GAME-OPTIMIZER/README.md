@@ -508,3 +508,91 @@ Game-session integration captures the combined memory and thermal state at `game
 Step 7B preserves the project-wide read-only guarantee. It never changes memory allocation, ZRAM size or algorithm, swap state, LMK/OOM settings, sysctl values, Android properties, CPU or GPU controls, or thermal protection. It never kills processes and never writes to `/proc` or `/sys`. A static forbidden-write scan reports `NO_FORBIDDEN_MEMORY_WRITES`.
 
 The Step 7B test coverage includes recommendation mapping, ZRAM availability states, thermal coordination, unknown-input fail-safe behavior, CPU and GPU recommendation forwarding, game-session lifecycle and report generation, immediate pressure escalation, three-sample hysteresis recovery, staged recovery across all restriction levels, fixture immutability, axgo routing, and continuation of all prior Steps 5B, 6A, 6B, and 7A test suites.
+
+
+## Step 8 — FPS, Frame-Time & Display Performance Engine
+
+Step 8 adds a read-only measurement and analysis layer for real gaming performance. It observes available Android display, rendering, frame-time, thermal, memory, GPU, and CPU telemetry without assuming that any universal FPS interface exists. When no valid FPS or frame-time source is available, the engine reports `UNAVAILABLE` or `UNKNOWN`; it never substitutes refresh rate, CPU frequency, GPU frequency, or another proxy as fabricated FPS.
+
+### Display discovery and refresh-rate reporting
+
+`bin/display-controller` tolerantly parses available `dumpsys display`, `dumpsys SurfaceFlinger`, `wm`, and read-only settings output. It reports display ID, resolution, logical size, density, current refresh rate, supported refresh rates, supported display modes, active mode, and HDR capability where those values are exposed. Android and OEM output formats differ, so missing or malformed values are reported as `UNKNOWN` or `UNAVAILABLE` rather than treated as confirmed hardware capabilities.
+
+```sh
+./bin/display-controller status
+./bin/display-controller inspect
+./bin/display-controller refresh
+./bin/display-controller modes
+./bin/axgo display status
+./bin/axgo display inspect
+./bin/axgo display refresh
+./bin/axgo display modes
+```
+
+The controller only reads display information. It does not change resolution, refresh rate, display mode, SurfaceFlinger, compositor, Android properties, or any other display setting. A target FPS is validated against the detected refresh rate and supported modes; unsupported targets are reported as `TARGET_UNSUPPORTED_BY_DISPLAY` and are never forced.
+
+### FPS, frame-time, jank, spikes, and pacing
+
+`bin/fps-controller` accepts direct FPS samples and frame-time samples. Direct FPS data is labeled `MEASURED`. When valid frame-time samples are available without direct FPS, FPS is calculated mathematically from those samples and labeled `DERIVED`. Empty, malformed, or unavailable data remains `UNAVAILABLE`. The controller reports average, minimum, maximum, P50, P90, P95, and P99 for both FPS and frame-time where samples exist.
+
+The analysis layer counts slow frames against the configured target-frame-time threshold, classifies jank as `NO_JANK`, `LOW_JANK`, `MODERATE_JANK`, `HIGH_JANK`, or `SEVERE_JANK`, and reports janky-frame count, total frames, jank percentage, jank bursts, and the longest frame. It separately detects frame-time spikes and reports spike count, largest spike, average spike, and spike frequency. Frame pacing is classified as `STABLE`, `VARIABLE`, `UNSTABLE`, or `UNKNOWN` using the configured variation thresholds. These labels are AX-manager analysis results, not official Android or Tecno limits.
+
+The session classification combines FPS, frame-time, jank, spikes, pacing, and display evidence. It reports `EXCELLENT`, `GOOD`, `STABLE`, `UNSTABLE`, `POOR`, `CRITICAL`, or `UNKNOWN`; average FPS alone is never sufficient for a classification.
+
+```sh
+./bin/fps-controller status
+./bin/fps-controller inspect
+./bin/fps-controller monitor --package com.example.game --interval 1
+./bin/fps-controller analyze --package com.example.game
+./bin/fps-controller recommend
+./bin/fps-controller session-start [game]
+./bin/fps-controller session-stop
+./bin/fps-controller report
+./bin/axgo fps status
+./bin/axgo fps inspect
+./bin/axgo fps monitor --package com.example.game --interval 1
+./bin/axgo fps analyze --package com.example.game
+./bin/axgo fps recommend
+./bin/axgo fps report
+```
+
+The standalone `bin/fps-monitor` entry point uses a one-second interval by default and accepts `--package` and `--interval`. Monitoring is intentionally bounded by the requested interval and does not create an uncontrolled high-frequency polling loop.
+
+### Target recommendations and coordination
+
+`config/display-policy.json` contains the default one-second monitoring interval, target candidates `30`, `40`, `45`, `60`, `90`, and `120` FPS, frame-time thresholds, jank thresholds, spike thresholds, pacing thresholds, and explicit read-only flags. The target is a decision input only. The engine compares it with measured performance and detected display capability, but never attempts to force an unsupported target.
+
+`fps-controller recommend` returns only analytical recommendations: `QUALITY`, `BALANCED`, `PERFORMANCE`, `CONSERVATIVE`, or `UNKNOWN`. Thermal and memory restrictions are merged conservatively with measured frame performance. The coordination mapping is summarized below.
+
+| Evidence | Step 8 behavior |
+|---|---|
+| Normal thermal and memory state with stable measured performance | Normal analysis; typically `BALANCED` when the target is being sustained |
+| Thermal `CAUTION`, `THROTTLED`, or `HOT` | Conservative recommendation |
+| Thermal `CRITICAL` | `PERFORMANCE_BLOCKED` |
+| Thermal `UNKNOWN` | Conservative fail-safe behavior |
+| Memory `PRESSURE` | Balanced recommendation ceiling |
+| Memory `HIGH_PRESSURE` | Conservative recommendation ceiling |
+| Memory `CRITICAL` | `PERFORMANCE_BLOCKED` |
+| Memory `UNKNOWN` | Conservative fail-safe behavior |
+| GPU or CPU telemetry unavailable | `UNKNOWN` evidence; no utilization is fabricated |
+
+The FPS engine forwards logical recommendations to the existing CPU and GPU safety layers for coordination only. It does not apply CPU or GPU settings, alter governors or frequencies, modify thermal protection, change memory policy, or change display settings.
+
+### Bottleneck analysis and confidence
+
+`bin/performance-analyzer` combines the FPS engine’s measurements with available thermal, memory, GPU, CPU, and display evidence. It may identify `LIKELY_CPU_PRESSURE`, `LIKELY_GPU_PRESSURE`, `LIKELY_THERMAL_LIMIT`, `LIKELY_MEMORY_PRESSURE`, `LIKELY_FRAME_PACING`, `LIKELY_DISPLAY_LIMIT`, or `UNKNOWN`. Every result includes `HIGH`, `MEDIUM`, `LOW`, or `UNKNOWN` confidence and an evidence summary. The analyzer does not claim certainty when telemetry is incomplete, and it reports unavailable GPU utilization rather than inferring utilization from clocks or refresh rate.
+
+```sh
+./bin/performance-analyzer
+./bin/axgo performance analyze
+```
+
+### Game-session reports
+
+The existing `bin/session` coordinator starts, samples, and stops the FPS session alongside the established thermal, memory, CPU, and GPU safety layers. At game start it records the game name, package, display resolution, refresh rate, active display mode, initial FPS and frame-time when available, and the initial thermal, memory, GPU, and CPU states. During gameplay it samples FPS and frame-time, jank, spikes, pacing, display changes, and coordination evidence. At game stop it emits an `FPS PERFORMANCE REPORT` containing game and package metadata, duration, display and refresh information, FPS statistics, P95 FPS, frame-time statistics, janky frames, jank percentage, spikes, pacing, performance classification, thermal state, and memory state.
+
+### Read-only architecture and validation
+
+Step 8 measures and analyzes performance. It does not force display or hardware settings. The implementation contains no writes to `/proc` or `/sys`, no refresh-rate or resolution changes, no display-mode or SurfaceFlinger changes, no CPU or GPU frequency changes, no thermal-setting changes, no ZRAM or swap changes, no LMKD/OOM changes, and no process kills. TEST DATA fixtures are clearly labeled and remain immutable during all scenarios.
+
+The Step 8 test suites cover display detection, refresh-rate detection, multiple modes, malformed and missing display data, measured and derived FPS, frame-time percentiles, jank classes and bursts, frame-time spikes, pacing, target validation, recommendations, thermal/memory/GPU/CPU coordination, bottleneck classification and confidence, package-specific unavailable FPS, monitor behavior, game-session start and stop, fixture immutability, axgo routing, and the complete prior Steps 1–7B suite.
