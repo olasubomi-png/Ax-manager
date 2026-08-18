@@ -60,6 +60,21 @@ case "$COMMAND" in
                 ;;
         esac
         ;;
+    gpu)
+        shift
+        if [ "$#" -eq 0 ]; then
+            exec sh "$SCRIPT_DIR/gpu-controller" status
+        fi
+        case "${1:-}" in
+            info)
+                shift
+                exec sh "$SCRIPT_DIR/gpu-info" "$@"
+                ;;
+            *)
+                exec sh "$SCRIPT_DIR/gpu-controller" "$@"
+                ;;
+        esac
+        ;;
     gaming)
         echo "Gaming optimization is not implemented yet."
         echo "No hardware settings were changed."
@@ -68,7 +83,7 @@ case "$COMMAND" in
         exec sh "$SCRIPT_DIR/cpu-reset"
         ;;
     *)
-        echo "Usage: axgo {status|detect|capabilities [--save]|cpu [status|inspect|dry-run|apply <profile>|restore|reset]|games|game {status|detect|start|stop|current}|profile [get|set <profile>]|session [start|stop|status|current]|recovery [status|reset]|thermal [status|inspect|monitor|dry-run|guard [status|check|recommend|game-start|game-stop]]|gaming|reset}"
+        echo "Usage: axgo {status|detect|capabilities [--save]|cpu [status|inspect|dry-run|apply <profile>|restore|reset]|gpu [status|inspect|capabilities|dry-run [cool|balanced|performance]|info]|games|game {status|detect|start|stop|current}|profile [get|set <profile>]|session [start|stop|status|current]|recovery [status|reset]|thermal [status|inspect|monitor|dry-run|guard [status|check|recommend|game-start|game-stop]]|gaming|reset}"
         exit 2
         ;;
 esac

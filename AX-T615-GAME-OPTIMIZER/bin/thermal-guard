@@ -261,11 +261,18 @@ guard_evaluate() {
     PERFORMANCE_RECOMMENDATION="$(recommendation_for "$GUARD_STATE" "$THERMAL_THROTTLE" "$ACTIVE" "$PEAK_STATE")"
     CPU_STATE="$(cpu_state)"
     GPU_ACTION=NONE
+    GPU_CAPABILITY_STATUS=UNAVAILABLE
+    GPU_RECOMMENDATION="$PERFORMANCE_RECOMMENDATION"
+    if [ -x "$AXGO_ROOT/bin/gpu-controller" ]; then
+        GPU_CAPABILITY_OUTPUT="$(GPU_SKIP_THERMAL=true THERMAL_GUARD_RECOMMENDATION="$PERFORMANCE_RECOMMENDATION" GPU_SYSFS_ROOT="${GPU_SYSFS_ROOT:-/sys}" sh "$AXGO_ROOT/bin/gpu-controller" capabilities 2>/dev/null || :)"
+        GPU_CAPABILITY_STATUS="$(printf '%s\n' "$GPU_CAPABILITY_OUTPUT" | sed -n 's/^GPU control: //p' | head -n 1)"
+        [ -n "$GPU_CAPABILITY_STATUS" ] || GPU_CAPABILITY_STATUS=UNCERTAIN
+    fi
     if [ "$ACTIVE" = ACTIVE ]; then
         printf '%s\n' "$THERMAL_TEMP|$GUARD_STATE|$THERMAL_THROTTLE|$PERFORMANCE_RECOMMENDATION|$THERMAL_CLASS|$CPU_STATE" >> "$GUARD_SAMPLES_FILE" 2>/dev/null || :
         record_decision "$PERFORMANCE_RECOMMENDATION"
     fi
-    guard_log INFO "decision state=$GUARD_STATE temperature=$THERMAL_TEMP peak=$THERMAL_PEAK classification=$THERMAL_CLASS throttle=$THERMAL_THROTTLE game=$ACTIVE recommendation=$PERFORMANCE_RECOMMENDATION cpu=$CPU_STATE gpu=NONE"
+    guard_log INFO "decision state=$GUARD_STATE temperature=$THERMAL_TEMP peak=$THERMAL_PEAK classification=$THERMAL_CLASS throttle=$THERMAL_THROTTLE game=$ACTIVE recommendation=$PERFORMANCE_RECOMMENDATION cpu=$CPU_STATE gpu=NONE gpu_capability=$GPU_CAPABILITY_STATUS"
 }
 
 print_guard() {
@@ -280,6 +287,8 @@ print_guard() {
     echo "Throttle: $THERMAL_THROTTLE"
     echo "Game: $(game_active && echo ACTIVE || echo INACTIVE)"
     echo "CPU performance state: $CPU_STATE"
+    echo "GPU capability: $GPU_CAPABILITY_STATUS"
+    echo "GPU recommendation: $GPU_RECOMMENDATION"
     echo "GPU action: NONE"
     echo
     echo "Recommendation: $PERFORMANCE_RECOMMENDATION"
@@ -304,6 +313,9 @@ guard_check() {
     guard_evaluate
     echo "Thermal guard state: $GUARD_STATE"
     echo "Recommendation: $PERFORMANCE_RECOMMENDATION"
+    echo "GPU capability: $GPU_CAPABILITY_STATUS"
+    echo "GPU recommendation: $GPU_RECOMMENDATION"
+    echo "GPU action: NONE"
     echo "No hardware settings were changed."
 }
 

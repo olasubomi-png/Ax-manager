@@ -1,0 +1,331 @@
+#!/system/bin/sh
+set -u
+
+# AX-T615 Step 6A: Mali-G57 GPU discovery and safe read-only framework.
+# This controller never writes GPU, thermal, Android-property, API, display,
+# refresh-rate, or kernel-control paths.
+
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname "$0" 2>/dev/null)" && pwd)"
+AXGO_ROOT="${AXGO_ROOT:-$(CDPATH= cd -- "$SCRIPT_DIR/.." 2>/dev/null && pwd)}"
+AXGO_DATA_ROOT="${AXGO_DATA_ROOT:-$AXGO_ROOT}"
+GPU_SYSFS_ROOT="${GPU_SYSFS_ROOT:-/sys}"
+GPU_CLASS_DEVFREQ_ROOT="${GPU_CLASS_DEVFREQ_ROOT:-$GPU_SYSFS_ROOT/class/devfreq}"
+GPU_PLATFORM_ROOT="${GPU_PLATFORM_ROOT:-$GPU_SYSFS_ROOT/devices/platform}"
+GPU_PROC_ROOT="${GPU_PROC_ROOT:-/proc}"
+GPU_PROPERTIES_FILE="${GPU_PROPERTIES_FILE:-}"
+GPU_LOG_FILE="${GPU_LOG_FILE:-$AXGO_DATA_ROOT/logs/gpu.log}"
+GPU_SAFETY_WRITES_ENABLED=false
+. "$SCRIPT_DIR/gpu-safety"
+
+GPU_PATH=UNAVAILABLE
+GPU_NAME=UNKNOWN
+GPU_VENDOR=UNKNOWN
+GPU_MODEL=UNKNOWN
+GPU_DRIVER=UNKNOWN
+GPU_DRIVER_VERSION=UNKNOWN
+GPU_CUR_FREQ=UNAVAILABLE
+GPU_MIN_FREQ=UNAVAILABLE
+GPU_MAX_FREQ=UNAVAILABLE
+GPU_AVAILABLE_FREQS=UNAVAILABLE
+GPU_GOVERNOR=UNAVAILABLE
+GPU_AVAILABLE_GOVERNORS=UNAVAILABLE
+GPU_UTILIZATION=UNAVAILABLE
+GPU_INTERFACE_STATUS=UNAVAILABLE
+GPU_CONTROL_STATUS=UNAVAILABLE
+GPU_VULKAN=UNAVAILABLE
+GPU_OPENGL=UNAVAILABLE
+GPU_THERMAL_RECOMMENDATION=UNKNOWN
+GPU_CANDIDATES=""
+
+log_gpu() {
+    mkdir -p "$(dirname "$GPU_LOG_FILE")" 2>/dev/null || :
+    printf '%s [%s] %s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z' 2>/dev/null || printf '%s' unknown-time)" \
+        "${1:-INFO}" "${2:-}" >> "$GPU_LOG_FILE" 2>/dev/null || :
+}
+
+read_value() {
+    [ -r "$1" ] || return 0
+    cat "$1" 2>/dev/null | awk 'NR == 1 { sub(/^[[:space:]]+/, ""); sub(/[[:space:]]+$/, ""); print; exit }'
+}
+
+read_all_value() {
+    [ -r "$1" ] || return 0
+    cat "$1" 2>/dev/null | tr '\n' ' ' | awk '{ sub(/^[[:space:]]+/, ""); sub(/[[:space:]]+$/, ""); print }'
+}
+
+first_value() {
+    for GPU_VALUE_PATH in "$@"; do
+        GPU_VALUE="$(read_value "$GPU_VALUE_PATH")"
+        [ -n "$GPU_VALUE" ] && { printf '%s' "$GPU_VALUE"; return 0; }
+    done
+    printf '%s' UNKNOWN
+}
+
+path_matches_gpu() {
+    GPU_MATCH_NAME="$(printf '%s' "${1##*/}" | tr '[:upper:]' '[:lower:]')"
+    case "$GPU_MATCH_NAME" in
+        *gpu*|*mali*|*g3d*|*3d*|*graphics*|*devfreq*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+append_candidate() {
+    GPU_CANDIDATE="$1"
+    [ -e "$GPU_CANDIDATE" ] || return 0
+    case "\n$GPU_CANDIDATES\n" in
+        *"\n$GPU_CANDIDATE\n"*) return 0 ;;
+    esac
+    if [ -n "$GPU_CANDIDATES" ]; then
+        GPU_CANDIDATES="$GPU_CANDIDATES
+$GPU_CANDIDATE"
+    else
+        GPU_CANDIDATES="$GPU_CANDIDATE"
+    fi
+}
+
+discover_candidates() {
+    GPU_CANDIDATES=""
+    if [ -d "$GPU_CLASS_DEVFREQ_ROOT" ]; then
+        for GPU_NODE in "$GPU_CLASS_DEVFREQ_ROOT"/*; do
+            [ -e "$GPU_NODE" ] || continue
+            path_matches_gpu "$GPU_NODE" && append_candidate "$GPU_NODE"
+        done
+    fi
+    if [ -d "$GPU_PLATFORM_ROOT" ]; then
+        for GPU_PLATFORM in "$GPU_PLATFORM_ROOT"/*; do
+            [ -e "$GPU_PLATFORM" ] || continue
+            if path_matches_gpu "$GPU_PLATFORM"; then
+                append_candidate "$GPU_PLATFORM"
+            fi
+            if [ -d "$GPU_PLATFORM/devfreq" ]; then
+                for GPU_NODE in "$GPU_PLATFORM/devfreq"/*; do
+                    [ -e "$GPU_NODE" ] || continue
+                    append_candidate "$GPU_NODE"
+                done
+            fi
+        done
+    fi
+}
+
+find_driver_value() {
+    GPU_FIND_PATH="$1"
+    first_value "$GPU_FIND_PATH/driver_name" "$GPU_FIND_PATH/driver" \
+        "$GPU_FIND_PATH/driver/module" "$GPU_FIND_PATH/name"
+}
+
+find_driver_version() {
+    GPU_FIND_PATH="$1"
+    first_value "$GPU_FIND_PATH/driver_version" "$GPU_FIND_PATH/version" \
+        "$GPU_FIND_PATH/driver/version" "$GPU_PROC_ROOT/gpu_version"
+}
+
+property_value() {
+    GPU_PROPERTY="$1"
+    if [ -n "$GPU_PROPERTIES_FILE" ] && [ -r "$GPU_PROPERTIES_FILE" ]; then
+        GPU_PROPERTY_VALUE="$(sed -n "s/^${GPU_PROPERTY}[=:][[:space:]]*//p" "$GPU_PROPERTIES_FILE" 2>/dev/null | head -n 1)"
+        [ -n "$GPU_PROPERTY_VALUE" ] && { printf '%s' "$GPU_PROPERTY_VALUE"; return 0; }
+    fi
+    if command -v getprop >/dev/null 2>&1; then
+        getprop "$GPU_PROPERTY" 2>/dev/null | sed -n '1s/^\[//;1s/\]$//;1p'
+    fi
+}
+
+api_available() {
+    GPU_API_VALUE="$(property_value "$1")"
+    case "$(printf '%s' "$GPU_API_VALUE" | tr '[:upper:]' '[:lower:]')" in
+        ''|unknown|unavailable|none|0|false) printf '%s' UNAVAILABLE ;;
+        *) printf '%s' AVAILABLE ;;
+    esac
+}
+
+detect_apis() {
+    GPU_VULKAN="$(api_available ro.hardware.vulkan)"
+    [ "$GPU_VULKAN" = UNAVAILABLE ] && GPU_VULKAN="$(api_available ro.opengles.version)"
+    GPU_OPENGL="$(api_available ro.opengles.version)"
+    if [ "$GPU_OPENGL" = UNAVAILABLE ] && [ -n "$GPU_PROPERTIES_FILE" ] && [ -r "$GPU_PROPERTIES_FILE" ]; then
+        grep -qi 'opengles\|gles' "$GPU_PROPERTIES_FILE" 2>/dev/null && GPU_OPENGL=AVAILABLE || :
+    fi
+}
+
+detect_gpu() {
+    discover_candidates
+    GPU_PATH=UNAVAILABLE
+    GPU_CANDIDATE=""
+    while IFS= read -r GPU_ITEM; do
+        [ -n "$GPU_ITEM" ] || continue
+        GPU_CANDIDATE="$GPU_ITEM"
+        break
+    done <<EOF
+$GPU_CANDIDATES
+EOF
+    if [ -n "$GPU_CANDIDATE" ]; then
+        GPU_PATH="$GPU_CANDIDATE"
+        GPU_INTERFACE_STATUS="$(gpu_safety_validate_node "$GPU_PATH" && printf '%s' READABLE || printf '%s' UNAVAILABLE)"
+        GPU_NAME="$(first_value "$GPU_PATH/name" "$GPU_PATH/device_name")"
+        GPU_DRIVER="$(find_driver_value "$GPU_PATH")"
+        GPU_DRIVER_VERSION="$(find_driver_version "$GPU_PATH")"
+        GPU_CUR_FREQ="$(first_value "$GPU_PATH/cur_freq" "$GPU_PATH/current_frequency" "$GPU_PATH/devfreq_cur_freq")"
+        GPU_MIN_FREQ="$(first_value "$GPU_PATH/min_freq" "$GPU_PATH/min_frequency")"
+        GPU_MAX_FREQ="$(first_value "$GPU_PATH/max_freq" "$GPU_PATH/max_frequency")"
+        GPU_AVAILABLE_FREQS="$(first_value "$GPU_PATH/available_frequencies" "$GPU_PATH/frequencies")"
+        GPU_GOVERNOR="$(first_value "$GPU_PATH/governor" "$GPU_PATH/current_governor")"
+        [ "$GPU_GOVERNOR" = UNKNOWN ] && GPU_GOVERNOR=UNAVAILABLE
+        GPU_AVAILABLE_GOVERNORS="$(first_value "$GPU_PATH/available_governors" "$GPU_PATH/governors")"
+        GPU_UTILIZATION="$(first_value "$GPU_PATH/utilization" "$GPU_PATH/gpu_busy_percentage" "$GPU_PATH/load" "$GPU_PATH/busy")"
+        [ "$GPU_UTILIZATION" = UNKNOWN ] && GPU_UTILIZATION=UNAVAILABLE
+        GPU_INTERFACE_STATUS="$(gpu_safety_validate_node "$GPU_PATH" && printf '%s' READABLE || printf '%s' UNAVAILABLE)"
+        GPU_CONTROL_STATUS="$(gpu_safety_capability_status "$GPU_PATH" "$GPU_DRIVER" "$GPU_CUR_FREQ" "$GPU_MIN_FREQ" "$GPU_MAX_FREQ")"
+        GPU_VENDOR=UNKNOWN
+        GPU_MODEL=UNKNOWN
+        GPU_ID_TEXT="$(printf '%s %s %s' "$GPU_NAME" "$GPU_DRIVER" "$GPU_PATH" | tr '[:upper:]' '[:lower:]')"
+        case "$GPU_ID_TEXT" in
+            *mali*|*arm*) GPU_VENDOR=ARM ;;
+        esac
+        case "$GPU_ID_TEXT" in
+            *mali-g57*|*g57*) GPU_MODEL=Mali-G57 ;;
+        esac
+        [ "$GPU_VENDOR" = UNKNOWN ] && [ "$GPU_MODEL" = Mali-G57 ] && GPU_VENDOR=ARM
+    fi
+    detect_apis
+    log_gpu INFO "detection path=$GPU_PATH name=$GPU_NAME driver=$GPU_DRIVER control=$GPU_CONTROL_STATUS"
+}
+
+thermal_recommendation() {
+    GPU_THERMAL_RECOMMENDATION="${THERMAL_GUARD_RECOMMENDATION:-}"
+    if [ -z "$GPU_THERMAL_RECOMMENDATION" ] && [ -x "$AXGO_ROOT/bin/thermal-guard" ]; then
+        GPU_THERMAL_RECOMMENDATION="$(THERMAL_DATA_ROOT="${THERMAL_DATA_ROOT:-$AXGO_DATA_ROOT}" sh "$AXGO_ROOT/bin/thermal-guard" check 2>/dev/null | sed -n 's/^Recommendation: //p' | head -n 1)"
+    fi
+    case "$GPU_THERMAL_RECOMMENDATION" in
+        BOOST|BALANCED|CONSERVATIVE|BLOCKED) ;;
+        *) GPU_THERMAL_RECOMMENDATION=UNKNOWN ;;
+    esac
+    log_gpu INFO "thermal recommendation=$GPU_THERMAL_RECOMMENDATION"
+    printf '%s' "$GPU_THERMAL_RECOMMENDATION"
+}
+
+gpu_profile_upper() {
+    printf '%s' "$1" | tr '[:lower:]' '[:upper:]'
+}
+
+profile_valid() {
+    case "$1" in COOL|BALANCED|PERFORMANCE) return 0 ;; *) return 1 ;; esac
+}
+
+print_summary() {
+    GPU_REQUESTED_TITLE="${1:-GPU}"
+    echo "$GPU_REQUESTED_TITLE"
+    echo "===================="
+    echo "Vendor: $GPU_VENDOR"
+    echo "Model: $GPU_MODEL"
+    echo "Driver: $GPU_DRIVER"
+    echo "Driver version: $GPU_DRIVER_VERSION"
+    echo "Interface: $GPU_PATH"
+    echo "Interface status: $GPU_INTERFACE_STATUS"
+    echo "Current frequency: $GPU_CUR_FREQ"
+    echo "Minimum frequency: $GPU_MIN_FREQ"
+    echo "Maximum frequency: $GPU_MAX_FREQ"
+    echo "Available frequencies: $GPU_AVAILABLE_FREQS"
+    echo "Governor: $GPU_GOVERNOR"
+    echo "Available governors: $GPU_AVAILABLE_GOVERNORS"
+    echo "Utilization: $GPU_UTILIZATION"
+    echo "GPU utilization: $GPU_UTILIZATION"
+    echo "GPU control: $GPU_CONTROL_STATUS"
+    echo "Vulkan: $GPU_VULKAN"
+    echo "OpenGL ES: $GPU_OPENGL"
+    echo "Thermal recommendation: $GPU_THERMAL_RECOMMENDATION"
+    echo
+    echo "No GPU settings were modified."
+    echo "Thermal protection, Android properties, graphics APIs, display resolution, and refresh rate remain unchanged."
+}
+
+gpu_status() {
+    detect_gpu
+    thermal_recommendation >/dev/null
+    print_summary "GPU"
+}
+
+gpu_inspect() {
+    detect_gpu
+    thermal_recommendation >/dev/null
+    print_summary "GPU INSPECT"
+    echo
+    echo "Potential GPU interfaces:"
+    if [ -n "$GPU_CANDIDATES" ]; then
+        printf '%s\n' "$GPU_CANDIDATES" | while IFS= read -r GPU_ITEM; do
+            [ -n "$GPU_ITEM" ] || continue
+            echo "- $GPU_ITEM"
+            echo "  readable=$(gpu_safety_validate_node "$GPU_ITEM" && echo yes || echo no)"
+            echo "  writable=$(test -w "$GPU_ITEM" 2>/dev/null && echo yes || echo no)"
+        done
+    else
+        echo "- UNAVAILABLE"
+    fi
+}
+
+gpu_capabilities() {
+    detect_gpu
+    thermal_recommendation >/dev/null
+    echo "AX-T615 GPU CAPABILITIES"
+    echo "========================"
+    echo "GPU node exists: $( [ "$GPU_PATH" != UNAVAILABLE ] && echo yes || echo no )"
+    echo "GPU node readable: $( [ "$GPU_INTERFACE_STATUS" = READABLE ] && echo yes || echo no )"
+    echo "Capability certainty: $GPU_CONTROL_STATUS"
+    echo "Root available for future writes: $(gpu_safety_has_root && echo yes || echo no)"
+    echo "Current frequency within detected limits: $(gpu_safety_validate_frequency "$GPU_CUR_FREQ" "$GPU_MIN_FREQ" "$GPU_MAX_FREQ" && echo yes || echo no)"
+    echo "Governor data detected: $( [ "$GPU_GOVERNOR" != UNAVAILABLE ] && [ "$GPU_GOVERNOR" != UNKNOWN ] && echo yes || echo no )"
+    echo "Thermal recommendation accepted: $GPU_THERMAL_RECOMMENDATION"
+    echo "GPU writes enabled: NO"
+    echo "GPU control: $GPU_CONTROL_STATUS"
+    echo "Fail-closed policy: ENABLED"
+    echo "No hardware settings were changed."
+    log_gpu INFO "capabilities control=$GPU_CONTROL_STATUS thermal=$GPU_THERMAL_RECOMMENDATION"
+}
+
+gpu_dry_run() {
+    GPU_REQUESTED_PROFILE="${1:-}"
+    [ -n "$GPU_REQUESTED_PROFILE" ] || GPU_REQUESTED_PROFILE=performance
+    GPU_REQUESTED_PROFILE="$(gpu_profile_upper "$GPU_REQUESTED_PROFILE")"
+    profile_valid "$GPU_REQUESTED_PROFILE" || {
+        echo "Invalid GPU profile: $GPU_REQUESTED_PROFILE" >&2
+        log_gpu ERROR "dry-run invalid profile=$GPU_REQUESTED_PROFILE"
+        return 2
+    }
+    detect_gpu
+    GPU_THERMAL_RECOMMENDATION="$(thermal_recommendation)"
+    GPU_RECOMMENDATION="$GPU_THERMAL_RECOMMENDATION"
+    case "$GPU_THERMAL_RECOMMENDATION" in
+        UNKNOWN) GPU_RECOMMENDATION=CONSERVATIVE ;;
+    esac
+    echo "AX-T615 GPU DRY RUN"
+    echo "==================="
+    echo
+    echo "GPU: $GPU_VENDOR $GPU_MODEL"
+    echo "Interface: $GPU_PATH"
+    echo "Current frequency: $GPU_CUR_FREQ"
+    echo "Maximum: $GPU_MAX_FREQ"
+    echo "Governor: $GPU_GOVERNOR"
+    echo "GPU utilization: $GPU_UTILIZATION"
+    echo "Vulkan: $GPU_VULKAN"
+    echo "OpenGL ES: $GPU_OPENGL"
+    echo
+    echo "Requested profile: $GPU_REQUESTED_PROFILE"
+    echo "Thermal recommendation: $GPU_RECOMMENDATION"
+    echo "GPU recommendation: $GPU_RECOMMENDATION"
+    echo
+    echo "Planned changes:"
+    echo "NONE"
+    echo
+    echo "Reason:"
+    echo "GPU hardware modification is not enabled in Step 6A."
+    echo "No changes were made."
+    log_gpu INFO "dry-run profile=$GPU_REQUESTED_PROFILE thermal=$GPU_RECOMMENDATION changes=NONE"
+}
+
+case "${1:-status}" in
+    status) [ "$#" -eq 1 ] || { echo "Usage: gpu-controller status|inspect|capabilities|dry-run [cool|balanced|performance]" >&2; exit 2; }; gpu_status ;;
+    inspect) [ "$#" -eq 1 ] || { echo "Usage: gpu-controller status|inspect|capabilities|dry-run [cool|balanced|performance]" >&2; exit 2; }; gpu_inspect ;;
+    capabilities) [ "$#" -eq 1 ] || { echo "Usage: gpu-controller status|inspect|capabilities|dry-run [cool|balanced|performance]" >&2; exit 2; }; gpu_capabilities ;;
+    dry-run) [ "$#" -le 2 ] || { echo "Usage: gpu-controller dry-run [cool|balanced|performance]" >&2; exit 2; }; gpu_dry_run "${2:-performance}" ;;
+    info) [ "$#" -eq 1 ] || { echo "Usage: gpu-controller info" >&2; exit 2; }; gpu_status ;;
+    *) echo "Usage: gpu-controller status|inspect|capabilities|dry-run [cool|balanced|performance]|info" >&2; exit 2 ;;
+esac

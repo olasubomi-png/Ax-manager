@@ -1,0 +1,94 @@
+#!/system/bin/sh
+
+# AX-T615 Step 6A: read-only GPU safety validators.
+# This library validates discovered data for future guarded work. It performs
+# no writes and fails closed when capability data is missing or uncertain.
+
+gpu_safety_is_uint() {
+    case "${1:-}" in
+        ''|*[!0-9]*) return 1 ;;
+        *) return 0 ;;
+    esac
+}
+
+gpu_safety_has_root() {
+    if [ "${GPU_SAFETY_FORCE_NON_ROOT:-false}" = "true" ]; then
+        return 1
+    fi
+    if [ "${GPU_SAFETY_FORCE_ROOT:-false}" = "true" ]; then
+        return 0
+    fi
+    [ "$(id -u 2>/dev/null)" = "0" ]
+}
+
+gpu_safety_validate_node() {
+    GPU_SAFETY_NODE="${1:-}"
+    [ -n "$GPU_SAFETY_NODE" ] && [ -e "$GPU_SAFETY_NODE" ] && [ -r "$GPU_SAFETY_NODE" ]
+}
+
+gpu_safety_validate_writable_node() {
+    GPU_SAFETY_NODE="${1:-}"
+    gpu_safety_has_root || return 1
+    [ -n "$GPU_SAFETY_NODE" ] && [ -e "$GPU_SAFETY_NODE" ] &&
+        [ -r "$GPU_SAFETY_NODE" ] && [ -w "$GPU_SAFETY_NODE" ]
+}
+
+gpu_safety_validate_frequency() {
+    GPU_SAFETY_VALUE="${1:-}"
+    GPU_SAFETY_MIN="${2:-}"
+    GPU_SAFETY_MAX="${3:-}"
+    gpu_safety_is_uint "$GPU_SAFETY_VALUE" || return 1
+    gpu_safety_is_uint "$GPU_SAFETY_MIN" || return 1
+    gpu_safety_is_uint "$GPU_SAFETY_MAX" || return 1
+    [ "$GPU_SAFETY_MIN" -le "$GPU_SAFETY_MAX" ] 2>/dev/null || return 1
+    [ "$GPU_SAFETY_VALUE" -ge "$GPU_SAFETY_MIN" ] 2>/dev/null || return 1
+    [ "$GPU_SAFETY_VALUE" -le "$GPU_SAFETY_MAX" ] 2>/dev/null || return 1
+}
+
+gpu_safety_validate_frequency_request() {
+    GPU_SAFETY_VALUE="${1:-}"
+    GPU_SAFETY_MIN="${2:-}"
+    GPU_SAFETY_MAX="${3:-}"
+    GPU_SAFETY_AVAILABLE="${4:-}"
+    gpu_safety_has_root || return 1
+    gpu_safety_validate_frequency "$GPU_SAFETY_VALUE" "$GPU_SAFETY_MIN" "$GPU_SAFETY_MAX" || return 1
+    [ -n "$GPU_SAFETY_AVAILABLE" ] || return 1
+    for GPU_SAFETY_FREQ in $GPU_SAFETY_AVAILABLE; do
+        [ "$GPU_SAFETY_FREQ" = "$GPU_SAFETY_VALUE" ] && return 0
+    done
+    return 1
+}
+
+gpu_safety_validate_governor() {
+    GPU_SAFETY_REQUESTED="${1:-}"
+    GPU_SAFETY_AVAILABLE="${2:-}"
+    [ -n "$GPU_SAFETY_REQUESTED" ] && [ -n "$GPU_SAFETY_AVAILABLE" ] || return 1
+    for GPU_SAFETY_GOVERNOR in $GPU_SAFETY_AVAILABLE; do
+        [ "$GPU_SAFETY_GOVERNOR" = "$GPU_SAFETY_REQUESTED" ] && return 0
+    done
+    return 1
+}
+
+gpu_safety_capability_status() {
+    GPU_SAFETY_PATH="${1:-}"
+    GPU_SAFETY_DRIVER="${2:-}"
+    GPU_SAFETY_CURRENT="${3:-}"
+    GPU_SAFETY_MIN="${4:-}"
+    GPU_SAFETY_MAX="${5:-}"
+    gpu_safety_validate_node "$GPU_SAFETY_PATH" || { printf '%s' UNAVAILABLE; return 0; }
+    GPU_SAFETY_DRIVER_LOWER="$(printf '%s' "$GPU_SAFETY_DRIVER" | tr '[:upper:]' '[:lower:]')"
+    [ -n "$GPU_SAFETY_DRIVER_LOWER" ] && [ "$GPU_SAFETY_DRIVER_LOWER" != unknown ] &&
+        gpu_safety_is_uint "$GPU_SAFETY_CURRENT" &&
+        gpu_safety_is_uint "$GPU_SAFETY_MIN" &&
+        gpu_safety_is_uint "$GPU_SAFETY_MAX" &&
+        gpu_safety_validate_frequency "$GPU_SAFETY_CURRENT" "$GPU_SAFETY_MIN" "$GPU_SAFETY_MAX" && {
+            printf '%s' AVAILABLE
+            return 0
+        }
+    printf '%s' UNCERTAIN
+}
+
+# Step 6A never enables writes, even when an interface is writable.
+gpu_safety_writes_enabled() {
+    return 1
+}

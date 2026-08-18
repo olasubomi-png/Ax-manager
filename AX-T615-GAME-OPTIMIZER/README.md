@@ -287,9 +287,9 @@ its current state and passes the recommendation to the existing CPU safety/apply
 layer. `BOOST` permits the requested profile, `BALANCED` or `CONSERVATIVE`
 constrains a performance request to the balanced profile, and `BLOCKED` prevents
 CPU performance changes. The CPU layer remains responsible for all actual
-frequency/governor writes, and those writes remain disabled by default. GPU
-control does not exist in this step, so the reported GPU action is always
-`NONE`.
+frequency/governor writes, and those writes remain disabled by default. Step
+6A adds GPU discovery and recommendation reporting, but GPU hardware control
+is still disabled, so the reported GPU action remains `NONE`.
 
 When thermal information becomes unavailable, the state is `UNKNOWN` and the
 recommendation is `CONSERVATIVE`; no assumption of a cool device is made. Game
@@ -298,6 +298,57 @@ start/peak/average/final temperatures, maximum state, throttle detection,
 decision counts, CPU/GPU changes, and safety violations. No thermal trip points,
 cooling-device states, CPU/GPU frequencies, governors, properties, or kernel
 controls are written by Step 5B.
+
+## Step 6A — Mali-G57 GPU Discovery
+
+Step 6A adds a dynamically discovered, read-only GPU framework for the ARM
+Mali-G57 target. It searches the actual `/sys/class/devfreq/`,
+`/sys/devices/platform/`, and platform `devfreq` paths using GPU/Mali naming
+heuristics rather than assuming a Qualcomm KGSL interface or a fixed node.
+For each candidate it reports the path, device name, vendor/model inference,
+driver and version when exposed, current/minimum/maximum frequencies,
+available frequencies, governors, utilization, and readable/writable status.
+
+```sh
+./bin/gpu-controller status
+./bin/gpu-controller inspect
+./bin/gpu-controller capabilities
+./bin/gpu-controller dry-run performance
+./bin/gpu-info
+./bin/axgo gpu status
+./bin/axgo gpu inspect
+./bin/axgo gpu capabilities
+./bin/axgo gpu dry-run performance
+./bin/axgo gpu info
+```
+
+`bin/gpu-safety` provides fail-closed validators for readable nodes, root and
+writable-node requirements for any future operation, discovered frequency
+bounds and membership, governor membership, and uncertain capability data.
+Missing interfaces are reported as `GPU control: UNAVAILABLE`; incomplete or
+unknown driver data is reported as `UNCERTAIN`. Utilization is reported only
+when the driver exposes it; otherwise it is `UNAVAILABLE` rather than
+fabricated.
+
+The framework detects read-only Vulkan and OpenGL ES information when exposed
+through Android properties. It connects the thermal guard’s `BOOST`,
+`BALANCED`, `CONSERVATIVE`, `BLOCKED`, and fail-safe `UNKNOWN` outcomes to GPU
+recommendation reporting, and game-session start performs a GPU capability
+check and profile dry-run. These recommendations describe intended behavior
+only.
+
+`gpu-controller dry-run` prints the detected GPU, interface, frequencies,
+governor, utilization, API availability, requested logical profile, thermal
+recommendation, and planned changes. Step 6A never changes GPU frequencies,
+governors, driver parameters, thermal protection, Android properties, Vulkan or
+OpenGL configuration, display resolution, or refresh rate. It never writes
+arbitrary values to `/sys`; all GPU settings remain unmodified.
+
+The development fixtures under `tests/fixtures/gpu/` are labeled TEST DATA and
+cover available, unavailable, missing, malformed, over-limit, and unknown
+interfaces. The four GPU test scripts validate detection, safety, dry-run
+behavior, missing values, no-root behavior, and fixture immutability. Events
+are recorded without private information in `logs/gpu.log`.
 
 ## Future development roadmap
 
