@@ -479,3 +479,32 @@ Step 7A tests validate RAM calculations, PSI and ZRAM/swap detection,
 classification and fail-safe recommendations, bounded monitoring, game-session
 capture and reporting, axgo routing, fixture immutability, and the absence of
 memory hardware write commands.
+
+## Step 7B — Memory-Aware Gaming Performance Engine
+
+Step 7B adds `bin/memory-performance`, a read-only coordination engine that combines memory pressure, thermal state, and the existing logical gaming profile to decide whether additional performance work may be considered. It does not apply CPU or GPU settings itself. Instead, it forwards a constrained recommendation to the existing CPU and GPU safety layers, which remain responsible for their own validation and any future opt-in apply behavior.
+
+```sh
+./bin/memory-performance status
+./bin/memory-performance check
+./bin/memory-performance recommend
+./bin/memory-performance game-start [game]
+./bin/memory-performance game-stop
+./bin/axgo memory performance status
+./bin/axgo memory performance check
+./bin/axgo memory performance recommend
+./bin/axgo memory performance game-start [game]
+./bin/axgo memory performance game-stop
+```
+
+The memory recommendation mapping is deliberately fail-safe. `OPTIMAL` and `NORMAL` map to `BOOST_ALLOWED`; `PRESSURE` maps to `BALANCED_ONLY`; `HIGH_PRESSURE` maps to `CONSERVATIVE`; `CRITICAL` maps to `PERFORMANCE_BLOCKED`; and `UNKNOWN` maps to `CONSERVATIVE`. The engine combines the memory and thermal recommendations using the most restrictive result. Critical thermal state blocks performance regardless of memory state, while unavailable or unknown thermal information fails safe to `CONSERVATIVE` rather than assuming that the device is cool.
+
+The controller includes hysteresis and staged recovery. Escalation occurs immediately when a more severe memory state is observed. Recovery requires three consecutive stable samples at a lower state by default, as configured by `stable_recovery_samples` in `config/memory-policy.json`. Each recovery step lowers the restriction by only one level, preventing rapid oscillation from `PERFORMANCE_BLOCKED` back to `BOOST_ALLOWED` during short-lived fluctuations.
+
+During coordination, the engine forwards only logical recommendations such as `BOOST`, `BALANCED`, `CONSERVATIVE`, or `BLOCKED` to the CPU and GPU controllers. It does not write CPU or GPU frequencies, governors, devfreq nodes, or any other hardware control. ZRAM and swap values are observed for reporting only. The combined decision is logged to `logs/memory-performance.log` without private information.
+
+Game-session integration captures the combined memory and thermal state at `game-start` and samples it during the active session at the configured two-second interval. `game-stop` emits an `AX-T615 MEMORY PERFORMANCE REPORT`, forwards the legacy memory session report, and records duration, starting and minimum available RAM, peak memory use, memory and thermal states, recommendation decisions, ZRAM state, and the coordinated CPU/GPU outcomes. The top-level `bin/session` lifecycle invokes the memory-performance start and stop commands once, avoiding duplicate memory-session reports.
+
+Step 7B preserves the project-wide read-only guarantee. It never changes memory allocation, ZRAM size or algorithm, swap state, LMK/OOM settings, sysctl values, Android properties, CPU or GPU controls, or thermal protection. It never kills processes and never writes to `/proc` or `/sys`. A static forbidden-write scan reports `NO_FORBIDDEN_MEMORY_WRITES`.
+
+The Step 7B test coverage includes recommendation mapping, ZRAM availability states, thermal coordination, unknown-input fail-safe behavior, CPU and GPU recommendation forwarding, game-session lifecycle and report generation, immediate pressure escalation, three-sample hysteresis recovery, staged recovery across all restriction levels, fixture immutability, axgo routing, and continuation of all prior Steps 5B, 6A, 6B, and 7A test suites.

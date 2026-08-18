@@ -1,0 +1,247 @@
+#!/usr/bin/env sh
+set -u
+
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname "$0")" 2>/dev/null && pwd)"
+AXGO_ROOT="${AXGO_ROOT:-$(CDPATH= cd -- "$SCRIPT_DIR/.." 2>/dev/null && pwd)}"
+DATA_ROOT="${MEMORY_PERFORMANCE_DATA_ROOT:-${AXGO_DATA_ROOT:-$AXGO_ROOT}}"
+RUNTIME_DIR="$DATA_ROOT/runtime/memory-performance"
+LOG_DIR="$DATA_ROOT/logs"
+LOG_FILE="${MEMORY_PERFORMANCE_LOG:-$LOG_DIR/memory-performance.log}"
+POLICY_FILE="${MEMORY_POLICY_FILE:-$AXGO_ROOT/config/memory-policy.json}"
+MEMORY_CONTROLLER="$SCRIPT_DIR/memory-controller"
+MEMORY_GUARD="$SCRIPT_DIR/memory-guard"
+THERMAL_GUARD="$SCRIPT_DIR/thermal-guard"
+
+mkdir -p "$RUNTIME_DIR" "$LOG_DIR" 2>/dev/null || :
+
+perf_log() {
+    printf '%s [%s] %s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z' 2>/dev/null || printf '%s' UNKNOWN)" "${1:-INFO}" "${2:-}" >> "$LOG_FILE" 2>/dev/null || :
+}
+
+policy_num() {
+    KEY="$1"; DEFAULT="$2"
+    VALUE="$(sed -n "s/^[[:space:]]*\"$KEY\"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p" "$POLICY_FILE" 2>/dev/null | head -n 1)"
+    case "$VALUE" in ''|*[!0-9]*) printf '%s' "$DEFAULT" ;; *) printf '%s' "$VALUE" ;; esac
+}
+
+state_get() {
+    [ -r "$RUNTIME_DIR/session.state" ] || return 0
+    sed -n "s/^$1=//p" "$RUNTIME_DIR/session.state" 2>/dev/null | head -n 1
+}
+
+state_set() {
+    KEY="$1"; VALUE="$2"; TMP="$RUNTIME_DIR/session.state.tmp.$$"
+    mkdir -p "$RUNTIME_DIR" 2>/dev/null || return 1
+    if [ -r "$RUNTIME_DIR/session.state" ]; then sed "/^$KEY=/d" "$RUNTIME_DIR/session.state" > "$TMP" 2>/dev/null || return 1; else : > "$TMP"; fi
+    printf '%s=%s\n' "$KEY" "$VALUE" >> "$TMP" || return 1
+    mv "$TMP" "$RUNTIME_DIR/session.state" 2>/dev/null
+}
+
+numeric() { case "$1" in ''|*[!0-9]*) return 1 ;; *) return 0 ;; esac; }
+
+state_order() {
+    case "$1" in OPTIMAL) printf 0 ;; NORMAL) printf 1 ;; PRESSURE) printf 2 ;; HIGH_PRESSURE) printf 3 ;; CRITICAL) printf 4 ;; UNKNOWN) printf 5 ;; *) printf 5 ;; esac
+}
+
+state_step_down() {
+    case "$1" in CRITICAL) printf HIGH_PRESSURE ;; HIGH_PRESSURE) printf PRESSURE ;; PRESSURE) printf NORMAL ;; NORMAL) printf OPTIMAL ;; *) printf UNKNOWN ;; esac
+}
+
+memory_snapshot() {
+    MEMORY_OUTPUT="$(AXGO_ROOT="$AXGO_ROOT" AXGO_DATA_ROOT="$DATA_ROOT" sh "$MEMORY_CONTROLLER" pressure 2>/dev/null || :)"
+    MEMORY_STATE_RAW="$(printf '%s\n' "$MEMORY_OUTPUT" | sed -n 's/^Memory state: //p' | head -n 1)"
+    MEMORY_AVAILABLE="$(printf '%s\n' "$MEMORY_OUTPUT" | sed -n 's/^Available RAM: //p' | head -n 1)"
+    MEMORY_USED_PERCENT="$(printf '%s\n' "$MEMORY_OUTPUT" | sed -n 's/^Used percentage: //p' | head -n 1)"
+    [ -n "$MEMORY_STATE_RAW" ] || MEMORY_STATE_RAW=UNKNOWN
+    [ -n "$MEMORY_AVAILABLE" ] || MEMORY_AVAILABLE=UNKNOWN
+    [ -n "$MEMORY_USED_PERCENT" ] || MEMORY_USED_PERCENT=UNKNOWN
+    PSI_STATE="$(printf '%s\n' "$MEMORY_OUTPUT" | sed -n 's/^Memory PSI: //p' | head -n 1)"
+    [ -n "$PSI_STATE" ] || PSI_STATE=UNKNOWN
+    MEMORY_GUARD_OUTPUT="$(AXGO_ROOT="$AXGO_ROOT" AXGO_DATA_ROOT="$DATA_ROOT" sh "$MEMORY_GUARD" check 2>/dev/null || :)"
+    MEMORY_GUARD_RECOMMENDATION="$(printf '%s\n' "$MEMORY_GUARD_OUTPUT" | sed -n 's/^Recommendation: //p' | head -n 1)"
+    [ -n "$MEMORY_GUARD_RECOMMENDATION" ] || MEMORY_GUARD_RECOMMENDATION=UNKNOWN
+    ZRAM_OUTPUT="$(AXGO_ROOT="$AXGO_ROOT" AXGO_DATA_ROOT="$DATA_ROOT" sh "$MEMORY_CONTROLLER" zram 2>/dev/null || :)"
+    ZRAM_AVAILABILITY="$(printf '%s\n' "$ZRAM_OUTPUT" | sed -n 's/^ZRAM: //p' | head -n 1)"
+    ZRAM_STATE="$(printf '%s\n' "$ZRAM_OUTPUT" | sed -n 's/^State: //p' | head -n 1)"
+    [ "$ZRAM_AVAILABILITY" = UNAVAILABLE ] && ZRAM_STATE=UNAVAILABLE
+    [ -n "$ZRAM_STATE" ] || ZRAM_STATE=UNKNOWN
+}
+
+thermal_snapshot() {
+    THERMAL_OUTPUT="$(AXGO_ROOT="$AXGO_ROOT" THERMAL_DATA_ROOT="$DATA_ROOT" sh "$THERMAL_GUARD" check 2>/dev/null || :)"
+    THERMAL_STATE="$(printf '%s\n' "$THERMAL_OUTPUT" | sed -n 's/^Thermal guard state: //p' | head -n 1)"
+    THERMAL_RECOMMENDATION="$(printf '%s\n' "$THERMAL_OUTPUT" | sed -n 's/^Recommendation: //p' | head -n 1)"
+    [ -n "$THERMAL_STATE" ] || THERMAL_STATE=UNKNOWN
+    case "$THERMAL_STATE" in
+        OPTIMAL|NORMAL) THERMAL_RECOMMENDATION=BOOST_ALLOWED ;;
+        CAUTION|THROTTLED) THERMAL_RECOMMENDATION=CONSERVATIVE ;;
+        CRITICAL) THERMAL_RECOMMENDATION=PERFORMANCE_BLOCKED ;;
+        *) THERMAL_STATE=UNKNOWN; THERMAL_RECOMMENDATION=CONSERVATIVE ;;
+    esac
+}
+
+hysteresis_state() {
+    RAW="$1"; PREVIOUS="$(state_get effective_memory_state)"; COUNT="$(state_get recovery_count)"; HAD_PREVIOUS=1
+    [ -n "$PREVIOUS" ] || { PREVIOUS=UNKNOWN; HAD_PREVIOUS=0; }
+    numeric "$COUNT" || COUNT=0
+    REQUIRED="$(policy_num stable_recovery_samples 3)"
+    [ "$REQUIRED" -gt 0 ] 2>/dev/null || REQUIRED=3
+    if [ "$RAW" = UNKNOWN ]; then
+        state_set recovery_count 0
+        state_set effective_memory_state UNKNOWN
+        printf UNKNOWN
+        return
+    fi
+    if [ "$HAD_PREVIOUS" -eq 0 ] 2>/dev/null; then
+        state_set recovery_count 0; state_set effective_memory_state "$RAW"; printf '%s' "$RAW"; return
+    fi
+    if [ "$PREVIOUS" = UNKNOWN ]; then
+        COUNT=$((COUNT + 1))
+        if [ "$COUNT" -ge "$REQUIRED" ] 2>/dev/null; then
+            COUNT=0; PREVIOUS="$RAW"
+        fi
+        state_set recovery_count "$COUNT"; state_set effective_memory_state "$PREVIOUS"
+        printf '%s' "$PREVIOUS"
+        return
+    fi
+    PREV_ORDER="$(state_order "$PREVIOUS")"; RAW_ORDER="$(state_order "$RAW")"
+    if [ "$RAW_ORDER" -gt "$PREV_ORDER" ] 2>/dev/null; then
+        COUNT=0; PREVIOUS="$RAW"
+    elif [ "$RAW_ORDER" -eq "$PREV_ORDER" ] 2>/dev/null; then
+        COUNT=0
+    else
+        COUNT=$((COUNT + 1))
+        if [ "$COUNT" -ge "$REQUIRED" ] 2>/dev/null; then
+            COUNT=0
+            NEXT="$(state_step_down "$PREVIOUS")"
+            NEXT_ORDER="$(state_order "$NEXT")"
+            [ "$NEXT_ORDER" -ge "$RAW_ORDER" ] 2>/dev/null && PREVIOUS="$NEXT" || PREVIOUS="$RAW"
+        fi
+    fi
+    state_set recovery_count "$COUNT"; state_set effective_memory_state "$PREVIOUS"
+    printf '%s' "$PREVIOUS"
+}
+
+memory_recommendation() {
+    case "$1" in
+        OPTIMAL|NORMAL) printf BOOST_ALLOWED ;;
+        PRESSURE) printf BALANCED_ONLY ;;
+        HIGH_PRESSURE) printf CONSERVATIVE ;;
+        CRITICAL) printf PERFORMANCE_BLOCKED ;;
+        *) printf CONSERVATIVE ;;
+    esac
+}
+
+recommendation_rank() {
+    case "$1" in BOOST_ALLOWED|BOOST) printf 0 ;; BALANCED_ONLY|BALANCED) printf 1 ;; CONSERVATIVE) printf 2 ;; PERFORMANCE_BLOCKED|BLOCKED) printf 3 ;; *) printf 2 ;; esac
+}
+
+combine_recommendations() {
+    MEMORY_RECOMMENDATION="$(memory_recommendation "$MEMORY_STATE")"
+    M_RANK="$(recommendation_rank "$MEMORY_RECOMMENDATION")"
+    T_RANK="$(recommendation_rank "$THERMAL_RECOMMENDATION")"
+    if [ "$M_RANK" -ge "$T_RANK" ] 2>/dev/null; then FINAL_RECOMMENDATION="$MEMORY_RECOMMENDATION"; else
+        case "$THERMAL_RECOMMENDATION" in PERFORMANCE_BLOCKED|BLOCKED) FINAL_RECOMMENDATION=PERFORMANCE_BLOCKED ;; CONSERVATIVE) FINAL_RECOMMENDATION=CONSERVATIVE ;; BALANCED|BALANCED_ONLY) FINAL_RECOMMENDATION=BALANCED_ONLY ;; *) FINAL_RECOMMENDATION=BOOST_ALLOWED ;; esac
+    fi
+}
+
+coordination_state() {
+    case "$FINAL_RECOMMENDATION" in
+        BOOST_ALLOWED) CPU_RECOMMENDATION=BOOST; GPU_RECOMMENDATION=BOOST ;;
+        BALANCED_ONLY) CPU_RECOMMENDATION=BALANCED; GPU_RECOMMENDATION=BALANCED ;;
+        CONSERVATIVE) CPU_RECOMMENDATION=CONSERVATIVE; GPU_RECOMMENDATION=CONSERVATIVE ;;
+        *) CPU_RECOMMENDATION=BLOCKED; GPU_RECOMMENDATION=BLOCKED ;;
+    esac
+    [ -x "$SCRIPT_DIR/cpu-controller" ] && CPU_COORDINATION=READY || CPU_COORDINATION=UNAVAILABLE
+    [ -x "$SCRIPT_DIR/gpu-controller" ] && GPU_COORDINATION=READY || GPU_COORDINATION=UNAVAILABLE
+}
+
+evaluate() {
+    memory_snapshot
+    thermal_snapshot
+    MEMORY_STATE="$(hysteresis_state "$MEMORY_STATE_RAW")"
+    combine_recommendations
+    coordination_state
+    if [ "$MEMORY_STATE" != "$(state_get last_logged_memory_state)" ] || [ "$THERMAL_STATE" != "$(state_get last_logged_thermal_state)" ] || [ "$FINAL_RECOMMENDATION" != "$(state_get last_logged_recommendation)" ]; then
+        perf_log INFO "decision memory=$MEMORY_STATE raw_memory=$MEMORY_STATE_RAW available=$MEMORY_AVAILABLE psi=$PSI_STATE zram=$ZRAM_STATE thermal=$THERMAL_STATE recommendation=$FINAL_RECOMMENDATION"
+        state_set last_logged_memory_state "$MEMORY_STATE"; state_set last_logged_thermal_state "$THERMAL_STATE"; state_set last_logged_recommendation "$FINAL_RECOMMENDATION"
+    fi
+}
+
+print_decision() {
+    echo 'AX MEMORY PERFORMANCE'
+    echo '====================='
+    echo
+    echo "Available RAM: $MEMORY_AVAILABLE"
+    echo "Used percentage: $MEMORY_USED_PERCENT"
+    echo "Memory state: $MEMORY_STATE"
+    echo "ZRAM: $ZRAM_STATE"
+    echo "Thermal state: $THERMAL_STATE"
+    echo
+    echo "Final recommendation: $FINAL_RECOMMENDATION"
+    case "$FINAL_RECOMMENDATION" in
+        BOOST_ALLOWED) echo 'Reason: Memory and thermal conditions permit normal gaming performance.' ;;
+        BALANCED_ONLY) echo 'Reason: Memory pressure permits balanced performance only.' ;;
+        CONSERVATIVE) echo 'Reason: Memory or thermal conditions require conservative performance.' ;;
+        *) echo 'Reason: Critical memory or thermal conditions block performance boosts.' ;;
+    esac
+    echo "CPU: $CPU_COORDINATION (recommendation forwarded: $CPU_RECOMMENDATION)"
+    echo "GPU: $GPU_COORDINATION (recommendation forwarded: $GPU_RECOMMENDATION)"
+    echo 'No memory settings were modified.'
+    echo 'No hardware settings were changed by memory-performance.'
+}
+
+record_decision() {
+    KEY="$1"; VALUE="$(state_get "$KEY")"; numeric "$VALUE" || VALUE=0; state_set "$KEY" $((VALUE + 1))
+}
+
+session_start() {
+    GAME="${1:-unnamed game}"
+    if [ "$(state_get active)" = 1 ]; then echo "Memory performance session already active: $(state_get game)"; return 0; fi
+    MEMORY_CONTROLLER_START_OUTPUT="$(AXGO_ROOT="$AXGO_ROOT" AXGO_DATA_ROOT="$DATA_ROOT" sh "$MEMORY_CONTROLLER" session-start "$GAME" 2>&1 || :)"
+    printf '%s\n' "$MEMORY_CONTROLLER_START_OUTPUT"
+    : > "$RUNTIME_DIR/session.state" || return 1
+    evaluate
+    state_set active 1; state_set game "$GAME"; state_set start_epoch "$(date '+%s' 2>/dev/null || printf 0)"; state_set starting_available "$MEMORY_AVAILABLE"; state_set minimum_available "$MEMORY_AVAILABLE"; state_set peak_used "$MEMORY_USED_PERCENT"; state_set peak_state "$MEMORY_STATE"; state_set zram "$ZRAM_STATE"; state_set thermal "$THERMAL_STATE"; state_set pressure_events 0; state_set thermal_pressure_events 0; state_set BOOST_ALLOWED 0; state_set BALANCED_ONLY 0; state_set CONSERVATIVE 0; state_set PERFORMANCE_BLOCKED 0; state_set effective_memory_state "$MEMORY_STATE"; state_set recovery_count 0
+    record_decision "$FINAL_RECOMMENDATION"
+    perf_log INFO "game start game=$GAME memory=$MEMORY_STATE thermal=$THERMAL_STATE zram=$ZRAM_STATE recommendation=$FINAL_RECOMMENDATION"
+    echo 'AX-MANAGER GAME SESSION'; echo '======================='; echo; echo "Game: $GAME"; echo; echo "Memory: $MEMORY_STATE"; echo "Available RAM: $MEMORY_AVAILABLE"; echo "ZRAM: $ZRAM_STATE"; echo "Thermal: $THERMAL_STATE"; echo; echo "Final recommendation: $FINAL_RECOMMENDATION"; echo "CPU: $CPU_COORDINATION"; echo "GPU: $GPU_COORDINATION"; echo; echo 'No hardware settings changed.'
+}
+
+session_sample() {
+    [ "$(state_get active)" = 1 ] || return 0
+    PREVIOUS_MEMORY="$(state_get session_memory_state)"; PREVIOUS_THERMAL="$(state_get session_thermal_state)"; PREVIOUS_ZRAM="$(state_get session_zram_state)"
+    evaluate
+    CURRENT_MIN="$(state_get minimum_available)"; [ -n "$CURRENT_MIN" ] || CURRENT_MIN=UNKNOWN
+    case "$MEMORY_AVAILABLE:$CURRENT_MIN" in *UNKNOWN*|*:|''*) ;; *) awk -v a="$MEMORY_AVAILABLE" -v b="$CURRENT_MIN" 'BEGIN { exit !(a < b) }' 2>/dev/null && state_set minimum_available "$MEMORY_AVAILABLE" ;; esac
+    CURRENT_PEAK="$(state_get peak_used)"; [ -n "$CURRENT_PEAK" ] || CURRENT_PEAK=UNKNOWN
+    case "$MEMORY_USED_PERCENT:$CURRENT_PEAK" in *UNKNOWN*|*:|''*) ;; *) awk -v a="$MEMORY_USED_PERCENT" -v b="$CURRENT_PEAK" 'BEGIN { exit !(a > b) }' 2>/dev/null && state_set peak_used "$MEMORY_USED_PERCENT" ;; esac
+    [ "$(state_order "$MEMORY_STATE")" -gt "$(state_order "$(state_get peak_state)")" ] 2>/dev/null && state_set peak_state "$MEMORY_STATE"
+    [ "$MEMORY_STATE" != "$PREVIOUS_MEMORY" ] && { perf_log INFO "memory state change from=${PREVIOUS_MEMORY:-UNKNOWN} to=$MEMORY_STATE available=$MEMORY_AVAILABLE psi=$PSI_STATE"; case "$MEMORY_STATE" in PRESSURE|HIGH_PRESSURE|CRITICAL) N="$(state_get pressure_events)"; numeric "$N" || N=0; state_set pressure_events $((N + 1));; esac; }
+    [ "$THERMAL_STATE" != "$PREVIOUS_THERMAL" ] && { perf_log INFO "thermal state change from=${PREVIOUS_THERMAL:-UNKNOWN} to=$THERMAL_STATE"; case "$THERMAL_STATE" in CRITICAL|THROTTLED|CAUTION) N="$(state_get thermal_pressure_events)"; numeric "$N" || N=0; state_set thermal_pressure_events $((N + 1));; esac; }
+    [ "$ZRAM_STATE" != "$PREVIOUS_ZRAM" ] && perf_log INFO "zram state change from=${PREVIOUS_ZRAM:-UNKNOWN} to=$ZRAM_STATE"
+    record_decision "$FINAL_RECOMMENDATION"
+    state_set session_memory_state "$MEMORY_STATE"; state_set session_thermal_state "$THERMAL_STATE"; state_set session_zram_state "$ZRAM_STATE"; state_set final_recommendation "$FINAL_RECOMMENDATION"; state_set available "$MEMORY_AVAILABLE"; state_set used_percent "$MEMORY_USED_PERCENT"
+}
+
+session_stop() {
+    [ "$(state_get active)" = 1 ] || { echo 'No active memory performance session.'; return 0; }
+    session_sample
+    START="$(state_get start_epoch)"; NOW="$(date '+%s' 2>/dev/null || printf 0)"; DURATION=UNKNOWN
+    numeric "$START" && numeric "$NOW" && DURATION="$((NOW - START)) seconds"
+    PRESSURE_EVENTS="$(state_get pressure_events)"; THERMAL_EVENTS="$(state_get thermal_pressure_events)"
+    REPORT="$RUNTIME_DIR/memory-performance.report"
+    { echo 'MEMORY PERFORMANCE REPORT'; echo '========================='; echo; echo "Game: $(state_get game)"; echo; echo "Duration: $DURATION"; echo "Starting available RAM: $(state_get starting_available)"; echo "Minimum available RAM: $(state_get minimum_available)"; echo "Peak memory usage: $(state_get peak_used)%"; echo "Peak memory state: $(state_get peak_state)"; echo "ZRAM: $(state_get zram)"; echo "Thermal state: $(state_get thermal)"; echo; echo "BOOST_ALLOWED: $(state_get BOOST_ALLOWED)"; echo "BALANCED_ONLY: $(state_get BALANCED_ONLY)"; echo "CONSERVATIVE: $(state_get CONSERVATIVE)"; echo "PERFORMANCE_BLOCKED: $(state_get PERFORMANCE_BLOCKED)"; echo; echo "Memory pressure events: ${PRESSURE_EVENTS:-0}"; echo "Thermal pressure events: ${THERMAL_EVENTS:-0}"; echo; echo 'No unsafe memory operations were performed.'; } | tee "$REPORT"
+    perf_log INFO "game stop game=$(state_get game) final=$(state_get final_recommendation) recovery_events=$(state_get recovery_count)"
+    MEMORY_CONTROLLER_STOP_OUTPUT="$(AXGO_ROOT="$AXGO_ROOT" AXGO_DATA_ROOT="$DATA_ROOT" sh "$MEMORY_CONTROLLER" session-stop 2>&1 || :)"
+    printf '%s\n' "$MEMORY_CONTROLLER_STOP_OUTPUT"
+    rm -f "$RUNTIME_DIR/session.state" 2>/dev/null || :
+}
+
+case "${1:-status}" in
+    status|check|recommend) [ "$#" -eq 1 ] || exit 2; evaluate; print_decision ;;
+    game-start) [ "$#" -le 2 ] || exit 2; session_start "${2:-unnamed game}" ;;
+    game-stop) [ "$#" -eq 1 ] || exit 2; session_stop ;;
+    sample) [ "$#" -eq 1 ] || exit 2; session_sample ;;
+    *) echo 'Usage: memory-performance {status|check|recommend|game-start [game]|game-stop|sample}' >&2; exit 2 ;;
+esac

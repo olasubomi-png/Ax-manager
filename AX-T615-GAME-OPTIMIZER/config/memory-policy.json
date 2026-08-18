@@ -13,5 +13,12 @@
   "psi_full_pressure": 1,
   "psi_full_high_pressure": 5,
   "psi_full_critical": 15,
-  "notes": "These are AX-manager monitoring thresholds only. They are not official TECNO, Unisoc, Linux, or Android memory limits. Step 7A changes no memory, swap, ZRAM, sysctl, /proc, or /sys setting. Profiles are recommendation labels only."
+  "pressure_enter_threshold": 15,
+  "pressure_exit_threshold": 20,
+  "high_pressure_enter_threshold": 8,
+  "high_pressure_exit_threshold": 12,
+  "critical_enter_threshold": 3,
+  "critical_exit_threshold": 8,
+  "stable_recovery_samples": 3,
+  "notes": "These are AX-manager monitoring thresholds only. They are not official TECNO, Unisoc, Linux, or Android memory limits. Step 7A changes no memory, swap, ZRAM, sysctl, /proc, or /sys setting. Step 7B recommendations coordinate performance only and do not modify memory settings."
 }
