@@ -1,0 +1,17 @@
+{
+  "description": "AX-manager monitoring thresholds; not official TECNO, Unisoc, or Android limits",
+  "read_only": true,
+  "poll_interval_seconds": 2,
+  "available_optimal_percent": 50,
+  "available_normal_percent": 25,
+  "available_pressure_percent": 15,
+  "available_high_pressure_percent": 8,
+  "available_critical_percent": 3,
+  "psi_some_pressure": 10,
+  "psi_some_high_pressure": 25,
+  "psi_some_critical": 50,
+  "psi_full_pressure": 1,
+  "psi_full_high_pressure": 5,
+  "psi_full_critical": 15,
+  "notes": "These are AX-manager monitoring thresholds only. They are not official TECNO, Unisoc, Linux, or Android memory limits. Step 7A changes no memory, swap, ZRAM, sysctl, /proc, or /sys setting. Profiles are recommendation labels only."
+}

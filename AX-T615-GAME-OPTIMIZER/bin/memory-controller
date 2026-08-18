@@ -1,0 +1,246 @@
+#!/system/bin/sh
+set -u
+
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname "$0")" 2>/dev/null && pwd)"
+AXGO_ROOT="${AXGO_ROOT:-$(CDPATH= cd -- "$SCRIPT_DIR/.." 2>/dev/null && pwd)}"
+AXGO_DATA_ROOT="${AXGO_DATA_ROOT:-$AXGO_ROOT}"
+MEMORY_PROC_ROOT="${MEMORY_PROC_ROOT:-/proc}"
+MEMORY_SYS_ROOT="${MEMORY_SYS_ROOT:-/sys}"
+MEMINFO_FILE="${MEMINFO_FILE:-$MEMORY_PROC_ROOT/meminfo}"
+PSI_FILE="${MEMORY_PSI_FILE:-$MEMORY_PROC_ROOT/pressure/memory}"
+SWAPS_FILE="${MEMORY_SWAPS_FILE:-$MEMORY_PROC_ROOT/swaps}"
+ZRAM_ROOT="${MEMORY_ZRAM_ROOT:-$MEMORY_SYS_ROOT/block}"
+POLICY_FILE="${MEMORY_POLICY_FILE:-$AXGO_ROOT/config/memory-policy.json}"
+RUNTIME_DIR="$AXGO_DATA_ROOT/runtime/memory"
+LOG_DIR="$AXGO_DATA_ROOT/logs"
+MEMORY_LOG="$LOG_DIR/memory.log"
+
+mem_log() {
+    mkdir -p "$LOG_DIR" "$RUNTIME_DIR" 2>/dev/null || :
+    printf '%s [%s] %s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z' 2>/dev/null || printf '%s' unknown-time)" "${1:-INFO}" "${2:-}" >> "$MEMORY_LOG" 2>/dev/null || :
+}
+
+field_kb() {
+    KEY="$1"
+    [ -r "$MEMINFO_FILE" ] || return 1
+    sed -n "s/^${KEY}:[[:space:]]*\([0-9][0-9]*\)[[:space:]]*kB.*/\1/p" "$MEMINFO_FILE" 2>/dev/null | head -n 1
+}
+
+field_bytes() {
+    KEY="$1"
+    VALUE="$(field_kb "$KEY" 2>/dev/null || :)"
+    case "$VALUE" in ''|*[!0-9]*) printf '%s' UNKNOWN ;; *) printf '%s' "$((VALUE * 1024))" ;; esac
+}
+
+fmt_mb() {
+    VALUE="$1"
+    case "$VALUE" in
+        ''|UNKNOWN|*[!0-9]*) printf '%s' UNKNOWN ;;
+        *) awk -v n="$VALUE" 'BEGIN { printf "%.1f MB", n / 1048576 }' 2>/dev/null || printf '%s bytes' "$VALUE" ;;
+    esac
+}
+
+fmt_pct() {
+    VALUE="$1"
+    case "$VALUE" in ''|UNKNOWN|*[!0-9]*) printf '%s' UNKNOWN ;; *) printf '%s%%' "$VALUE" ;; esac
+}
+
+sum_field_bytes() {
+    A="$1"; B="$2"
+    case "$A:$B" in *UNKNOWN*) printf '%s' UNKNOWN ;; *) printf '%s' "$((A + B))" ;; esac
+}
+
+mem_values() {
+    MEM_TOTAL_KB="$(field_kb MemTotal 2>/dev/null || :)"
+    MEM_AVAILABLE_KB="$(field_kb MemAvailable 2>/dev/null || :)"
+    MEM_FREE_KB="$(field_kb MemFree 2>/dev/null || :)"
+        case "$MEM_TOTAL_KB" in ''|*[!0-9]*) MEM_TOTAL_BYTES=UNKNOWN; MEM_AVAILABLE_BYTES=UNKNOWN; MEM_USED_BYTES=UNKNOWN; MEM_USED_PERCENT=UNKNOWN; MEM_AVAILABLE_PERCENT=UNKNOWN; return ;; esac
+    case "$MEM_AVAILABLE_KB" in ''|*[!0-9]*) MEM_TOTAL_BYTES=UNKNOWN; MEM_AVAILABLE_BYTES=UNKNOWN; MEM_USED_BYTES=UNKNOWN; MEM_USED_PERCENT=UNKNOWN; MEM_AVAILABLE_PERCENT=UNKNOWN; return ;; esac
+    MEM_TOTAL_BYTES=$((MEM_TOTAL_KB * 1024)); MEM_AVAILABLE_BYTES=$((MEM_AVAILABLE_KB * 1024))
+    if [ "$MEM_AVAILABLE_KB" -le "$MEM_TOTAL_KB" ]; then MEM_USED_BYTES=$(((MEM_TOTAL_KB - MEM_AVAILABLE_KB) * 1024)); else MEM_USED_BYTES=UNKNOWN; fi
+    if [ "$MEM_TOTAL_KB" -gt 0 ] && [ "$MEM_AVAILABLE_KB" -le "$MEM_TOTAL_KB" ]; then MEM_USED_PERCENT=$(((MEM_TOTAL_KB - MEM_AVAILABLE_KB) * 100 / MEM_TOTAL_KB)); MEM_AVAILABLE_PERCENT=$((MEM_AVAILABLE_KB * 100 / MEM_TOTAL_KB)); else MEM_USED_PERCENT=UNKNOWN; MEM_AVAILABLE_PERCENT=UNKNOWN; fi
+}
+
+json_num() {
+    KEY="$1"; DEFAULT="$2"
+    [ -r "$POLICY_FILE" ] || { printf '%s' "$DEFAULT"; return; }
+    VALUE="$(sed -n "s/^[[:space:]]*\"$KEY\"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p" "$POLICY_FILE" | head -n 1)"
+    case "$VALUE" in ''|*[!0-9]*) printf '%s' "$DEFAULT" ;; *) printf '%s' "$VALUE" ;; esac
+}
+
+psi_value() {
+    LABEL="$1"; WINDOW="$2"
+    [ -r "$PSI_FILE" ] || { printf '%s' UNKNOWN; return; }
+    LINE="$(grep -E "^${LABEL}[[:space:]]" "$PSI_FILE" 2>/dev/null | head -n 1)"
+    VALUE="$(printf '%s\n' "$LINE" | sed -n "s/.*avg${WINDOW}=\([^ ]*\).*/\1/p")"
+    [ -n "$VALUE" ] && printf '%s' "$VALUE" || printf '%s' UNKNOWN
+}
+
+memory_psi_state() {
+    PSI_SOME10="$(psi_value some 10)"; PSI_FULL10="$(psi_value full 10)"
+    if [ "$PSI_SOME10" = UNKNOWN ] && [ "$PSI_FULL10" = UNKNOWN ]; then PSI_STATE=UNAVAILABLE
+    elif awk -v s="$PSI_SOME10" -v f="$PSI_FULL10" 'BEGIN { exit !((s+0) > 0 || (f+0) > 0) }' 2>/dev/null; then PSI_STATE=PRESSURE
+    else PSI_STATE=NONE
+    fi
+}
+
+memory_class() {
+    mem_values; memory_psi_state
+    [ "$MEM_AVAILABLE_PERCENT" != UNKNOWN ] || { MEMORY_STATE=UNKNOWN; return; }
+    CRITICAL="$(json_num available_critical_percent 3)"; HIGH="$(json_num available_high_pressure_percent 8)"; PRESSURE="$(json_num available_pressure_percent 15)"; NORMAL="$(json_num available_normal_percent 25)"
+    if [ "$MEM_AVAILABLE_PERCENT" -le "$CRITICAL" ]; then MEMORY_STATE=CRITICAL
+    elif [ "$MEM_AVAILABLE_PERCENT" -le "$HIGH" ]; then MEMORY_STATE=HIGH_PRESSURE
+    elif [ "$MEM_AVAILABLE_PERCENT" -le "$PRESSURE" ]; then MEMORY_STATE=PRESSURE
+    elif [ "$MEM_AVAILABLE_PERCENT" -lt "$NORMAL" ]; then MEMORY_STATE=NORMAL
+    elif [ "$MEM_AVAILABLE_PERCENT" -lt "$(json_num available_optimal_percent 50)" ]; then MEMORY_STATE=NORMAL
+    else MEMORY_STATE=OPTIMAL
+    fi
+    if [ "$PSI_FULL10" != UNKNOWN ] && awk -v p="$PSI_FULL10" -v c="$(json_num psi_full_critical 15)" 'BEGIN { exit !(p >= c) }' 2>/dev/null; then MEMORY_STATE=CRITICAL
+    elif [ "$PSI_SOME10" != UNKNOWN ] && awk -v p="$PSI_SOME10" -v c="$(json_num psi_some_critical 50)" 'BEGIN { exit !(p >= c) }' 2>/dev/null; then MEMORY_STATE=CRITICAL
+    elif { [ "$PSI_FULL10" != UNKNOWN ] && awk -v p="$PSI_FULL10" -v c="$(json_num psi_full_high_pressure 5)" 'BEGIN { exit !(p >= c) }' 2>/dev/null; } || { [ "$PSI_SOME10" != UNKNOWN ] && awk -v p="$PSI_SOME10" -v c="$(json_num psi_some_high_pressure 25)" 'BEGIN { exit !(p >= c) }' 2>/dev/null; }; then
+        case "$MEMORY_STATE" in CRITICAL) ;; *) MEMORY_STATE=HIGH_PRESSURE ;; esac
+    elif { [ "$PSI_FULL10" != UNKNOWN ] && awk -v p="$PSI_FULL10" -v c="$(json_num psi_full_pressure 1)" 'BEGIN { exit !(p >= c) }' 2>/dev/null; } || { [ "$PSI_SOME10" != UNKNOWN ] && awk -v p="$PSI_SOME10" -v c="$(json_num psi_some_pressure 10)" 'BEGIN { exit !(p >= c) }' 2>/dev/null; }; then
+        case "$MEMORY_STATE" in CRITICAL|HIGH_PRESSURE) ;; *) MEMORY_STATE=PRESSURE ;; esac
+    fi
+}
+
+print_mem_fields() {
+    for LABEL in MemTotal MemFree MemAvailable Buffers Cached SwapCached Active Inactive 'Active(anon)' 'Inactive(anon)' 'Active(file)' 'Inactive(file)' Unevictable Dirty Writeback Slab SReclaimable SUnreclaim SwapTotal SwapFree; do
+        VALUE="$(field_kb "$LABEL" 2>/dev/null || :)"
+        [ -n "$VALUE" ] && printf '%s: %s kB\n' "$LABEL" "$VALUE"
+    done
+}
+
+zram_report() {
+    FOUND=0
+    for NODE in "$ZRAM_ROOT"/zram*; do
+        [ -d "$NODE" ] || continue
+        case "$(basename "$NODE")" in zram*) ;; *) continue ;; esac
+        FOUND=1
+        DEVICE="$(basename "$NODE")"; DISKSIZE="$(cat "$NODE/disksize" 2>/dev/null || printf '%s' UNKNOWN)"; MEM_USED="$(cat "$NODE/mem_used_total" 2>/dev/null || printf '%s' UNKNOWN)"; MEM_LIMIT="$(cat "$NODE/mem_limit" 2>/dev/null || printf '%s' UNKNOWN)"; ORIG="$(cat "$NODE/orig_data_size" 2>/dev/null || printf '%s' UNKNOWN)"; COMPR="$(cat "$NODE/compr_data_size" 2>/dev/null || printf '%s' UNKNOWN)"; ALGO="$(cat "$NODE/comp_algorithm" 2>/dev/null || printf '%s' UNKNOWN)"; MMSTAT="$(cat "$NODE/mm_stat" 2>/dev/null || printf '%s' UNKNOWN)"
+        STATE=INACTIVE
+        case "$MEM_USED" in ''|0) STATE=INACTIVE ;; UNKNOWN) STATE=UNKNOWN ;; *) STATE=ACTIVE ;; esac
+        printf 'ZRAM: AVAILABLE\nDevice: %s\nState: %s\nDisksize: %s\nMem used total: %s\nMem limit: %s\nOriginal data size: %s\nCompressed data size: %s\nAlgorithm: %s\nMM stat: %s\n' "$DEVICE" "$STATE" "$DISKSIZE" "$MEM_USED" "$MEM_LIMIT" "$ORIG" "$COMPR" "$ALGO" "$MMSTAT"
+    done
+    [ "$FOUND" -eq 1 ] || printf 'ZRAM: UNAVAILABLE\nDevice: UNKNOWN\nState: UNKNOWN\n'
+}
+
+swap_report() {
+    if [ ! -r "$SWAPS_FILE" ]; then printf 'Swap: UNAVAILABLE\n'; return; fi
+    LINE_COUNT="$(awk 'NR > 1 && NF >= 5 { count++ } END { print count+0 }' "$SWAPS_FILE" 2>/dev/null)"
+    if [ "$LINE_COUNT" -eq 0 ]; then printf 'Swap: INACTIVE\nDevice: NONE\n'; return; fi
+    printf 'Swap: ACTIVE\n'; awk 'NR > 1 && NF >= 5 { printf "Device: %s\nType: %s\nSize: %s kB\nUsed: %s kB\nPriority: %s\n", $1,$2,$3,$4,$5 }' "$SWAPS_FILE"
+}
+
+zram_used_value() {
+    for NODE in "$ZRAM_ROOT"/zram*; do
+        [ -d "$NODE" ] || continue
+        VALUE="$(cat "$NODE/mem_used_total" 2>/dev/null || printf '%s' UNKNOWN)"
+        case "$VALUE" in ''|*[!0-9]*) printf '%s' UNKNOWN ;; *) printf '%s' "$VALUE" ;; esac
+        return
+    done
+    printf '%s' UNKNOWN
+}
+
+zram_state_value() {
+    USED="$(zram_used_value)"
+    case "$USED" in UNKNOWN) printf '%s' UNKNOWN ;; 0) printf '%s' INACTIVE ;; *) printf '%s' ACTIVE ;; esac
+}
+
+swap_state_value() {
+    [ -r "$SWAPS_FILE" ] || { printf '%s' UNAVAILABLE; return; }
+    COUNT="$(awk 'NR > 1 && NF >= 5 { count++ } END { print count+0 }' "$SWAPS_FILE" 2>/dev/null)"
+    [ "$COUNT" -gt 0 ] 2>/dev/null && printf '%s' ACTIVE || printf '%s' INACTIVE
+}
+
+session_value() {
+    [ -r "$RUNTIME_DIR/session.state" ] || return 0
+    sed -n "s/^$1=//p" "$RUNTIME_DIR/session.state" 2>/dev/null | head -n 1
+}
+
+session_set() {
+    KEY="$1"; VALUE="$2"; TMP="$RUNTIME_DIR/session.state.tmp"
+    mkdir -p "$RUNTIME_DIR" 2>/dev/null || return 1
+    if [ -r "$RUNTIME_DIR/session.state" ]; then sed "/^$KEY=/d" "$RUNTIME_DIR/session.state" > "$TMP" 2>/dev/null || return 1; else : > "$TMP"; fi
+    printf '%s=%s\n' "$KEY" "$VALUE" >> "$TMP" || return 1
+    mv "$TMP" "$RUNTIME_DIR/session.state" 2>/dev/null
+}
+
+session_snapshot() {
+    mem_values; memory_class; memory_psi_state
+    SESSION_TOTAL_BYTES="$MEM_TOTAL_BYTES"
+    SESSION_AVAILABLE_BYTES="$MEM_AVAILABLE_BYTES"
+    SESSION_USED_PERCENT="$MEM_USED_PERCENT"
+    SESSION_STATE="$MEMORY_STATE"
+    SESSION_PSI_STATE="$PSI_STATE"
+    SESSION_ZRAM_STATE="$(zram_state_value)"
+    SESSION_ZRAM_USED="$(zram_used_value)"
+    SESSION_SWAP_STATE="$(swap_state_value)"
+}
+
+session_start() {
+    if [ "$(session_value active)" = 1 ]; then printf 'Memory session already active.\n'; return 0; fi
+    session_snapshot
+    mkdir -p "$RUNTIME_DIR" 2>/dev/null || return 1
+    : > "$RUNTIME_DIR/session.state" || return 1
+    session_set active 1; session_set game "${1:-unnamed game}"; session_set start_time "$(date '+%Y-%m-%dT%H:%M:%S%z' 2>/dev/null || printf '%s' unknown-time)"; session_set start_epoch "$(date '+%s' 2>/dev/null || printf '%s' UNKNOWN)"
+    session_set total_bytes "$SESSION_TOTAL_BYTES"; session_set start_available_bytes "$SESSION_AVAILABLE_BYTES"; session_set min_available_bytes "$SESSION_AVAILABLE_BYTES"; session_set peak_used_percent "$SESSION_USED_PERCENT"; session_set pressure_events 0; session_set memory_state "$SESSION_STATE"; session_set psi_state "$SESSION_PSI_STATE"; session_set zram_state "$SESSION_ZRAM_STATE"; session_set zram_used "$SESSION_ZRAM_USED"; session_set swap_state "$SESSION_SWAP_STATE"
+    mem_log INFO "memory session start game=${1:-unnamed-game} state=$SESSION_STATE"
+    printf 'Memory session started: %s\n' "${1:-unnamed game}"
+}
+
+session_sample() {
+    [ "$(session_value active)" = 1 ] || return 0
+    session_snapshot
+    OLD_MIN="$(session_value min_available_bytes)"; OLD_PEAK="$(session_value peak_used_percent)"; EVENTS="$(session_value pressure_events)"
+    case "$SESSION_AVAILABLE_BYTES:$OLD_MIN" in ''|*[!0-9:]*|*UNKNOWN*) ;; *) [ "$SESSION_AVAILABLE_BYTES" -lt "$OLD_MIN" ] && session_set min_available_bytes "$SESSION_AVAILABLE_BYTES" ;; esac
+    case "$SESSION_USED_PERCENT:$OLD_PEAK" in ''|*[!0-9:]*|*UNKNOWN*) ;; *) [ "$SESSION_USED_PERCENT" -gt "$OLD_PEAK" ] && session_set peak_used_percent "$SESSION_USED_PERCENT" ;; esac
+    case "$SESSION_STATE" in PRESSURE|HIGH_PRESSURE|CRITICAL) EVENTS=$((EVENTS + 1)) ;; esac
+    [ "$SESSION_PSI_STATE" = PRESSURE ] && EVENTS=$((EVENTS + 1))
+    session_set pressure_events "$EVENTS"; session_set memory_state "$SESSION_STATE"; session_set psi_state "$SESSION_PSI_STATE"; session_set zram_state "$SESSION_ZRAM_STATE"; session_set zram_used "$SESSION_ZRAM_USED"; session_set swap_state "$SESSION_SWAP_STATE"
+}
+
+session_stop() {
+    [ "$(session_value active)" = 1 ] || { printf 'No active memory session.\n'; return 0; }
+    session_sample
+    START="$(session_value start_epoch)"; NOW="$(date '+%s' 2>/dev/null || printf '%s' UNKNOWN)"; DURATION=UNKNOWN
+    case "$START:$NOW" in *UNKNOWN*) ;; *) [ "$NOW" -ge "$START" ] 2>/dev/null && DURATION=$((NOW - START)) ;; esac
+    EVENTS="$(session_value pressure_events)"; PRESSURE=NONE; [ "$EVENTS" -gt 0 ] 2>/dev/null && PRESSURE=DETECTED
+    printf 'MEMORY SESSION REPORT\n=====================\nGame: %s\nDuration: %s seconds\nTotal RAM: %s\nStarting available: %s\nMinimum available: %s\nPeak used: %s%%\nMemory pressure: %s\nZRAM: %s\nSwap: %s\n' "$(session_value game)" "$DURATION" "$(fmt_mb "$(session_value total_bytes)")" "$(fmt_mb "$(session_value start_available_bytes)")" "$(fmt_mb "$(session_value min_available_bytes)")" "$(session_value peak_used_percent)" "$PRESSURE" "$(session_value zram_state)" "$(session_value swap_state)"
+    mem_log INFO "memory session stop game=$(session_value game) pressure=$PRESSURE"
+    rm -f "$RUNTIME_DIR/session.state" 2>/dev/null || :
+}
+
+psi_report() {
+    printf 'Memory PSI: %s\n' "$PSI_STATE"
+    for LABEL in some full; do
+        printf '%s avg10: %s\n%s avg60: %s\n%s avg300: %s\n' "$LABEL" "$(psi_value "$LABEL" 10)" "$LABEL" "$(psi_value "$LABEL" 60)" "$LABEL" "$(psi_value "$LABEL" 300)"
+    done
+}
+
+status_report() {
+    mem_values; memory_class
+    printf 'AX-T615 MEMORY STATUS\n=====================\n'
+    printf 'Physical RAM: %s\nAvailable RAM: %s\nUsed RAM: %s\nUsed percentage: %s\nAvailable percentage: %s\nMemFree (reference only): %s\nMemory state: %s\n' "$(fmt_mb "$MEM_TOTAL_BYTES")" "$(fmt_mb "$MEM_AVAILABLE_BYTES")" "$(fmt_mb "$MEM_USED_BYTES")" "$(fmt_pct "$MEM_USED_PERCENT")" "$(fmt_pct "$MEM_AVAILABLE_PERCENT")" "$(fmt_mb "$(field_bytes MemFree)")" "$MEMORY_STATE"
+    psi_report
+    zram_report
+    swap_report
+    mem_log INFO "status state=$MEMORY_STATE available_percent=$MEM_AVAILABLE_PERCENT psi=$PSI_STATE"
+}
+
+inspect_report() { mem_values; memory_psi_state; printf 'AX-T615 MEMORY INSPECT\n======================\n'; print_mem_fields; psi_report; zram_report; swap_report; mem_log INFO 'inspect'; }
+pressure_report() { mem_values; memory_class; printf 'Memory state: %s\n' "$MEMORY_STATE"; psi_report; printf 'Available RAM: %s\nUsed percentage: %s\n' "$(fmt_mb "$MEM_AVAILABLE_BYTES")" "$(fmt_pct "$MEM_USED_PERCENT")"; mem_log INFO "pressure state=$MEMORY_STATE"; }
+dry_run() { mem_values; memory_class; printf 'AX-T615 MEMORY DRY RUN\n=====================\nPhysical RAM: %s\nAvailable RAM: %s\nMemory state: %s\nRecommendation: READ-ONLY\nPlanned changes:\nNONE\nNo changes were made.\n' "$(fmt_mb "$MEM_TOTAL_BYTES")" "$(fmt_mb "$MEM_AVAILABLE_BYTES")" "$MEMORY_STATE"; mem_log INFO 'dry-run'; }
+
+case "${1:-status}" in
+    status) [ "$#" -eq 1 ] || exit 2; status_report ;;
+    inspect) [ "$#" -eq 1 ] || exit 2; inspect_report ;;
+    pressure) [ "$#" -eq 1 ] || exit 2; pressure_report ;;
+    zram) [ "$#" -eq 1 ] || exit 2; zram_report ;;
+    swap) [ "$#" -eq 1 ] || exit 2; swap_report ;;
+    dry-run) [ "$#" -eq 1 ] || exit 2; dry_run ;;
+    session-start) [ "$#" -le 2 ] || exit 2; session_start "${2:-unnamed game}" ;;
+    session-sample) [ "$#" -eq 1 ] || exit 2; session_sample ;;
+    session-stop) [ "$#" -eq 1 ] || exit 2; session_stop ;;
+    *) echo 'Usage: memory-controller {status|inspect|pressure|zram|swap|dry-run|session-start [game]|session-sample|session-stop}' >&2; exit 2 ;;
+esac

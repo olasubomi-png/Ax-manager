@@ -1,0 +1,30 @@
+#!/system/bin/sh
+set -u
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname "$0")" 2>/dev/null && pwd)"
+AXGO_ROOT="${AXGO_ROOT:-$(CDPATH= cd -- "$SCRIPT_DIR/.." 2>/dev/null && pwd)}"
+CONTROLLER="$SCRIPT_DIR/memory-controller"
+INTERVAL=2
+case "${1:-}" in
+    '') ;;
+    --interval)
+        [ "$#" -eq 2 ] || { echo 'Usage: memory-monitor [--interval seconds]' >&2; exit 2; }
+        INTERVAL="$2"
+        ;;
+    *) echo 'Usage: memory-monitor [--interval seconds]' >&2; exit 2 ;;
+esac
+case "$INTERVAL" in ''|*[!0-9]*|0) echo 'Interval must be a positive integer.' >&2; exit 2 ;; esac
+COUNT="${MEMORY_MONITOR_SAMPLES:-0}"
+case "$COUNT" in ''|*[!0-9]*) COUNT=0 ;; esac
+SAMPLE=0
+while :; do
+    STATUS="$(AXGO_ROOT="$AXGO_ROOT" AXGO_DATA_ROOT="${AXGO_DATA_ROOT:-$AXGO_ROOT}" sh "$CONTROLLER" status 2>/dev/null)"
+    AVAILABLE="$(printf '%s\n' "$STATUS" | sed -n 's/^Available RAM: //p' | head -n 1)"
+    USED="$(printf '%s\n' "$STATUS" | sed -n 's/^Used percentage: //p' | head -n 1)"
+    STATE="$(printf '%s\n' "$STATUS" | sed -n 's/^Memory state: //p' | head -n 1)"
+    PSI="$(printf '%s\n' "$STATUS" | sed -n 's/^Memory PSI: //p' | head -n 1)"
+    ZRAM="$(printf '%s\n' "$STATUS" | sed -n 's/^ZRAM: //p' | head -n 1)"
+    printf '%s | Available RAM: %s | Used: %s | State: %s | PSI: %s | ZRAM: %s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z' 2>/dev/null || printf '%s' unknown-time)" "${AVAILABLE:-UNKNOWN}" "${USED:-UNKNOWN}" "${STATE:-UNKNOWN}" "${PSI:-UNAVAILABLE}" "${ZRAM:-UNAVAILABLE}"
+    SAMPLE=$((SAMPLE + 1))
+    [ "$COUNT" -gt 0 ] && [ "$SAMPLE" -ge "$COUNT" ] && break
+    sleep "$INTERVAL"
+done

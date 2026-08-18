@@ -48,6 +48,8 @@ session_start() {
     echo "Thermal guard recommendation: $THERMAL_GUARD_RECOMMENDATION"
     GPU_DRY_RUN_OUTPUT="$(GPU_SKIP_THERMAL=true THERMAL_GUARD_RECOMMENDATION="$THERMAL_GUARD_RECOMMENDATION" sh "$AXGO_ROOT/bin/gpu-controller" dry-run "$PROFILE" 2>&1)"
     printf '%s\n' "$GPU_DRY_RUN_OUTPUT"
+    MEMORY_SESSION_OUTPUT="$(sh "$AXGO_ROOT/bin/memory-controller" session-start "$NAME" 2>&1)"
+    printf '%s\n' "$MEMORY_SESSION_OUTPUT"
     CPU_APPLY_OUTPUT="$(THERMAL_GUARD_RECOMMENDATION="$THERMAL_GUARD_RECOMMENDATION" CPU_DATA_ROOT="$AXGO_DATA_ROOT" sh "$AXGO_ROOT/bin/cpu-controller" apply "$PROFILE" 2>&1)"
     CPU_APPLY_STATUS=$?
     printf '%s\n' "$CPU_APPLY_OUTPUT"
@@ -81,6 +83,9 @@ session_stop() {
     GPU_RESTORE_OUTPUT="$(AXGO_DATA_ROOT="$AXGO_DATA_ROOT" sh "$AXGO_ROOT/bin/gpu-controller" restore 2>&1)"
     printf '%s\n' "$GPU_RESTORE_OUTPUT"
     axgo_log INFO "GPU restore requested at game stop"
+    MEMORY_SESSION_REPORT="$(sh "$AXGO_ROOT/bin/memory-controller" session-stop 2>&1)"
+    printf '%s\n' "$MEMORY_SESSION_REPORT"
+    axgo_log INFO "memory session report generated at game stop"
     axgo_remove_state gaming.state
     axgo_remove_state current_game
     axgo_remove_state current_package
@@ -97,6 +102,7 @@ session_status() {
     STATE="$(axgo_read_state "$AXGO_RUNTIME_DIR/gaming.state")"
     if [ "$STATE" = "active" ]; then
         sh "$AXGO_ROOT/bin/thermal-controller" session-sample >/dev/null 2>&1 || :
+        sh "$AXGO_ROOT/bin/memory-controller" session-sample >/dev/null 2>&1 || :
         echo "Gaming session: ACTIVE"
         echo "Current game: $(axgo_read_state "$AXGO_RUNTIME_DIR/current_game")"
         echo "Package: $(axgo_read_state "$AXGO_RUNTIME_DIR/current_package")"

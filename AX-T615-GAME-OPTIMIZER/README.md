@@ -418,3 +418,64 @@ unconditional GPU sysfs write path exists.
 
 Do not proceed to hardware tuning until the target kernel controls have been
 investigated.
+
+
+## Step 7A — Memory Monitoring & Pressure Guard
+
+Step 7A adds a read-only memory engine for RAM, PSI memory pressure, ZRAM, and
+swap visibility. It does not change RAM allocation, ZRAM size or algorithm,
+swap state, LMK/OOM settings, sysctl values, `/proc`, `/sys`, Android
+properties, or hardware performance controls. Thresholds in
+`config/memory-policy.json` are AX-manager monitoring thresholds only; they are
+not official TECNO, Unisoc, Linux, or Android limits.
+
+```sh
+./bin/memory-controller status
+./bin/memory-controller inspect
+./bin/memory-controller pressure
+./bin/memory-controller zram
+./bin/memory-controller swap
+./bin/memory-controller dry-run
+./bin/memory-guard recommend
+./bin/memory-monitor --interval 2
+./bin/axgo memory status
+./bin/axgo memory inspect
+./bin/axgo memory pressure
+./bin/axgo memory zram
+./bin/axgo memory swap
+./bin/axgo memory dry-run
+./bin/axgo memory guard recommend
+./bin/axgo memory monitor --interval 2
+```
+
+The controller reads `MemTotal`, `MemAvailable`, `MemFree`, used and available
+percentages, major `/proc/meminfo` fields, PSI `some` and `full` windows, ZRAM
+size and compression statistics when exposed, and active swap devices. Missing,
+malformed, or permission-denied data is reported as `UNKNOWN` or
+`UNAVAILABLE`; it is never invented. A ZRAM device is reported as `ACTIVE`,
+`INACTIVE`, or `UNKNOWN`, and swap is reported as `ACTIVE`, `INACTIVE`, or
+`UNAVAILABLE`.
+
+The memory decision layer classifies observations as `OPTIMAL`, `NORMAL`,
+`PRESSURE`, `HIGH_PRESSURE`, `CRITICAL`, or `UNKNOWN`. The memory guard maps
+these to the recommendation labels `NORMAL`, `CONSERVATIVE`, `CRITICAL`, or
+`UNKNOWN`. These recommendations are informational only and never invoke
+`swapon`, `swapoff`, `zramctl`, `sysctl`, LMK/OOM changes, or any write to
+`/proc` or `/sys`. `dry-run` always reports `Planned changes: NONE`.
+
+The monitor prints bounded timestamped samples containing available RAM, used
+percentage, memory state, PSI state, and ZRAM state. Game-session start records
+the total and starting available RAM plus memory, PSI, ZRAM, and swap state.
+Active sessions update the minimum available RAM, peak used percentage, pressure
+events, and final states. Game-session stop emits a `MEMORY SESSION REPORT` with
+duration, total RAM, starting and minimum available RAM, peak used percentage,
+pressure indication, ZRAM state, and swap state. Runtime state is stored only in
+`runtime/memory/` and is removed after a report is generated; samples and events
+are recorded in `logs/memory.log` without private information.
+
+The labeled TEST DATA fixtures under `tests/fixtures/memory/` cover optimal,
+normal, pressure, high-pressure, critical, missing, and incomplete data. The
+Step 7A tests validate RAM calculations, PSI and ZRAM/swap detection,
+classification and fail-safe recommendations, bounded monitoring, game-session
+capture and reporting, axgo routing, fixture immutability, and the absence of
+memory hardware write commands.

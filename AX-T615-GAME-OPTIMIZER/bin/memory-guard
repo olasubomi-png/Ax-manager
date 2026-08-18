@@ -1,0 +1,29 @@
+#!/system/bin/sh
+set -u
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname "$0")" 2>/dev/null && pwd)"
+AXGO_ROOT="${AXGO_ROOT:-$(CDPATH= cd -- "$SCRIPT_DIR/.." 2>/dev/null && pwd)}"
+CONTROLLER="$SCRIPT_DIR/memory-controller"
+MEMORY_GUARD_DATA_ROOT="${MEMORY_GUARD_DATA_ROOT:-${AXGO_DATA_ROOT:-$AXGO_ROOT}}"
+
+recommendation() {
+    OUTPUT="$(AXGO_ROOT="$AXGO_ROOT" AXGO_DATA_ROOT="$MEMORY_GUARD_DATA_ROOT" sh "$CONTROLLER" pressure 2>/dev/null)"
+    STATE="$(printf '%s\n' "$OUTPUT" | sed -n 's/^Memory state: //p' | head -n 1)"
+    case "$STATE" in
+        OPTIMAL|NORMAL) RECOMMENDATION=NORMAL ;;
+        PRESSURE|HIGH_PRESSURE) RECOMMENDATION=CONSERVATIVE ;;
+        CRITICAL) RECOMMENDATION=CRITICAL ;;
+        *) STATE=UNKNOWN; RECOMMENDATION=UNKNOWN ;;
+    esac
+    printf '%s\n' "$OUTPUT"
+    printf 'Recommendation: %s\n' "$RECOMMENDATION"
+}
+
+case "${1:-status}" in
+    status|check|recommend)
+        [ "$#" -eq 1 ] || { echo 'Usage: memory-guard {status|check|recommend}' >&2; exit 2; }
+        echo 'AX-T615 MEMORY GUARD'
+        echo '===================='
+        recommendation
+        ;;
+    *) echo 'Usage: memory-guard {status|check|recommend}' >&2; exit 2 ;;
+esac
