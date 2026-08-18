@@ -41,7 +41,12 @@ session_start() {
     axgo_log INFO "profile selected package=$PACKAGE profile=$PROFILE"
     axgo_log INFO "game started package=$PACKAGE name=${NAME:-unnamed game} profile=$PROFILE"
     sh "$AXGO_ROOT/bin/thermal-controller" session-start >/dev/null 2>&1 || :
-    CPU_APPLY_OUTPUT="$(CPU_DATA_ROOT="$AXGO_DATA_ROOT" sh "$AXGO_ROOT/bin/cpu-controller" apply "$PROFILE" 2>&1)"
+    THERMAL_GUARD_OUTPUT="$(THERMAL_DATA_ROOT="$AXGO_DATA_ROOT" sh "$AXGO_ROOT/bin/thermal-guard" game-start "$NAME" 2>&1)"
+    printf '%s\n' "$THERMAL_GUARD_OUTPUT"
+    THERMAL_GUARD_RECOMMENDATION="$(printf '%s\n' "$THERMAL_GUARD_OUTPUT" | sed -n 's/^Initial recommendation: //p' | head -n 1)"
+    [ -n "$THERMAL_GUARD_RECOMMENDATION" ] || THERMAL_GUARD_RECOMMENDATION=CONSERVATIVE
+    echo "Thermal guard recommendation: $THERMAL_GUARD_RECOMMENDATION"
+    CPU_APPLY_OUTPUT="$(THERMAL_GUARD_RECOMMENDATION="$THERMAL_GUARD_RECOMMENDATION" CPU_DATA_ROOT="$AXGO_DATA_ROOT" sh "$AXGO_ROOT/bin/cpu-controller" apply "$PROFILE" 2>&1)"
     CPU_APPLY_STATUS=$?
     printf '%s\n' "$CPU_APPLY_OUTPUT"
     if [ "$CPU_APPLY_STATUS" -eq 0 ] && printf '%s\n' "$CPU_APPLY_OUTPUT" | grep -q "CPU changes applied safely"; then
@@ -65,6 +70,8 @@ session_stop() {
     fi
     PACKAGE="$(axgo_read_state "$AXGO_RUNTIME_DIR/current_package")"
     NAME="$(axgo_read_state "$AXGO_RUNTIME_DIR/current_game")"
+    THERMAL_GUARD_OUTPUT="$(THERMAL_DATA_ROOT="$AXGO_DATA_ROOT" sh "$AXGO_ROOT/bin/thermal-guard" game-stop 2>&1)"
+    printf '%s\n' "$THERMAL_GUARD_OUTPUT"
     sh "$AXGO_ROOT/bin/thermal-controller" session-stop || :
     axgo_log INFO "game stopped package=${PACKAGE:-unknown} name=${NAME:-unknown}"
     CPU_RESTORE_OUTPUT="$(CPU_DATA_ROOT="$AXGO_DATA_ROOT" sh "$AXGO_ROOT/bin/cpu-controller" restore 2>&1)"

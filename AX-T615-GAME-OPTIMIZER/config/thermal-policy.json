@@ -1,0 +1,32 @@
+{
+  "policy_name": "AX-manager conservative policy thresholds",
+  "policy_description": "These values are AX-manager policy thresholds, not official TECNO or Unisoc thermal limits.",
+  "classification": {
+    "optimal_max_c": 40,
+    "normal_max_c": 45,
+    "caution_max_c": 50,
+    "critical_min_c": 55
+  },
+  "recovery": {
+    "optimal_recovery_c": 0,
+    "normal_recovery_c": 38,
+    "caution_recovery_c": 43,
+    "throttled_recovery_c": 47,
+    "critical_recovery_c": 52
+  },
+  "hysteresis": {
+    "enabled": true,
+    "stable_recovery_samples": 3
+  },
+  "monitoring_interval_seconds": 3,
+  "maximum_permitted_optimization_state": "NORMAL",
+  "gpu_action": "NONE",
+  "safety": {
+    "read_only_thermal_control": true,
+    "allow_trip_point_writes": false,
+    "allow_cooling_device_writes": false,
+    "allow_cpu_frequency_writes": false,
+    "allow_cpu_governor_writes": false,
+    "allow_gpu_tuning": false
+  }
+}

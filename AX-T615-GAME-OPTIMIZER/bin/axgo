@@ -47,7 +47,18 @@ case "$COMMAND" in
         if [ "$#" -eq 0 ]; then
             exec sh "$SCRIPT_DIR/thermal-controller" status
         fi
-        exec sh "$SCRIPT_DIR/thermal-controller" "$@"
+        case "${1:-}" in
+            guard)
+                shift
+                if [ "$#" -eq 0 ]; then
+                    exec sh "$SCRIPT_DIR/thermal-guard" status
+                fi
+                exec sh "$SCRIPT_DIR/thermal-guard" "$@"
+                ;;
+            *)
+                exec sh "$SCRIPT_DIR/thermal-controller" "$@"
+                ;;
+        esac
         ;;
     gaming)
         echo "Gaming optimization is not implemented yet."
@@ -57,7 +68,7 @@ case "$COMMAND" in
         exec sh "$SCRIPT_DIR/cpu-reset"
         ;;
     *)
-        echo "Usage: axgo {status|detect|capabilities [--save]|cpu [status|inspect|dry-run|apply <profile>|restore|reset]|games|game {status|detect|start|stop|current}|profile [get|set <profile>]|session [start|stop|status|current]|recovery [status|reset]|thermal [status|inspect|monitor|dry-run]|gaming|reset}"
+        echo "Usage: axgo {status|detect|capabilities [--save]|cpu [status|inspect|dry-run|apply <profile>|restore|reset]|games|game {status|detect|start|stop|current}|profile [get|set <profile>]|session [start|stop|status|current]|recovery [status|reset]|thermal [status|inspect|monitor|dry-run|guard [status|check|recommend|game-start|game-stop]]|gaming|reset}"
         exit 2
         ;;
 esac

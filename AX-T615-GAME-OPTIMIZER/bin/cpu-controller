@@ -438,7 +438,38 @@ cpu_apply() {
         echo "Invalid profile: $CPU_REQUESTED_PROFILE" >&2
         return 2
     }
-    cpu_log INFO "apply request profile=$CPU_REQUESTED_PROFILE"
+    THERMAL_GUARD_RECOMMENDATION="${THERMAL_GUARD_RECOMMENDATION:-UNSPECIFIED}"
+    case "$THERMAL_GUARD_RECOMMENDATION" in
+        BLOCKED)
+            cpu_log WARN "apply blocked profile=$CPU_REQUESTED_PROFILE reason=thermal-guard-blocked"
+            echo "AX-T615 CPU APPLY"
+            echo "================="
+            echo "Thermal recommendation: BLOCKED"
+            echo "CPU performance changes are blocked by the thermal guard."
+            echo "NO CHANGES MADE"
+            return 0
+            ;;
+        BALANCED|CONSERVATIVE)
+            echo "Thermal recommendation: $THERMAL_GUARD_RECOMMENDATION"
+            if [ "$CPU_REQUESTED_PROFILE" = "performance" ]; then
+                CPU_REQUESTED_PROFILE=balanced
+                cpu_log INFO "thermal guard constrained requested profile to balanced recommendation=$THERMAL_GUARD_RECOMMENDATION"
+                echo "Requested performance profile constrained to BALANCED by the thermal guard."
+            fi
+            ;;
+        BOOST|UNSPECIFIED)
+            [ "$THERMAL_GUARD_RECOMMENDATION" = BOOST ] && echo "Thermal recommendation: BOOST" || :
+            ;;
+        *)
+            cpu_log WARN "apply constrained profile=$CPU_REQUESTED_PROFILE reason=invalid-thermal-recommendation"
+            echo "Thermal recommendation: UNKNOWN"
+            if [ "$CPU_REQUESTED_PROFILE" = "performance" ]; then
+                CPU_REQUESTED_PROFILE=balanced
+                echo "Requested performance profile constrained to BALANCED by fail-safe policy."
+            fi
+            ;;
+    esac
+    cpu_log INFO "apply request profile=$CPU_REQUESTED_PROFILE thermal_recommendation=$THERMAL_GUARD_RECOMMENDATION"
     echo "AX-T615 CPU APPLY"
     echo "================="
     echo "Requested profile: $(cpu_profile_upper "$CPU_REQUESTED_PROFILE")"

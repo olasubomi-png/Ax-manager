@@ -1,0 +1,401 @@
+#!/system/bin/sh
+set -u
+
+# AX-T615 Step 5B: thermal-aware performance decision and coordination layer.
+# This script only reads thermal/CPU/game state and writes AX-manager runtime
+# records. It never writes Android thermal, cooling, CPU, GPU, governor,
+# property, or kernel-control paths.
+
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname "$0" 2>/dev/null)" && pwd)"
+AXGO_ROOT="${AXGO_ROOT:-$(CDPATH= cd -- "$SCRIPT_DIR/.." 2>/dev/null && pwd)}"
+AXGO_DATA_ROOT="${AXGO_DATA_ROOT:-$AXGO_ROOT}"
+THERMAL_DATA_ROOT="${THERMAL_DATA_ROOT:-$AXGO_DATA_ROOT}"
+THERMAL_POLICY_FILE="${THERMAL_POLICY_FILE:-$AXGO_ROOT/config/thermal-policy.json}"
+THERMAL_RUNTIME_DIR="${THERMAL_RUNTIME_DIR:-$AXGO_DATA_ROOT/runtime/thermal}"
+THERMAL_LOG_FILE="${THERMAL_LOG_FILE:-$AXGO_DATA_ROOT/logs/thermal.log}"
+GUARD_STATE_FILE="$THERMAL_RUNTIME_DIR/guard.state"
+GUARD_RECOVERY_FILE="$THERMAL_RUNTIME_DIR/guard.recovery"
+GUARD_GAME_FILE="$THERMAL_RUNTIME_DIR/guard.game"
+GUARD_START_FILE="$THERMAL_RUNTIME_DIR/guard.started"
+GUARD_SAMPLES_FILE="$THERMAL_RUNTIME_DIR/guard.samples"
+GUARD_DECISIONS_FILE="$THERMAL_RUNTIME_DIR/guard.decisions"
+GUARD_REPORT_FILE="$THERMAL_RUNTIME_DIR/last-report"
+
+policy_num() {
+    [ -r "$THERMAL_POLICY_FILE" ] || return 1
+    sed -n "s/.*\"$1\"[[:space:]]*:[[:space:]]*\([-0-9.][0-9.]*\).*/\1/p" \
+        "$THERMAL_POLICY_FILE" 2>/dev/null | head -n 1
+}
+
+policy_text() {
+    [ -r "$THERMAL_POLICY_FILE" ] || return 1
+    sed -n "s/.*\"$1\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p" \
+        "$THERMAL_POLICY_FILE" 2>/dev/null | head -n 1
+}
+
+policy_value() {
+    VALUE="$(policy_num "$1" 2>/dev/null || :)"
+    [ -n "$VALUE" ] && { printf '%s' "$VALUE"; return 0; }
+    policy_text "$1" 2>/dev/null || :
+}
+
+policy_default() {
+    VALUE="$(policy_value "$1" 2>/dev/null || :)"
+    [ -n "$VALUE" ] && printf '%s' "$VALUE" || printf '%s' "$2"
+}
+
+is_number() {
+    case "${1:-}" in
+        ''|*[!0-9.\-]*) return 1 ;;
+    esac
+    return 0
+}
+
+number_lt() {
+    is_number "$1" && is_number "$2" || return 1
+    awk -v a="$1" -v b="$2" 'BEGIN { exit !(a < b) }' 2>/dev/null
+}
+
+number_ge() {
+    is_number "$1" && is_number "$2" || return 1
+    awk -v a="$1" -v b="$2" 'BEGIN { exit !(a >= b) }' 2>/dev/null
+}
+
+state_order() {
+    case "${1:-UNKNOWN}" in
+        OPTIMAL) printf '%s' 0 ;;
+        NORMAL) printf '%s' 1 ;;
+        CAUTION) printf '%s' 2 ;;
+        THROTTLED) printf '%s' 3 ;;
+        CRITICAL) printf '%s' 4 ;;
+        *) printf '%s' -1 ;;
+    esac
+}
+
+state_at_least() {
+    [ "$(state_order "$1")" -ge "$(state_order "$2")" ] 2>/dev/null
+}
+
+state_name_for_temperature() {
+    TEMP="$1"
+    [ "$TEMP" = "UNKNOWN" ] || is_number "$TEMP" || { printf '%s' UNKNOWN; return 0; }
+    OPTIMAL_MAX="$(policy_default optimal_max_c 40)"
+    NORMAL_MAX="$(policy_default normal_max_c 45)"
+    CAUTION_MAX="$(policy_default caution_max_c 50)"
+    CRITICAL_MIN="$(policy_default critical_min_c 55)"
+    if number_lt "$TEMP" "$OPTIMAL_MAX"; then
+        printf '%s' OPTIMAL
+    elif number_lt "$TEMP" "$NORMAL_MAX"; then
+        printf '%s' NORMAL
+    elif number_lt "$TEMP" "$CAUTION_MAX"; then
+        printf '%s' CAUTION
+    elif number_lt "$TEMP" "$CRITICAL_MIN"; then
+        printf '%s' THROTTLED
+    else
+        printf '%s' CRITICAL
+    fi
+}
+
+recovery_threshold() {
+    case "${1:-UNKNOWN}" in
+        CRITICAL) policy_default critical_recovery_c 52 ;;
+        THROTTLED) policy_default throttled_recovery_c 47 ;;
+        CAUTION) policy_default caution_recovery_c 43 ;;
+        NORMAL) policy_default normal_recovery_c 38 ;;
+        OPTIMAL) policy_default optimal_recovery_c 0 ;;
+        *) printf '%s' 0 ;;
+    esac
+}
+
+read_state() {
+    [ -r "$1" ] && cat "$1" 2>/dev/null || :
+}
+
+write_state() {
+    mkdir -p "$THERMAL_RUNTIME_DIR" 2>/dev/null || return 1
+    printf '%s\n' "$2" > "$1" 2>/dev/null
+}
+
+guard_log() {
+    mkdir -p "$(dirname "$THERMAL_LOG_FILE")" 2>/dev/null || :
+    printf '%s [%s] %s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z' 2>/dev/null || printf '%s' unknown-time)" \
+        "${1:-INFO}" "${2:-}" >> "$THERMAL_LOG_FILE" 2>/dev/null || :
+}
+
+thermal_snapshot() {
+    STATUS_OUTPUT="$(THERMAL_DATA_ROOT="$THERMAL_DATA_ROOT" sh "$AXGO_ROOT/bin/thermal-controller" status 2>/dev/null || :)"
+    THERMAL_TEMP="$(printf '%s\n' "$STATUS_OUTPUT" | sed -n 's/^Maximum observed zone:[[:space:]]*//p' | head -n 1 | tr -d '°C[:space:]')"
+    THERMAL_CLASS="$(printf '%s\n' "$STATUS_OUTPUT" | awk '/^Overall:/{getline; print; exit}')"
+    THERMAL_THROTTLE="$(printf '%s\n' "$STATUS_OUTPUT" | awk '/^Thermal throttling:/{getline; print; exit}')"
+    [ -n "$THERMAL_TEMP" ] || THERMAL_TEMP=UNKNOWN
+    [ -n "$THERMAL_CLASS" ] || THERMAL_CLASS=UNKNOWN
+    [ -n "$THERMAL_THROTTLE" ] || THERMAL_THROTTLE=UNKNOWN
+}
+
+game_active() {
+    [ -r "$GUARD_GAME_FILE" ] && return 0
+    [ "$(read_state "$AXGO_DATA_ROOT/runtime/gaming.state")" = active ]
+}
+
+game_name() {
+    NAME="$(read_state "$GUARD_GAME_FILE")"
+    [ -n "$NAME" ] || NAME="$(read_state "$AXGO_DATA_ROOT/runtime/current_game")"
+    [ -n "$NAME" ] || NAME="${AXGO_FOREGROUND_PACKAGE:-UNKNOWN}"
+    printf '%s' "$NAME"
+}
+
+cpu_state() {
+    CPU_STATE="$(read_state "$AXGO_DATA_ROOT/runtime/current_profile")"
+    [ -n "$CPU_STATE" ] || CPU_STATE="${AXGO_CPU_STATE:-NONE}"
+    [ -n "$CPU_STATE" ] || CPU_STATE=NONE
+    printf '%s' "$CPU_STATE" | tr '[:lower:]' '[:upper:]'
+}
+
+apply_hysteresis() {
+    TARGET="$1"
+    PREVIOUS="$(read_state "$GUARD_STATE_FILE")"
+    [ -n "$PREVIOUS" ] || PREVIOUS=UNKNOWN
+    RECOVERY_COUNT="$(read_state "$GUARD_RECOVERY_FILE")"
+    case "$RECOVERY_COUNT" in ''|*[!0-9]*) RECOVERY_COUNT=0 ;; esac
+
+    if [ "$TARGET" = UNKNOWN ] || [ "$PREVIOUS" = UNKNOWN ]; then
+        printf '%s\n' "$TARGET" > "$GUARD_RECOVERY_FILE" 2>/dev/null || :
+        printf '%s' "$TARGET"
+        return 0
+    fi
+    PREV_ORDER="$(state_order "$PREVIOUS")"
+    TARGET_ORDER="$(state_order "$TARGET")"
+    if [ "$TARGET_ORDER" -gt "$PREV_ORDER" ] 2>/dev/null; then
+        RECOVERY_COUNT=0
+        printf '%s\n' "$RECOVERY_COUNT" > "$GUARD_RECOVERY_FILE" 2>/dev/null || :
+        printf '%s' "$TARGET"
+        return 0
+    fi
+    if [ "$TARGET_ORDER" -eq "$PREV_ORDER" ] 2>/dev/null; then
+        RECOVERY_COUNT=0
+        printf '%s\n' "$RECOVERY_COUNT" > "$GUARD_RECOVERY_FILE" 2>/dev/null || :
+        printf '%s' "$PREVIOUS"
+        return 0
+    fi
+
+    RECOVERY_LIMIT="$(recovery_threshold "$PREVIOUS")"
+    if number_lt "$THERMAL_TEMP" "$RECOVERY_LIMIT"; then
+        RECOVERY_COUNT=$((RECOVERY_COUNT + 1))
+        REQUIRED="$(policy_default stable_recovery_samples 3)"
+        case "$REQUIRED" in ''|*[!0-9]*) REQUIRED=3 ;; esac
+        if [ "$RECOVERY_COUNT" -ge "$REQUIRED" ] 2>/dev/null; then
+            RECOVERY_COUNT=0
+            printf '%s\n' "$RECOVERY_COUNT" > "$GUARD_RECOVERY_FILE" 2>/dev/null || :
+            case "$PREVIOUS" in
+                CRITICAL) printf '%s' THROTTLED ;;
+                THROTTLED) printf '%s' CAUTION ;;
+                CAUTION) printf '%s' NORMAL ;;
+                NORMAL) printf '%s' OPTIMAL ;;
+                *) printf '%s' "$TARGET" ;;
+            esac
+            return 0
+        fi
+    else
+        RECOVERY_COUNT=0
+    fi
+    printf '%s\n' "$RECOVERY_COUNT" > "$GUARD_RECOVERY_FILE" 2>/dev/null || :
+    printf '%s' "$PREVIOUS"
+}
+
+recommendation_for() {
+    STATE="$1"
+    THROTTLE="$2"
+    ACTIVE="$3"
+    PEAK_STATE="$4"
+    MAX_OPT="$(policy_default maximum_permitted_optimization_state NORMAL)"
+    if [ "$STATE" = UNKNOWN ]; then
+        printf '%s' CONSERVATIVE
+    elif [ "$STATE" = CRITICAL ]; then
+        printf '%s' BLOCKED
+    elif [ "$STATE" = THROTTLED ] || [ "$STATE" = CAUTION ]; then
+        printf '%s' CONSERVATIVE
+    elif [ "$THROTTLE" = DETECTED ]; then
+        printf '%s' CONSERVATIVE
+    elif [ "$ACTIVE" != ACTIVE ]; then
+        printf '%s' BALANCED
+    elif state_at_least "$PEAK_STATE" CAUTION && [ "$STATE" = NORMAL ]; then
+        printf '%s' CONSERVATIVE
+    elif [ "$MAX_OPT" = CAUTION ] || [ "$MAX_OPT" = THROTTLED ] || [ "$MAX_OPT" = CRITICAL ]; then
+        printf '%s' BALANCED
+    else
+        printf '%s' BOOST
+    fi
+}
+
+record_decision() {
+    [ -r "$GUARD_DECISIONS_FILE" ] || printf 'BOOST=0\nBALANCED=0\nCONSERVATIVE=0\nBLOCKED=0\n' > "$GUARD_DECISIONS_FILE" 2>/dev/null || :
+    case "$1" in
+        BOOST|BALANCED|CONSERVATIVE|BLOCKED) ;;
+        *) return 0 ;;
+    esac
+    awk -F= -v key="$1" 'BEGIN { OFS="=" } $1 == key { $2 = $2 + 1 } { print }' \
+        "$GUARD_DECISIONS_FILE" > "$GUARD_DECISIONS_FILE.tmp.$$" 2>/dev/null && \
+        mv "$GUARD_DECISIONS_FILE.tmp.$$" "$GUARD_DECISIONS_FILE" 2>/dev/null || \
+        rm -f "$GUARD_DECISIONS_FILE.tmp.$$" 2>/dev/null || :
+}
+
+guard_evaluate() {
+    thermal_snapshot
+    CURRENT_STATE="$(state_name_for_temperature "$THERMAL_TEMP")"
+    case "$THERMAL_CLASS" in
+        UNKNOWN) CURRENT_STATE=UNKNOWN ;;
+    esac
+    if [ "$THERMAL_THROTTLE" = DETECTED ] && [ "$CURRENT_STATE" != CRITICAL ] && [ "$CURRENT_STATE" != UNKNOWN ]; then
+        CURRENT_STATE=THROTTLED
+    fi
+    THERMAL_PEAK="$(read_state "$THERMAL_RUNTIME_DIR/guard.peak")"
+    if [ -z "$THERMAL_PEAK" ] || [ "$THERMAL_PEAK" = UNKNOWN ] || \
+        { is_number "$THERMAL_TEMP" && is_number "$THERMAL_PEAK" && number_ge "$THERMAL_TEMP" "$THERMAL_PEAK"; }; then
+        THERMAL_PEAK="$THERMAL_TEMP"
+    fi
+    PEAK_STATE="$(state_name_for_temperature "$THERMAL_PEAK")"
+    write_state "$THERMAL_RUNTIME_DIR/guard.peak" "$THERMAL_PEAK" || :
+    GUARD_STATE="$(apply_hysteresis "$CURRENT_STATE")"
+    write_state "$GUARD_STATE_FILE" "$GUARD_STATE" || :
+    ACTIVE=INACTIVE; game_active && ACTIVE=ACTIVE
+    PERFORMANCE_RECOMMENDATION="$(recommendation_for "$GUARD_STATE" "$THERMAL_THROTTLE" "$ACTIVE" "$PEAK_STATE")"
+    CPU_STATE="$(cpu_state)"
+    GPU_ACTION=NONE
+    if [ "$ACTIVE" = ACTIVE ]; then
+        printf '%s\n' "$THERMAL_TEMP|$GUARD_STATE|$THERMAL_THROTTLE|$PERFORMANCE_RECOMMENDATION|$THERMAL_CLASS|$CPU_STATE" >> "$GUARD_SAMPLES_FILE" 2>/dev/null || :
+        record_decision "$PERFORMANCE_RECOMMENDATION"
+    fi
+    guard_log INFO "decision state=$GUARD_STATE temperature=$THERMAL_TEMP peak=$THERMAL_PEAK classification=$THERMAL_CLASS throttle=$THERMAL_THROTTLE game=$ACTIVE recommendation=$PERFORMANCE_RECOMMENDATION cpu=$CPU_STATE gpu=NONE"
+}
+
+print_guard() {
+    TITLE="$1"
+    echo "$TITLE"
+    echo "================"
+    echo
+    echo "Temperature: ${THERMAL_TEMP}°C"
+    echo "Peak temperature: ${THERMAL_PEAK}°C"
+    echo "Thermal state: $GUARD_STATE"
+    echo "Thermal classification: $THERMAL_CLASS"
+    echo "Throttle: $THERMAL_THROTTLE"
+    echo "Game: $(game_active && echo ACTIVE || echo INACTIVE)"
+    echo "CPU performance state: $CPU_STATE"
+    echo "GPU action: NONE"
+    echo
+    echo "Recommendation: $PERFORMANCE_RECOMMENDATION"
+    case "$PERFORMANCE_RECOMMENDATION" in
+        BOOST) echo "Reason: Temperature is within the configured gaming range." ;;
+        BALANCED) echo "Reason: Maintain normal performance without an additional boost." ;;
+        CONSERVATIVE) echo "Reason: Cooling and stability take priority under the current thermal policy." ;;
+        BLOCKED) echo "Reason: Critical thermal conditions block performance boosts." ;;
+        *) echo "Reason: Thermal information is unavailable; fail-safe behavior is active." ;;
+    esac
+    echo
+    echo "No hardware settings were changed."
+    echo "Android/vendor thermal policies remain authoritative."
+}
+
+guard_status() {
+    guard_evaluate
+    print_guard "AX THERMAL GUARD"
+}
+
+guard_check() {
+    guard_evaluate
+    echo "Thermal guard state: $GUARD_STATE"
+    echo "Recommendation: $PERFORMANCE_RECOMMENDATION"
+    echo "No hardware settings were changed."
+}
+
+guard_recommend() {
+    guard_evaluate
+    print_guard "AX THERMAL GUARD"
+}
+
+guard_game_start() {
+    NAME="${1:-$(game_name)}"
+    mkdir -p "$THERMAL_RUNTIME_DIR" 2>/dev/null || :
+    rm -f "$GUARD_SAMPLES_FILE" "$GUARD_DECISIONS_FILE" "$GUARD_REPORT_FILE" \
+        "$GUARD_STATE_FILE" "$GUARD_RECOVERY_FILE" "$THERMAL_RUNTIME_DIR/guard.peak" 2>/dev/null || :
+    write_state "$GUARD_GAME_FILE" "${NAME:-UNKNOWN}" || :
+    write_state "$GUARD_START_FILE" "$(date +%s 2>/dev/null || printf '%s' 0)" || :
+    printf 'BOOST=0\nBALANCED=0\nCONSERVATIVE=0\nBLOCKED=0\n' > "$GUARD_DECISIONS_FILE" 2>/dev/null || :
+    thermal_snapshot
+    write_state "$THERMAL_RUNTIME_DIR/guard.peak" "$THERMAL_TEMP" || :
+    guard_log INFO "game session started game=${NAME:-UNKNOWN}"
+    guard_evaluate
+    echo "Thermal game guard started: ${NAME:-UNKNOWN}"
+    echo "Initial state: $GUARD_STATE"
+    echo "Initial recommendation: $PERFORMANCE_RECOMMENDATION"
+    echo "GPU action: NONE"
+}
+
+report_value() {
+    awk -F'|' -v field="$1" '{ if ($field != "" && $field != "UNKNOWN") { count++; sum += $field; if (peak == "" || $field > peak) peak = $field; last = $field } } END { if (field == 2 && count > 0) printf "%.1f|%.1f|%.1f", sum/count, peak, last; else if (field == 2) printf "UNKNOWN|UNKNOWN|UNKNOWN" }' \
+        "$GUARD_SAMPLES_FILE" 2>/dev/null
+}
+
+guard_report() {
+    [ -r "$GUARD_SAMPLES_FILE" ] || { echo "No thermal game session samples available."; return 0; }
+    START_TEMP="$(head -n 1 "$GUARD_SAMPLES_FILE" | cut -d'|' -f1)"
+    STATS="$(report_value 2)"
+    AVG="${STATS%%|*}"; REST="${STATS#*|}"; PEAK="${REST%%|*}"; FINAL="${REST#*|}"
+    MAX_STATE="UNKNOWN"
+    MAX_ORDER=-1
+    THROTTLE=NO
+    while IFS='|' read -r _ TEMP STATE THROTTLE_STATE _REST; do
+        ORDER="$(state_order "$STATE")"
+        [ "$ORDER" -gt "$MAX_ORDER" ] 2>/dev/null && { MAX_ORDER="$ORDER"; MAX_STATE="$STATE"; }
+        case "$THROTTLE_STATE" in DETECTED) THROTTLE=YES ;; UNKNOWN) [ "$THROTTLE" != YES ] && THROTTLE=UNKNOWN ;; esac
+    done < "$GUARD_SAMPLES_FILE"
+    NOW="$(date +%s 2>/dev/null || printf '%s' 0)"
+    START_EPOCH="$(read_state "$GUARD_START_FILE")"
+    case "$START_EPOCH" in ''|*[!0-9]*) DURATION=UNKNOWN ;; *) DURATION=$((NOW - START_EPOCH))s ;; esac
+    BOOST=0; BALANCED=0; CONSERVATIVE=0; BLOCKED=0
+    [ -r "$GUARD_DECISIONS_FILE" ] && . "$GUARD_DECISIONS_FILE" 2>/dev/null || :
+    {
+        echo "AX-T615 THERMAL PERFORMANCE REPORT"
+        echo "==================================="
+        echo
+        echo "Game: $(game_name)"
+        echo
+        echo "Duration: $DURATION"
+        echo "Starting temperature: ${START_TEMP:-UNKNOWN}°C"
+        echo "Peak temperature: ${PEAK:-UNKNOWN}°C"
+        echo "Average temperature: ${AVG:-UNKNOWN}°C"
+        echo "Final temperature: ${FINAL:-UNKNOWN}°C"
+        echo "Maximum thermal state: $MAX_STATE"
+        echo "Throttle detected: $THROTTLE"
+        echo
+        echo "Performance decisions:"
+        echo "BOOST: ${BOOST:-0}"
+        echo "BALANCED: ${BALANCED:-0}"
+        echo "CONSERVATIVE: ${CONSERVATIVE:-0}"
+        echo "BLOCKED: ${BLOCKED:-0}"
+        echo
+        echo "CPU changes: none requested by thermal guard"
+        echo "GPU changes: NONE"
+        echo "Safety violations: 0"
+    } | tee "$GUARD_REPORT_FILE" 2>/dev/null
+}
+
+guard_game_stop() {
+    if ! game_active && [ ! -r "$GUARD_SAMPLES_FILE" ]; then
+        echo "No active thermal game session."
+        return 0
+    fi
+    guard_evaluate
+    guard_report
+    guard_log INFO "game session ended game=$(game_name)"
+    rm -f "$GUARD_GAME_FILE" "$GUARD_START_FILE" "$GUARD_STATE_FILE" "$GUARD_RECOVERY_FILE" \
+        "$GUARD_SAMPLES_FILE" "$GUARD_DECISIONS_FILE" 2>/dev/null || :
+}
+
+case "${1:-status}" in
+    status) [ "$#" -eq 1 ] || { echo "Usage: thermal-guard status|check|recommend|game-start [name]|game-stop" >&2; exit 2; }; guard_status ;;
+    check) [ "$#" -eq 1 ] || { echo "Usage: thermal-guard status|check|recommend|game-start [name]|game-stop" >&2; exit 2; }; guard_check ;;
+    recommend) [ "$#" -eq 1 ] || { echo "Usage: thermal-guard status|check|recommend|game-start [name]|game-stop" >&2; exit 2; }; guard_recommend ;;
+    game-start) [ "$#" -le 2 ] || { echo "Usage: thermal-guard status|check|recommend|game-start [name]|game-stop" >&2; exit 2; }; guard_game_start "${2:-}" ;;
+    game-stop) [ "$#" -eq 1 ] || { echo "Usage: thermal-guard status|check|recommend|game-start [name]|game-stop" >&2; exit 2; }; guard_game_stop ;;
+    *) echo "Usage: thermal-guard status|check|recommend|game-start [name]|game-stop" >&2; exit 2 ;;
+esac

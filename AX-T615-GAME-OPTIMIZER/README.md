@@ -254,6 +254,51 @@ events are recorded in `logs/thermal.log`. Android and vendor thermal policies
 remain authoritative. AX-manager does **not** disable, override, or modify
 Android thermal protection.
 
+## Step 5B — Thermal-Aware Performance Controller
+
+Step 5B adds `bin/thermal-guard`, a read-only decision and coordination layer.
+It combines the highest readable temperature, peak temperature, thermal
+classification, throttle evidence, game-session state, and current CPU profile
+to produce one of `BOOST`, `BALANCED`, `CONSERVATIVE`, or `BLOCKED`. These are
+AX-manager decisions, not manufacturer thermal limits. The values in
+`config/thermal-policy.json` are explicitly documented as **AX-manager
+conservative policy thresholds**, not official TECNO or Unisoc limits.
+
+```sh
+./bin/thermal-guard status
+./bin/thermal-guard check
+./bin/thermal-guard recommend
+./bin/thermal-guard game-start
+./bin/thermal-guard game-stop
+./bin/axgo thermal guard
+./bin/axgo thermal guard check
+./bin/axgo thermal guard recommend
+```
+
+The guard uses the performance states `OPTIMAL`, `NORMAL`, `CAUTION`,
+`THROTTLED`, `CRITICAL`, and `UNKNOWN`. Configurable hysteresis and stable
+recovery samples prevent rapid switching when temperature fluctuates near a
+threshold. Recovery proceeds gradually from `CRITICAL` to `THROTTLED`, then to
+`CAUTION`, `NORMAL`, and `OPTIMAL`; the guard does not immediately return to a
+boost recommendation after cooling.
+
+At game start, the game profile is selected first, then the thermal guard reads
+its current state and passes the recommendation to the existing CPU safety/apply
+layer. `BOOST` permits the requested profile, `BALANCED` or `CONSERVATIVE`
+constrains a performance request to the balanced profile, and `BLOCKED` prevents
+CPU performance changes. The CPU layer remains responsible for all actual
+frequency/governor writes, and those writes remain disabled by default. GPU
+control does not exist in this step, so the reported GPU action is always
+`NONE`.
+
+When thermal information becomes unavailable, the state is `UNKNOWN` and the
+recommendation is `CONSERVATIVE`; no assumption of a cool device is made. Game
+stop produces an `AX-T615 THERMAL PERFORMANCE REPORT` with duration,
+start/peak/average/final temperatures, maximum state, throttle detection,
+decision counts, CPU/GPU changes, and safety violations. No thermal trip points,
+cooling-device states, CPU/GPU frequencies, governors, properties, or kernel
+controls are written by Step 5B.
+
 ## Future development roadmap
 
 1. Identify the module manager/environment and confirm its packaging contract.
