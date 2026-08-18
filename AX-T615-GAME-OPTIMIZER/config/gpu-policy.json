@@ -1,0 +1,26 @@
+{
+  "GPU_GOVERNOR_CONTROL": false,
+  "GPU_FREQUENCY_CONTROL": false,
+  "profiles": {
+    "COOL": {
+      "governor": null,
+      "frequency": null
+    },
+    "BALANCED": {
+      "governor": null,
+      "frequency": null
+    },
+    "PERFORMANCE": {
+      "governor": null,
+      "frequency": null
+    }
+  },
+  "safety": {
+    "require_root": true,
+    "require_dynamic_discovery": true,
+    "require_detected_bounds": true,
+    "require_thermal_permission": true,
+    "allow_fixture_apply": false,
+    "allow_overclock": false
+  }
+}

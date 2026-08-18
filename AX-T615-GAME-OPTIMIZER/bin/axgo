@@ -70,6 +70,10 @@ case "$COMMAND" in
                 shift
                 exec sh "$SCRIPT_DIR/gpu-info" "$@"
                 ;;
+            reset)
+                shift
+                exec sh "$SCRIPT_DIR/gpu-reset" "$@"
+                ;;
             *)
                 exec sh "$SCRIPT_DIR/gpu-controller" "$@"
                 ;;
@@ -83,7 +87,7 @@ case "$COMMAND" in
         exec sh "$SCRIPT_DIR/cpu-reset"
         ;;
     *)
-        echo "Usage: axgo {status|detect|capabilities [--save]|cpu [status|inspect|dry-run|apply <profile>|restore|reset]|gpu [status|inspect|capabilities|dry-run [cool|balanced|performance]|info]|games|game {status|detect|start|stop|current}|profile [get|set <profile>]|session [start|stop|status|current]|recovery [status|reset]|thermal [status|inspect|monitor|dry-run|guard [status|check|recommend|game-start|game-stop]]|gaming|reset}"
+        echo "Usage: axgo {status|detect|capabilities [--save]|cpu [status|inspect|dry-run|apply <profile>|restore|reset]|gpu [status|inspect|capabilities|dry-run [cool|balanced|performance]|apply <profile>|restore|reset|info]|games|game {status|detect|start|stop|current}|profile [get|set <profile>]|session [start|stop|status|current]|recovery [status|reset]|thermal [status|inspect|monitor|dry-run|guard [status|check|recommend|game-start|game-stop]]|gaming|reset}"
         exit 2
         ;;
 esac

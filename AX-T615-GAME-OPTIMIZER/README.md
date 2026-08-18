@@ -350,6 +350,61 @@ interfaces. The four GPU test scripts validate detection, safety, dry-run
 behavior, missing values, no-root behavior, and fixture immutability. Events
 are recorded without private information in `logs/gpu.log`.
 
+## Step 6B — Guarded GPU Apply & Restore
+
+Step 6B adds an opt-in, fail-closed GPU apply and restore architecture on top of
+Step 6A discovery. The default configuration in `config/gpu-policy.json` keeps
+both `GPU_GOVERNOR_CONTROL` and `GPU_FREQUENCY_CONTROL` disabled. The profile
+model therefore remains logical until a device-specific policy, detected node,
+root context, thermal recommendation, supported governor, and in-range detected
+frequency have all been validated.
+
+```sh
+./bin/gpu-controller apply performance
+./bin/gpu-controller restore
+./bin/gpu-controller reset
+./bin/gpu-reset
+./bin/axgo gpu apply performance
+./bin/axgo gpu restore
+./bin/axgo gpu reset
+```
+
+`apply` refuses a request when root is unavailable, the dynamically discovered
+GPU interface is missing or uncertain, a target node is not readable and
+writable, the requested governor is not detected, the requested frequency is
+not a member of the detected list, the value is outside detected bounds, the
+thermal guard denies the request, or a previous backup already exists. No
+frequency is invented from the reference hardware values, and no overclocking
+is implemented. Profiles do not select production frequencies until an
+explicit, device-specific policy supplies a validated request.
+
+Before any future modification, the controller records only detected original
+values in `runtime/gpu/original_gpu.conf`. The backup includes the interface,
+driver identity, and each setting node that would actually be changed. A
+backup is never overwritten. Restore validates the current interface and driver
+against the recorded backup, writes only the recorded originals, and deletes
+the backup only after successful completion. `gpu-reset` is an emergency
+backup-only restore and never invents defaults. If any step fails, earlier
+changes are rolled back when possible and the backup remains available for
+manual recovery. Game-session stop requests GPU restore alongside the existing
+thermal and CPU restore flow.
+
+Thermal recommendations are enforced before an apply: `BOOST` may proceed to
+validated opt-in controls, while `BALANCED`, `CONSERVATIVE`, `BLOCKED`, and
+`UNKNOWN` constrain or deny requests according to the requested profile. The
+controller never disables or modifies Android thermal protection. Test fixtures
+are explicitly labeled TEST DATA and cannot be applied or restored in a
+real-device context; fixture writes require an explicit test-only environment.
+All apply, validation, backup, modification, rollback, restore, reset, and
+error events are recorded in `logs/gpu.log` without private information.
+
+The Step 6B suites cover no-root refusal, missing or uncertain interfaces,
+read-only and unsupported nodes, governor and frequency validation, thermal
+recommendations, successful fixture-only apply and restore, backup reuse
+protection, emergency reset, and partial-failure rollback. They also verify
+that rejected operations leave fixture contents unchanged and that no
+unconditional GPU sysfs write path exists.
+
 ## Future development roadmap
 
 1. Identify the module manager/environment and confirm its packaging contract.

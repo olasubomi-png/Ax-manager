@@ -15,6 +15,13 @@ GPU_PROC_ROOT="${GPU_PROC_ROOT:-/proc}"
 GPU_PROPERTIES_FILE="${GPU_PROPERTIES_FILE:-}"
 GPU_LOG_FILE="${GPU_LOG_FILE:-$AXGO_DATA_ROOT/logs/gpu.log}"
 GPU_SAFETY_WRITES_ENABLED=false
+GPU_POLICY_FILE="${GPU_POLICY_FILE:-$AXGO_ROOT/config/gpu-policy.json}"
+GPU_BACKUP_DIR="${GPU_BACKUP_DIR:-$AXGO_DATA_ROOT/runtime/gpu}"
+GPU_BACKUP_FILE="$GPU_BACKUP_DIR/original_gpu.conf"
+GPU_APPLY_TEST_MODE="${GPU_APPLY_TEST_MODE:-false}"
+GPU_ALLOW_FIXTURE_APPLY="${GPU_ALLOW_FIXTURE_APPLY:-false}"
+GPU_GOVERNOR_CONTROL="${GPU_GOVERNOR_CONTROL:-}"
+GPU_FREQUENCY_CONTROL="${GPU_FREQUENCY_CONTROL:-}"
 . "$SCRIPT_DIR/gpu-safety"
 
 GPU_PATH=UNAVAILABLE
@@ -211,6 +218,311 @@ profile_valid() {
     case "$1" in COOL|BALANCED|PERFORMANCE) return 0 ;; *) return 1 ;; esac
 }
 
+load_gpu_policy() {
+    if [ -z "$GPU_GOVERNOR_CONTROL" ] && [ -r "$GPU_POLICY_FILE" ]; then
+        GPU_GOVERNOR_CONTROL="$(sed -n 's/^[[:space:]]*"GPU_GOVERNOR_CONTROL"[[:space:]]*:[[:space:]]*\(true\|false\).*/\1/p' "$GPU_POLICY_FILE" | head -n 1)"
+    fi
+    if [ -z "$GPU_FREQUENCY_CONTROL" ] && [ -r "$GPU_POLICY_FILE" ]; then
+        GPU_FREQUENCY_CONTROL="$(sed -n 's/^[[:space:]]*"GPU_FREQUENCY_CONTROL"[[:space:]]*:[[:space:]]*\(true\|false\).*/\1/p' "$GPU_POLICY_FILE" | head -n 1)"
+    fi
+    [ "$GPU_GOVERNOR_CONTROL" = true ] || GPU_GOVERNOR_CONTROL=false
+    [ "$GPU_FREQUENCY_CONTROL" = true ] || GPU_FREQUENCY_CONTROL=false
+}
+
+thermal_state() {
+    GPU_THERMAL_STATE="${THERMAL_GUARD_STATE:-}"
+    if [ -z "$GPU_THERMAL_STATE" ] && [ -x "$AXGO_ROOT/bin/thermal-guard" ]; then
+        GPU_THERMAL_STATE="$(THERMAL_DATA_ROOT="${THERMAL_DATA_ROOT:-$AXGO_DATA_ROOT}" sh "$AXGO_ROOT/bin/thermal-guard" check 2>/dev/null | sed -n 's/^State: //p' | head -n 1)"
+    fi
+    [ -n "$GPU_THERMAL_STATE" ] || GPU_THERMAL_STATE=UNKNOWN
+    printf '%s' "$GPU_THERMAL_STATE"
+}
+
+profile_governor() {
+    if [ "$GPU_APPLY_TEST_MODE" = true ] && [ -n "${GPU_TEST_GOVERNOR:-}" ]; then
+        printf '%s' "$GPU_TEST_GOVERNOR"
+        return 0
+    fi
+    # Production profiles remain unset until a device-specific policy is explicitly validated.
+    printf '%s' ""
+}
+
+profile_frequency() {
+    if [ "$GPU_APPLY_TEST_MODE" = true ] && [ -n "${GPU_TEST_FREQUENCY:-}" ]; then
+        printf '%s' "$GPU_TEST_FREQUENCY"
+        return 0
+    fi
+    # No hardcoded production or fixture frequency is selected by a profile.
+    printf '%s' ""
+}
+
+thermal_allows_profile() {
+    GPU_CHECK_PROFILE="$1"
+    GPU_CHECK_RECOMMENDATION="$2"
+    case "$GPU_CHECK_RECOMMENDATION" in
+        BOOST) return 0 ;;
+        BALANCED) [ "$GPU_CHECK_PROFILE" = BALANCED ] || [ "$GPU_CHECK_PROFILE" = COOL ] ;;
+        CONSERVATIVE) [ "$GPU_CHECK_PROFILE" = COOL ] || [ "$GPU_CHECK_PROFILE" = BALANCED ] ;;
+        BLOCKED|UNKNOWN|*) return 1 ;;
+    esac
+}
+
+backup_exists() {
+    [ -s "$GPU_BACKUP_FILE" ]
+}
+
+backup_value() {
+    sed -n "s/^$1=//p" "$GPU_BACKUP_FILE" 2>/dev/null | head -n 1
+}
+
+backup_write_if_present() {
+    GPU_BACKUP_KEY="$1"
+    GPU_BACKUP_VALUE="$2"
+    [ -n "$GPU_BACKUP_VALUE" ] && [ "$GPU_BACKUP_VALUE" != UNKNOWN ] && [ "$GPU_BACKUP_VALUE" != UNAVAILABLE ] &&
+        printf '%s=%s\n' "$GPU_BACKUP_KEY" "$GPU_BACKUP_VALUE" >> "$GPU_BACKUP_TMP"
+}
+
+create_gpu_backup() {
+    backup_exists && { log_gpu ERROR "backup exists; refusing overwrite"; return 1; }
+    mkdir -p "$GPU_BACKUP_DIR" 2>/dev/null || return 1
+    GPU_BACKUP_TMP="$GPU_BACKUP_FILE.tmp.$$"
+    : > "$GPU_BACKUP_TMP" || return 1
+    printf '%s\n' '# AX-T615 GPU session backup; values are detected originals only.' >> "$GPU_BACKUP_TMP"
+    backup_write_if_present interface "$GPU_PATH"
+    backup_write_if_present driver "$GPU_DRIVER"
+    if [ -n "${GPU_APPLY_GOVERNOR:-}" ]; then
+        backup_write_if_present governor_node "$GPU_PATH/governor"
+        backup_write_if_present governor "$GPU_GOVERNOR"
+    fi
+    if [ -n "${GPU_APPLY_FREQUENCY:-}" ]; then
+        backup_write_if_present frequency_node "$GPU_FREQUENCY_NODE"
+        backup_write_if_present frequency "$GPU_CUR_FREQ"
+    fi
+    if [ "$GPU_FREQUENCY_CONTROL" = true ]; then
+        backup_write_if_present min_freq_node "$GPU_PATH/min_freq"
+        backup_write_if_present min_freq "$GPU_MIN_FREQ"
+        backup_write_if_present max_freq_node "$GPU_PATH/max_freq"
+        backup_write_if_present max_freq "$GPU_MAX_FREQ"
+    fi
+    [ "$GPU_APPLY_TEST_MODE" = true ] && backup_write_if_present fixture true
+    mv "$GPU_BACKUP_TMP" "$GPU_BACKUP_FILE" 2>/dev/null || { rm -f "$GPU_BACKUP_TMP"; return 1; }
+    log_gpu INFO "backup created file=$GPU_BACKUP_FILE interface=$GPU_PATH"
+    return 0
+}
+
+remove_backup_after_restore() {
+    rm -f "$GPU_BACKUP_FILE"
+}
+
+write_gpu_node() {
+    GPU_WRITE_NODE="$1"
+    GPU_WRITE_VALUE="$2"
+    gpu_safety_validate_writable_node "$GPU_WRITE_NODE" || return 1
+    printf '%s' "$GPU_WRITE_VALUE" > "$GPU_WRITE_NODE" 2>/dev/null
+}
+
+restore_current_values() {
+    [ -n "${GPU_ROLLBACK_GOVERNOR_NODE:-}" ] && [ -n "${GPU_ROLLBACK_GOVERNOR_VALUE:-}" ] &&
+        write_gpu_node "$GPU_ROLLBACK_GOVERNOR_NODE" "$GPU_ROLLBACK_GOVERNOR_VALUE" || :
+    [ -n "${GPU_ROLLBACK_FREQUENCY_NODE:-}" ] && [ -n "${GPU_ROLLBACK_FREQUENCY_VALUE:-}" ] &&
+        write_gpu_node "$GPU_ROLLBACK_FREQUENCY_NODE" "$GPU_ROLLBACK_FREQUENCY_VALUE" || :
+}
+
+profile_valid_setting() {
+    GPU_APPLY_PROFILE="$1"
+    GPU_APPLY_GOVERNOR="$(profile_governor "$GPU_APPLY_PROFILE")"
+    GPU_APPLY_FREQUENCY="$(profile_frequency "$GPU_APPLY_PROFILE")"
+    [ -z "$GPU_APPLY_GOVERNOR" ] || gpu_safety_validate_governor "$GPU_APPLY_GOVERNOR" "$GPU_AVAILABLE_GOVERNORS" || return 1
+    [ -z "$GPU_APPLY_FREQUENCY" ] || gpu_safety_validate_frequency_request "$GPU_APPLY_FREQUENCY" "$GPU_MIN_FREQ" "$GPU_MAX_FREQ" "$GPU_AVAILABLE_FREQS" || return 1
+    return 0
+}
+
+find_frequency_node() {
+    if [ "$GPU_APPLY_TEST_MODE" = true ] && [ -n "${GPU_TEST_FREQUENCY_NODE:-}" ]; then
+        printf '%s' "$GPU_TEST_FREQUENCY_NODE"
+        return 0
+    fi
+    for GPU_FREQ_NODE in "$GPU_PATH/target_freq" "$GPU_PATH/scaling_setspeed" "$GPU_PATH/set_frequency" "$GPU_PATH/frequency"; do
+        [ -e "$GPU_FREQ_NODE" ] && { printf '%s' "$GPU_FREQ_NODE"; return 0; }
+    done
+    printf '%s' ""
+}
+
+gpu_apply() {
+    GPU_APPLY_PROFILE="$(gpu_profile_upper "${1:-}")"
+    profile_valid "$GPU_APPLY_PROFILE" || { echo "Invalid GPU profile: $GPU_APPLY_PROFILE" >&2; log_gpu ERROR "apply invalid profile=$GPU_APPLY_PROFILE"; return 2; }
+    load_gpu_policy
+    detect_gpu
+    GPU_THERMAL_RECOMMENDATION="$(thermal_recommendation)"
+    GPU_THERMAL_STATE="$(thermal_state)"
+    echo "AX-T615 GPU APPLY"
+    echo "================="
+    echo "Requested profile: $GPU_APPLY_PROFILE"
+    echo "GPU: $GPU_VENDOR $GPU_MODEL"
+    echo "Driver: $GPU_DRIVER"
+    echo "Interface: $GPU_PATH"
+    echo "Thermal state: $GPU_THERMAL_STATE"
+    echo "Thermal recommendation: $GPU_THERMAL_RECOMMENDATION"
+    echo "Governor control: $GPU_GOVERNOR_CONTROL"
+    echo "Frequency control: $GPU_FREQUENCY_CONTROL"
+
+    if [ "$GPU_GOVERNOR_CONTROL" != true ] && [ "$GPU_FREQUENCY_CONTROL" != true ]; then
+        echo "Result: NO GPU CHANGE"
+        echo "Reason: GPU hardware control is disabled by default."
+        log_gpu INFO "apply rejected profile=$GPU_APPLY_PROFILE reason=controls-disabled"
+        return 0
+    fi
+    if ! thermal_allows_profile "$GPU_APPLY_PROFILE" "$GPU_THERMAL_RECOMMENDATION"; then
+        echo "Result: NO GPU CHANGE"
+        echo "Reason: thermal guard denied the requested GPU performance level."
+        log_gpu WARN "apply rejected profile=$GPU_APPLY_PROFILE thermal=$GPU_THERMAL_RECOMMENDATION"
+        return 1
+    fi
+    if [ "$GPU_APPLY_TEST_MODE" = true ] && [ "$GPU_ALLOW_FIXTURE_APPLY" != true ]; then
+        echo "Result: NO GPU CHANGE"
+        echo "Reason: fixture apply is disabled unless explicitly enabled for a test."
+        log_gpu WARN "apply rejected profile=$GPU_APPLY_PROFILE reason=fixture-protection"
+        return 1
+    fi
+    gpu_safety_has_root || {
+        echo "Result: NO GPU CHANGE"
+        echo "Reason: root is required for a real GPU apply."
+        log_gpu WARN "apply rejected profile=$GPU_APPLY_PROFILE reason=no-root"
+        return 1
+    }
+    [ "$GPU_PATH" != UNAVAILABLE ] && [ "$GPU_INTERFACE_STATUS" = READABLE ] &&
+        [ "$GPU_CONTROL_STATUS" = AVAILABLE ] || {
+        echo "Result: NO GPU CHANGE"
+        echo "Reason: dynamically discovered GPU interface is unavailable or uncertain."
+        log_gpu WARN "apply rejected profile=$GPU_APPLY_PROFILE reason=interface-uncertain"
+        return 1
+    }
+    GPU_APPLY_GOVERNOR="$(profile_governor "$GPU_APPLY_PROFILE")"
+    GPU_APPLY_FREQUENCY="$(profile_frequency "$GPU_APPLY_PROFILE")"
+    [ "$GPU_GOVERNOR_CONTROL" = true ] && [ -n "$GPU_APPLY_GOVERNOR" ] || [ "$GPU_GOVERNOR_CONTROL" != true ] || {
+        echo "Result: NO GPU CHANGE"
+        echo "Reason: no validated governor setting is configured for this profile."
+        log_gpu WARN "apply rejected profile=$GPU_APPLY_PROFILE reason=no-governor-setting"
+        return 1
+    }
+    [ "$GPU_FREQUENCY_CONTROL" = true ] && [ -n "$GPU_APPLY_FREQUENCY" ] || [ "$GPU_FREQUENCY_CONTROL" != true ] || {
+        echo "Result: NO GPU CHANGE"
+        echo "Reason: no validated frequency setting is configured for this profile."
+        log_gpu WARN "apply rejected profile=$GPU_APPLY_PROFILE reason=no-frequency-setting"
+        return 1
+    }
+    [ -n "$GPU_APPLY_GOVERNOR" ] && gpu_safety_validate_governor "$GPU_APPLY_GOVERNOR" "$GPU_AVAILABLE_GOVERNORS" || [ -z "$GPU_APPLY_GOVERNOR" ] || {
+        echo "Result: NO GPU CHANGE"
+        echo "Reason: requested governor is not detected as supported."
+        log_gpu WARN "apply rejected profile=$GPU_APPLY_PROFILE reason=unsupported-governor"
+        return 1
+    }
+    GPU_FREQUENCY_NODE="$(find_frequency_node)"
+    [ -z "$GPU_APPLY_FREQUENCY" ] || [ -n "$GPU_FREQUENCY_NODE" ] || {
+        echo "Result: NO GPU CHANGE"
+        echo "Reason: no dynamically discovered writable frequency node is available."
+        log_gpu WARN "apply rejected profile=$GPU_APPLY_PROFILE reason=no-frequency-node"
+        return 1
+    }
+    [ -z "$GPU_APPLY_FREQUENCY" ] || gpu_safety_validate_frequency_request "$GPU_APPLY_FREQUENCY" "$GPU_MIN_FREQ" "$GPU_MAX_FREQ" "$GPU_AVAILABLE_FREQS" || {
+        echo "Result: NO GPU CHANGE"
+        echo "Reason: requested frequency is outside detected hardware limits or unsupported."
+        log_gpu WARN "apply rejected profile=$GPU_APPLY_PROFILE reason=invalid-frequency"
+        return 1
+    }
+    [ -n "$GPU_APPLY_GOVERNOR" ] && gpu_safety_validate_writable_node "$GPU_PATH/governor" || [ -z "$GPU_APPLY_GOVERNOR" ] || {
+        echo "Result: NO GPU CHANGE"
+        echo "Reason: governor node is not verified writable."
+        log_gpu WARN "apply rejected profile=$GPU_APPLY_PROFILE reason=governor-not-writable"
+        return 1
+    }
+    [ -z "$GPU_APPLY_FREQUENCY" ] || gpu_safety_validate_writable_node "$GPU_FREQUENCY_NODE" || {
+        echo "Result: NO GPU CHANGE"
+        echo "Reason: frequency node is not verified writable."
+        log_gpu WARN "apply rejected profile=$GPU_APPLY_PROFILE reason=frequency-not-writable"
+        return 1
+    }
+    profile_valid_setting "$GPU_APPLY_PROFILE" || { echo "Result: NO GPU CHANGE"; echo "Reason: final setting validation failed."; log_gpu ERROR "apply validation failed"; return 1; }
+    GPU_ROLLBACK_GOVERNOR_NODE="$GPU_PATH/governor"
+    GPU_ROLLBACK_GOVERNOR_VALUE="$GPU_GOVERNOR"
+    GPU_ROLLBACK_FREQUENCY_NODE="$GPU_FREQUENCY_NODE"
+    GPU_ROLLBACK_FREQUENCY_VALUE="$GPU_CUR_FREQ"
+    create_gpu_backup || { echo "Result: NO GPU CHANGE"; echo "Reason: original GPU backup could not be created or already exists."; log_gpu ERROR "apply backup failed"; return 1; }
+    GPU_CHANGED_GOVERNOR=false
+    GPU_CHANGED_FREQUENCY=false
+    if [ -n "$GPU_APPLY_GOVERNOR" ]; then
+        write_gpu_node "$GPU_PATH/governor" "$GPU_APPLY_GOVERNOR" || { restore_current_values; echo "Result: NO GPU CHANGE"; echo "Reason: governor modification failed."; log_gpu ERROR "apply governor failed and rollback attempted"; return 1; }
+        GPU_CHANGED_GOVERNOR=true
+        log_gpu INFO "governor modified profile=$GPU_APPLY_PROFILE"
+    fi
+    if [ "$GPU_APPLY_TEST_MODE" = true ] && [ "${GPU_TEST_FAIL_AFTER_GOVERNOR:-false}" = true ]; then
+        restore_current_values
+        echo "Result: NO GPU CHANGE"
+        echo "Reason: simulated frequency failure; earlier changes were rolled back."
+        log_gpu ERROR "partial failure simulated; rollback completed"
+        return 1
+    fi
+    if [ -n "$GPU_APPLY_FREQUENCY" ]; then
+        write_gpu_node "$GPU_FREQUENCY_NODE" "$GPU_APPLY_FREQUENCY" || { restore_current_values; echo "Result: NO GPU CHANGE"; echo "Reason: frequency modification failed; earlier changes were rolled back."; log_gpu ERROR "apply frequency failed and rollback attempted"; return 1; }
+        GPU_CHANGED_FREQUENCY=true
+        log_gpu INFO "frequency modified profile=$GPU_APPLY_PROFILE"
+    fi
+    echo "Result: GPU changes applied safely"
+    echo "Backup: $GPU_BACKUP_FILE"
+    log_gpu INFO "apply successful profile=$GPU_APPLY_PROFILE governor=$GPU_CHANGED_GOVERNOR frequency=$GPU_CHANGED_FREQUENCY"
+    return 0
+}
+
+gpu_restore() {
+    load_gpu_policy
+    echo "AX-T615 GPU RESTORE"
+    echo "=================="
+    if ! backup_exists; then
+        echo "Result: NO GPU CHANGE"
+        echo "Reason: no GPU backup exists; no default values were invented."
+        log_gpu INFO "restore requested with no backup"
+        return 0
+    fi
+    detect_gpu
+    gpu_safety_has_root || { echo "Result: NO GPU CHANGE"; echo "Reason: root is required for GPU restore."; log_gpu WARN "restore rejected reason=no-root"; return 1; }
+    GPU_BACKUP_INTERFACE="$(backup_value interface)"
+    GPU_BACKUP_DRIVER="$(backup_value driver)"
+    GPU_BACKUP_FIXTURE="$(backup_value fixture)"
+    if [ "$GPU_BACKUP_FIXTURE" = true ] && { [ "$GPU_APPLY_TEST_MODE" != true ] || [ "$GPU_ALLOW_FIXTURE_APPLY" != true ]; }; then
+        echo "Result: NO GPU CHANGE"
+        echo "Reason: fixture backup cannot be restored in a real-device context."
+        log_gpu ERROR "restore rejected reason=fixture-protection"
+        return 1
+    fi
+    [ "$GPU_PATH" = "$GPU_BACKUP_INTERFACE" ] && [ "$GPU_DRIVER" = "$GPU_BACKUP_DRIVER" ] || {
+        echo "Result: NO GPU CHANGE"
+        echo "Reason: current GPU interface or driver does not match the recorded backup."
+        log_gpu ERROR "restore rejected interface-or-driver-mismatch"
+        return 1
+    }
+    GPU_RESTORE_GOVERNOR_NODE="$(backup_value governor_node)"
+    GPU_RESTORE_GOVERNOR="$(backup_value governor)"
+    GPU_RESTORE_FREQUENCY_NODE="$(backup_value frequency_node)"
+    GPU_RESTORE_FREQUENCY="$(backup_value frequency)"
+    [ -z "$GPU_RESTORE_GOVERNOR" ] || gpu_safety_validate_writable_node "$GPU_RESTORE_GOVERNOR_NODE" || { echo "Result: NO GPU CHANGE"; echo "Reason: backed-up governor node is not writable."; log_gpu ERROR "restore governor node unavailable"; return 1; }
+    [ -z "$GPU_RESTORE_FREQUENCY" ] || gpu_safety_validate_writable_node "$GPU_RESTORE_FREQUENCY_NODE" || { echo "Result: NO GPU CHANGE"; echo "Reason: backed-up frequency node is not writable."; log_gpu ERROR "restore frequency node unavailable"; return 1; }
+    GPU_ROLLBACK_GOVERNOR_NODE="$GPU_RESTORE_GOVERNOR_NODE"
+    GPU_ROLLBACK_GOVERNOR_VALUE="$(read_value "$GPU_RESTORE_GOVERNOR_NODE")"
+    GPU_ROLLBACK_FREQUENCY_NODE="$GPU_RESTORE_FREQUENCY_NODE"
+    GPU_ROLLBACK_FREQUENCY_VALUE="$(read_value "$GPU_RESTORE_FREQUENCY_NODE")"
+    [ -z "$GPU_RESTORE_GOVERNOR" ] || write_gpu_node "$GPU_RESTORE_GOVERNOR_NODE" "$GPU_RESTORE_GOVERNOR" || { restore_current_values; echo "Result: NO GPU CHANGE"; echo "Reason: governor restoration failed."; log_gpu ERROR "restore governor failed"; return 1; }
+    [ -z "$GPU_RESTORE_FREQUENCY" ] || write_gpu_node "$GPU_RESTORE_FREQUENCY_NODE" "$GPU_RESTORE_FREQUENCY" || { restore_current_values; echo "Result: NO GPU CHANGE"; echo "Reason: frequency restoration failed."; log_gpu ERROR "restore frequency failed"; return 1; }
+    remove_backup_after_restore
+    echo "Result: GPU settings restored safely"
+    echo "Backup: removed after successful restore"
+    log_gpu INFO "restore successful"
+    return 0
+}
+
+gpu_reset() {
+    gpu_restore
+}
+
 print_summary() {
     GPU_REQUESTED_TITLE="${1:-GPU}"
     echo "$GPU_REQUESTED_TITLE"
@@ -263,6 +575,7 @@ gpu_inspect() {
 }
 
 gpu_capabilities() {
+    load_gpu_policy
     detect_gpu
     thermal_recommendation >/dev/null
     echo "AX-T615 GPU CAPABILITIES"
@@ -274,6 +587,8 @@ gpu_capabilities() {
     echo "Current frequency within detected limits: $(gpu_safety_validate_frequency "$GPU_CUR_FREQ" "$GPU_MIN_FREQ" "$GPU_MAX_FREQ" && echo yes || echo no)"
     echo "Governor data detected: $( [ "$GPU_GOVERNOR" != UNAVAILABLE ] && [ "$GPU_GOVERNOR" != UNKNOWN ] && echo yes || echo no )"
     echo "Thermal recommendation accepted: $GPU_THERMAL_RECOMMENDATION"
+    echo "Governor control: $(gpu_profile_upper "$GPU_GOVERNOR_CONTROL")"
+    echo "Frequency control: $(gpu_profile_upper "$GPU_FREQUENCY_CONTROL")"
     echo "GPU writes enabled: NO"
     echo "GPU control: $GPU_CONTROL_STATUS"
     echo "Fail-closed policy: ENABLED"
@@ -290,8 +605,10 @@ gpu_dry_run() {
         log_gpu ERROR "dry-run invalid profile=$GPU_REQUESTED_PROFILE"
         return 2
     }
+    load_gpu_policy
     detect_gpu
     GPU_THERMAL_RECOMMENDATION="$(thermal_recommendation)"
+    GPU_THERMAL_STATE="$(thermal_state)"
     GPU_RECOMMENDATION="$GPU_THERMAL_RECOMMENDATION"
     case "$GPU_THERMAL_RECOMMENDATION" in
         UNKNOWN) GPU_RECOMMENDATION=CONSERVATIVE ;;
@@ -307,6 +624,9 @@ gpu_dry_run() {
     echo "GPU utilization: $GPU_UTILIZATION"
     echo "Vulkan: $GPU_VULKAN"
     echo "OpenGL ES: $GPU_OPENGL"
+    echo "Thermal state: $GPU_THERMAL_STATE"
+    echo "Governor control: $(gpu_profile_upper "$GPU_GOVERNOR_CONTROL")"
+    echo "Frequency control: $(gpu_profile_upper "$GPU_FREQUENCY_CONTROL")"
     echo
     echo "Requested profile: $GPU_REQUESTED_PROFILE"
     echo "Thermal recommendation: $GPU_RECOMMENDATION"
@@ -316,7 +636,7 @@ gpu_dry_run() {
     echo "NONE"
     echo
     echo "Reason:"
-    echo "GPU hardware modification is not enabled in Step 6A."
+    echo "GPU hardware modification is disabled by default in Step 6B."
     echo "No changes were made."
     log_gpu INFO "dry-run profile=$GPU_REQUESTED_PROFILE thermal=$GPU_RECOMMENDATION changes=NONE"
 }
@@ -324,8 +644,11 @@ gpu_dry_run() {
 case "${1:-status}" in
     status) [ "$#" -eq 1 ] || { echo "Usage: gpu-controller status|inspect|capabilities|dry-run [cool|balanced|performance]" >&2; exit 2; }; gpu_status ;;
     inspect) [ "$#" -eq 1 ] || { echo "Usage: gpu-controller status|inspect|capabilities|dry-run [cool|balanced|performance]" >&2; exit 2; }; gpu_inspect ;;
-    capabilities) [ "$#" -eq 1 ] || { echo "Usage: gpu-controller status|inspect|capabilities|dry-run [cool|balanced|performance]" >&2; exit 2; }; gpu_capabilities ;;
+    capabilities) [ "$#" -eq 1 ] || { echo "Usage: gpu-controller status|inspect|capabilities|dry-run|apply|restore|reset [cool|balanced|performance]" >&2; exit 2; }; gpu_capabilities ;;
     dry-run) [ "$#" -le 2 ] || { echo "Usage: gpu-controller dry-run [cool|balanced|performance]" >&2; exit 2; }; gpu_dry_run "${2:-performance}" ;;
+    apply) [ "$#" -eq 2 ] || { echo "Usage: gpu-controller apply [cool|balanced|performance]" >&2; exit 2; }; gpu_apply "$2" ;;
+    restore) [ "$#" -eq 1 ] || { echo "Usage: gpu-controller restore" >&2; exit 2; }; gpu_restore ;;
+    reset) [ "$#" -eq 1 ] || { echo "Usage: gpu-controller reset" >&2; exit 2; }; gpu_reset ;;
     info) [ "$#" -eq 1 ] || { echo "Usage: gpu-controller info" >&2; exit 2; }; gpu_status ;;
-    *) echo "Usage: gpu-controller status|inspect|capabilities|dry-run [cool|balanced|performance]|info" >&2; exit 2 ;;
+    *) echo "Usage: gpu-controller status|inspect|capabilities|dry-run|apply|restore|reset [cool|balanced|performance]|info" >&2; exit 2 ;;
 esac
