@@ -1,0 +1,438 @@
+#!/system/bin/sh
+set -u
+
+# AX-T615 Step 5A: read-only thermal discovery, classification, and monitoring.
+# This controller never writes a thermal, cooling, CPU, GPU, property, or
+# kernel-control path. THERMAL_* environment variables are intentionally
+# supported so tests can use a simulated filesystem without root.
+
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname "$0")" 2>/dev/null && pwd)"
+AXGO_ROOT="${AXGO_ROOT:-$(CDPATH= cd -- "$SCRIPT_DIR/.." 2>/dev/null && pwd)}"
+THERMAL_SYSFS_ROOT="${THERMAL_SYSFS_ROOT:-/sys/class/thermal}"
+THERMAL_VIRTUAL_ROOT="${THERMAL_VIRTUAL_ROOT:-/sys/devices/virtual/thermal}"
+THERMAL_CPU_ROOT="${THERMAL_CPU_ROOT:-/sys/devices/system/cpu}"
+THERMAL_DATA_ROOT="${THERMAL_DATA_ROOT:-${AXGO_DATA_ROOT:-$AXGO_ROOT}}"
+THERMAL_RUNTIME_DIR="${THERMAL_RUNTIME_DIR:-$THERMAL_DATA_ROOT/runtime/thermal}"
+THERMAL_LOG_FILE="${THERMAL_LOG_FILE:-$THERMAL_DATA_ROOT/logs/thermal.log}"
+THERMAL_SAMPLE_FILE="$THERMAL_RUNTIME_DIR/last-sample"
+
+thermal_read() {
+    [ -r "$1" ] && cat "$1" 2>/dev/null
+}
+
+thermal_log() {
+    mkdir -p "$THERMAL_DATA_ROOT/logs" 2>/dev/null || :
+    printf '%s [%s] %s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z' 2>/dev/null || printf '%s' unknown-time)" \
+        "${1:-INFO}" "${2:-}" >> "$THERMAL_LOG_FILE" 2>/dev/null || :
+}
+
+thermal_node_status() {
+    if [ ! -e "$1" ]; then
+        printf '%s' "UNAVAILABLE"
+    elif [ -r "$1" ]; then
+        printf '%s' "READABLE"
+    else
+        printf '%s' "PERMISSION DENIED"
+    fi
+}
+
+thermal_valid_raw() {
+    case "$1" in
+        ''|*[!0-9.-]*) return 1 ;;
+    esac
+    case "$1" in
+        -*|-*.*|.*|*.) return 1 ;;
+    esac
+    return 0
+}
+
+# A plain integer in 0..200 is treated as Celsius. Integers >=1000 are
+# millidegrees Celsius, the Android/Linux convention. Ambiguous values are
+# rejected instead of guessed.
+thermal_to_celsius() {
+    RAW="$(printf '%s' "$1" | tr -d '[:space:]')"
+    thermal_valid_raw "$RAW" || { printf '%s' "UNKNOWN"; return 0; }
+    if command -v awk >/dev/null 2>&1; then
+        awk -v raw="$RAW" 'BEGIN {
+            if (raw ~ /^[0-9]+$/ && raw >= 1000) printf "%.1f", raw / 1000;
+            else if (raw ~ /^[0-9]+([.][0-9]+)?$/ && raw <= 200) printf "%.1f", raw;
+            else print "UNKNOWN";
+        }' 2>/dev/null
+    else
+        case "$RAW" in
+            [0-9]|[0-9][0-9]|1[0-9][0-9]) printf '%s.0' "$RAW" ;;
+            [1-9][0-9][0-9][0-9]*)
+                WHOLE="${RAW%???}"; FRACTION="${RAW#"$WHOLE"}"
+                printf '%s.%s' "$WHOLE" "${FRACTION%?}" ;;
+            *) printf '%s' "UNKNOWN" ;;
+        esac
+    fi
+}
+
+thermal_unit() {
+    RAW="$(printf '%s' "$1" | tr -d '[:space:]')"
+    thermal_valid_raw "$RAW" || { printf '%s' "UNKNOWN"; return 0; }
+    case "$RAW" in
+        [0-9][0-9][0-9][0-9]*)
+            [ "${RAW#???}" != "$RAW" ] && printf '%s' "millidegrees Celsius" || printf '%s' "UNKNOWN" ;;
+        [0-9]|[0-9][0-9]|1[0-9][0-9]|200) printf '%s' "degrees Celsius" ;;
+        *) printf '%s' "UNKNOWN" ;;
+    esac
+}
+
+thermal_classify() {
+    VALUE="$1"
+    if [ "$VALUE" = "UNKNOWN" ] || [ -z "$VALUE" ]; then
+        printf '%s' "UNKNOWN"
+    elif command -v awk >/dev/null 2>&1; then
+        awk -v value="$VALUE" 'BEGIN {
+            if (value < 35) print "COOL";
+            else if (value < 45) print "NORMAL";
+            else if (value < 55) print "WARM";
+            else if (value < 65) print "HOT";
+            else print "CRITICAL";
+        }'
+    else
+        printf '%s' "UNKNOWN"
+    fi
+}
+
+thermal_recommendation() {
+    case "$1" in
+        COOL|NORMAL) printf '%s' "Performance optimization allowed." ;;
+        WARM) printf '%s' "Monitor closely." ;;
+        HOT) printf '%s' "Avoid additional performance increases." ;;
+        CRITICAL) printf '%s' "Performance optimization must be blocked." ;;
+        *) printf '%s' "Do not perform aggressive optimization." ;;
+    esac
+}
+
+thermal_zone_paths() {
+    ROOT="$1"
+    for ZONE in "$ROOT"/thermal_zone*; do
+        [ -d "$ZONE" ] || continue
+        printf '%s\n' "$ZONE"
+    done
+}
+
+thermal_zone_type() {
+    TYPE="$(thermal_read "$1/type" | head -n 1)"
+    [ -n "$TYPE" ] && printf '%s' "$TYPE" || printf '%s' "UNKNOWN"
+}
+
+thermal_zone_temp() {
+    RAW="$(thermal_read "$1/temp" | head -n 1)"
+    [ -n "$RAW" ] || { printf '%s' "UNKNOWN"; return 0; }
+    thermal_to_celsius "$RAW"
+}
+
+thermal_zone_label() {
+    TYPE="$(thermal_zone_type "$1" | tr '[:upper:]' '[:lower:]')"
+    case "$TYPE" in
+        *cpu*|*cluster*|*soc*) printf '%s' "CPU" ;;
+        *gpu*|*mali*|*graphics*) printf '%s' "GPU" ;;
+        *battery*|*batt*) printf '%s' "Battery" ;;
+        *) printf '%s' "Thermal zone" ;;
+    esac
+}
+
+thermal_each_zone() {
+    # The two roots are inspected independently. If a test or vendor exposes
+    # the same path twice, the path-level duplicate is harmless and reported
+    # only once by thermal_seen_path.
+    THERMAL_SEEN_PATHS="${THERMAL_SEEN_PATHS:-|}"
+    for ROOT in "$THERMAL_SYSFS_ROOT" "$THERMAL_VIRTUAL_ROOT"; do
+        thermal_zone_paths "$ROOT"
+    done
+}
+
+thermal_zone_report() {
+    ZONE="$1"
+    RAW="$(thermal_read "$ZONE/temp" | head -n 1)"
+    TEMP="$(thermal_zone_temp "$ZONE")"
+    TYPE="$(thermal_zone_type "$ZONE")"
+    echo "THERMAL ZONE"
+    echo "-------------------------"
+    echo "Zone: ${ZONE##*/}"
+    echo "Path: $ZONE"
+    echo "Type: $TYPE"
+    echo "Temperature: ${TEMP}°C"
+    echo "Temperature raw: ${RAW:-unavailable}"
+    echo "Temperature unit: $(thermal_unit "$RAW")"
+    echo "Temperature status: $(thermal_node_status "$ZONE/temp")"
+    echo "Type status: $(thermal_node_status "$ZONE/type")"
+    FOUND_TRIP="false"
+    for TRIP in "$ZONE"/trip_point_*_temp; do
+        [ -e "$TRIP" ] || continue
+        FOUND_TRIP="true"
+        TRIP_ID="${TRIP##*/}"
+        TRIP_TYPE="$(thermal_read "${TRIP%_temp}_type" | head -n 1)"
+        echo "Trip ${TRIP_ID#trip_point_}: $(thermal_read "$TRIP" | head -n 1) (${TRIP_TYPE:-type unavailable}) READ-ONLY"
+    done
+    [ "$FOUND_TRIP" = "true" ] || echo "Trip points: unavailable"
+    POLICY="$(thermal_read "$ZONE/policy" | head -n 1)"
+    MODE="$(thermal_read "$ZONE/mode" | head -n 1)"
+    echo "Thermal policy: ${POLICY:-unavailable}"
+    echo "Thermal mode: ${MODE:-unavailable}"
+    echo "Policy status: $(thermal_node_status "$ZONE/policy")"
+    echo "Status: READ-ONLY"
+    echo
+}
+
+thermal_collect() {
+    # Sets THERMAL_COUNT, THERMAL_VALID_COUNT, THERMAL_MAX, THERMAL_SUM,
+    # THERMAL_OVERALL and representative CPU/GPU/Battery values.
+    THERMAL_COUNT=0
+    THERMAL_VALID_COUNT=0
+    THERMAL_MAX="UNKNOWN"
+    THERMAL_SUM=0
+    THERMAL_CPU_TEMP="UNKNOWN"
+    THERMAL_GPU_TEMP="UNKNOWN"
+    THERMAL_BATTERY_TEMP="UNKNOWN"
+    THERMAL_ZONE_LINES=""
+    for ZONE in $(thermal_each_zone); do
+        THERMAL_COUNT=$((THERMAL_COUNT + 1))
+        TYPE="$(thermal_zone_type "$ZONE")"
+        TEMP="$(thermal_zone_temp "$ZONE")"
+        CLASS="$(thermal_classify "$TEMP")"
+        LABEL="$(thermal_zone_label "$ZONE")"
+        THERMAL_ZONE_LINES="${THERMAL_ZONE_LINES}${ZONE}|${TYPE}|${TEMP}|${CLASS}|${LABEL}
+"
+        if [ "$TEMP" != "UNKNOWN" ]; then
+            THERMAL_VALID_COUNT=$((THERMAL_VALID_COUNT + 1))
+            THERMAL_SUM="$(awk -v a="$THERMAL_SUM" -v b="$TEMP" 'BEGIN { printf "%.1f", a+b }' 2>/dev/null || printf '%s' "$THERMAL_SUM")"
+            if [ "$THERMAL_MAX" = "UNKNOWN" ] || awk -v a="$TEMP" -v b="$THERMAL_MAX" 'BEGIN { exit !(a > b) }' 2>/dev/null; then
+                THERMAL_MAX="$TEMP"
+            fi
+            case "$LABEL" in
+                CPU) [ "$THERMAL_CPU_TEMP" = "UNKNOWN" ] && THERMAL_CPU_TEMP="$TEMP" ;;
+                GPU) [ "$THERMAL_GPU_TEMP" = "UNKNOWN" ] && THERMAL_GPU_TEMP="$TEMP" ;;
+                Battery) [ "$THERMAL_BATTERY_TEMP" = "UNKNOWN" ] && THERMAL_BATTERY_TEMP="$TEMP" ;;
+            esac
+        fi
+    done
+    if [ "$THERMAL_VALID_COUNT" -eq 0 ]; then
+        THERMAL_OVERALL="UNKNOWN"
+    else
+        THERMAL_OVERALL="$(thermal_classify "$THERMAL_MAX")"
+    fi
+}
+
+thermal_cooling_report() {
+    FOUND="false"
+    for DEVICE_ROOT in "$THERMAL_SYSFS_ROOT"/cooling_device* "$THERMAL_VIRTUAL_ROOT"/cooling_device*; do
+        [ -d "$DEVICE_ROOT" ] || continue
+        FOUND="true"
+        TYPE="$(thermal_read "$DEVICE_ROOT/type" | head -n 1)"
+        CURRENT="$(thermal_read "$DEVICE_ROOT/cur_state" | head -n 1)"
+        MAX="$(thermal_read "$DEVICE_ROOT/max_state" | head -n 1)"
+        echo "COOLING DEVICE"
+        echo "-------------------------"
+        echo "Device: ${DEVICE_ROOT##*/}"
+        echo "Type: ${TYPE:-UNKNOWN}"
+        echo "Current state: ${CURRENT:-UNKNOWN}"
+        echo "Maximum state: ${MAX:-UNKNOWN}"
+        echo "Readability: type=$(thermal_node_status "$DEVICE_ROOT/type"), cur_state=$(thermal_node_status "$DEVICE_ROOT/cur_state"), max_state=$(thermal_node_status "$DEVICE_ROOT/max_state")"
+        echo "Status: READ-ONLY"
+        echo
+    done
+    [ "$FOUND" = "true" ] || echo "Cooling devices: unavailable"
+}
+
+thermal_throttle() {
+    FOUND="false"
+    ACTIVE="false"
+    REASON=""
+    for DEVICE_ROOT in "$THERMAL_SYSFS_ROOT"/cooling_device* "$THERMAL_VIRTUAL_ROOT"/cooling_device*; do
+        [ -d "$DEVICE_ROOT" ] || continue
+        CURRENT="$(thermal_read "$DEVICE_ROOT/cur_state" | head -n 1)"
+        MAX="$(thermal_read "$DEVICE_ROOT/max_state" | head -n 1)"
+        case "$CURRENT" in ''|*[!0-9]*) continue ;; esac
+        case "$MAX" in ''|*[!0-9]*) continue ;; esac
+        FOUND="true"
+        if [ "$CURRENT" -gt 0 ] 2>/dev/null; then
+            ACTIVE="true"
+            REASON="cooling device ${DEVICE_ROOT##*/} is active (state $CURRENT/$MAX)"
+        fi
+    done
+    if [ "$ACTIVE" = "true" ]; then
+        printf '%s|%s' "DETECTED" "$REASON"
+    elif [ "$FOUND" = "true" ]; then
+        printf '%s|%s' "NOT DETECTED" "no active cooling device state was observed"
+    else
+        # A frequency below its maximum is not sufficient evidence. Without
+        # readable cooling state or an explicit thermal signal, stay unknown.
+        printf '%s|%s' "UNKNOWN" "no readable cooling-device throttle signal was available"
+    fi
+}
+
+thermal_status() {
+    thermal_collect
+    THROTTLE_RESULT="$(thermal_throttle)"
+    THROTTLE_STATE="${THROTTLE_RESULT%%|*}"
+    THROTTLE_REASON="${THROTTLE_RESULT#*|}"
+    echo "AX-T615 THERMAL STATUS"
+    echo "======================"
+    echo
+    echo "Temperature:"
+    echo "CPU-related zone: ${THERMAL_CPU_TEMP}°C"
+    echo "GPU-related zone: ${THERMAL_GPU_TEMP}°C"
+    echo "Battery zone: ${THERMAL_BATTERY_TEMP}°C"
+    echo "Maximum observed zone: ${THERMAL_MAX}°C"
+    echo "Overall:"
+    echo "$THERMAL_OVERALL"
+    echo
+    echo "Thermal throttling:"
+    echo "$THROTTLE_STATE"
+    echo "Reason: $THROTTLE_REASON"
+    echo
+    echo "Recommendation: $(thermal_recommendation "$THERMAL_OVERALL")"
+    echo "Monitoring: ACTIVE"
+    echo "Safety: Android/vendor thermal policies remain authoritative."
+    echo "Thermal configuration was not changed."
+    thermal_log INFO "status zones=$THERMAL_COUNT valid=$THERMAL_VALID_COUNT overall=$THERMAL_OVERALL throttle=$THROTTLE_STATE"
+}
+
+thermal_inspect() {
+    thermal_collect
+    echo "AX-T615 THERMAL INSPECTION (READ-ONLY)"
+    echo "======================================="
+    echo "Thermal class root: $THERMAL_SYSFS_ROOT"
+    echo "Virtual thermal root: $THERMAL_VIRTUAL_ROOT"
+    echo "Zones detected: $THERMAL_COUNT (valid temperatures: $THERMAL_VALID_COUNT)"
+    echo
+    if [ "$THERMAL_COUNT" -eq 0 ]; then
+        echo "No readable thermal zones discovered."
+    else
+        OLD_IFS="$IFS"
+        IFS='
+'
+        for LINE in $THERMAL_ZONE_LINES; do
+            ZONE="${LINE%%|*}"; REST="${LINE#*|}"
+            TYPE="${REST%%|*}"; REST="${REST#*|}"
+            TEMP="${REST%%|*}"; REST="${REST#*|}"
+            CLASS="${REST%%|*}"; LABEL="${REST#*|}"
+            thermal_zone_report "$ZONE"
+            echo "Classification: $CLASS"
+            echo "Detected role: $LABEL"
+            echo
+        done
+        IFS="$OLD_IFS"
+    fi
+    thermal_cooling_report
+    echo "Throttle detection: $(thermal_throttle | tr '|' ' ')"
+    echo "Recommendation: $(thermal_recommendation "$THERMAL_OVERALL")"
+    echo "No thermal settings were modified."
+    thermal_log INFO "inspect zones=$THERMAL_COUNT overall=$THERMAL_OVERALL"
+}
+
+thermal_dry_run() {
+    thermal_collect
+    THROTTLE_RESULT="$(thermal_throttle)"
+    echo "AX-T615 THERMAL DRY-RUN"
+    echo "======================"
+    echo "Detected thermal state: $THERMAL_OVERALL"
+    echo "Recommendation: $(thermal_recommendation "$THERMAL_OVERALL")"
+    echo "Throttle state: ${THROTTLE_RESULT%%|*}"
+    echo "Planned hardware changes: NONE"
+    echo "No thermal, cooling, CPU, GPU, governor, property, or kernel settings will be changed."
+    echo "Android/vendor thermal policies remain authoritative."
+    thermal_log INFO "dry-run overall=$THERMAL_OVERALL throttle=${THROTTLE_RESULT%%|*}"
+}
+
+thermal_sample() {
+    thermal_collect
+    THROTTLE_RESULT="$(thermal_throttle)"
+    THROTTLE_STATE="${THROTTLE_RESULT%%|*}"
+    printf '%s|%s|%s|%s|%s|%s|%s|%s\n' \
+        "$(date '+%H:%M:%S' 2>/dev/null || printf '%s' unknown-time)" \
+        "$THERMAL_MAX" "$THERMAL_OVERALL" "$THROTTLE_STATE" "$THERMAL_SUM" \
+        "$THERMAL_CPU_TEMP" "$THERMAL_GPU_TEMP" "$THERMAL_BATTERY_TEMP"
+}
+
+thermal_monitor() {
+    INTERVAL=2
+    while [ "$#" -gt 0 ]; do
+        case "$1" in
+            --interval)
+                [ "$#" -ge 2 ] || { echo "Usage: thermal-controller monitor [--interval seconds]" >&2; return 2; }
+                INTERVAL="$2"; shift 2 ;;
+            *) echo "Usage: thermal-controller monitor [--interval seconds]" >&2; return 2 ;;
+        esac
+    done
+    case "$INTERVAL" in ''|*[!0-9]*|0) echo "Invalid monitor interval: $INTERVAL" >&2; return 2 ;; esac
+    echo "AX-T615 THERMAL MONITOR (READ-ONLY)"
+    echo "Interval: ${INTERVAL}s"
+    echo "Press Ctrl-C to stop."
+    while :; do
+        SAMPLE="$(thermal_sample)"
+        OLD_IFS="$IFS"; IFS='|'
+        set -- $SAMPLE
+        IFS="$OLD_IFS"
+        echo "$1"
+        echo "CPU: ${6:-UNKNOWN}°C"
+        echo "GPU: ${7:-UNKNOWN}°C"
+        echo "Battery: ${8:-UNKNOWN}°C"
+        echo "Temperature: $2°C"
+        echo "State: $3"
+        echo "Throttle: $4"
+        echo
+        thermal_log INFO "monitor temperature=$2 state=$3 throttle=$4"
+        [ "${THERMAL_MONITOR_ONCE:-false}" = "true" ] && break
+        sleep "$INTERVAL" || break
+    done
+}
+
+thermal_session_start() {
+    mkdir -p "$THERMAL_RUNTIME_DIR" 2>/dev/null || :
+    rm -f "$THERMAL_RUNTIME_DIR/session.samples" "$THERMAL_RUNTIME_DIR/session.max" \
+        "$THERMAL_RUNTIME_DIR/session.sum" "$THERMAL_RUNTIME_DIR/session.count" \
+        "$THERMAL_RUNTIME_DIR/session.throttle" 2>/dev/null || :
+    thermal_sample > "$THERMAL_RUNTIME_DIR/session.start" 2>/dev/null || :
+    thermal_log INFO "thermal game session started"
+}
+
+thermal_session_sample() {
+    [ -f "$THERMAL_RUNTIME_DIR/session.start" ] || return 0
+    SAMPLE="$(thermal_sample)"
+    printf '%s\n' "$SAMPLE" >> "$THERMAL_RUNTIME_DIR/session.samples" 2>/dev/null || :
+    thermal_log INFO "game session sample=$SAMPLE"
+}
+
+thermal_session_stop() {
+    [ -f "$THERMAL_RUNTIME_DIR/session.start" ] || return 0
+    thermal_session_sample
+    START="$(cut -d'|' -f2 "$THERMAL_RUNTIME_DIR/session.start" 2>/dev/null)"
+    FINAL="$(tail -n 1 "$THERMAL_RUNTIME_DIR/session.samples" 2>/dev/null | cut -d'|' -f2)"
+    COUNT=0; SUM=0; PEAK="UNKNOWN"; THROTTLE="NOT DETECTED"
+    while IFS='|' read -r _ TIME_TEMP _STATE SAMPLE_THROTTLE _REST; do
+        [ -n "$TIME_TEMP" ] || continue
+        case "$TIME_TEMP" in UNKNOWN) continue ;; esac
+        COUNT=$((COUNT + 1))
+        SUM="$(awk -v a="$SUM" -v b="$TIME_TEMP" 'BEGIN { printf "%.1f", a+b }' 2>/dev/null || printf '%s' "$SUM")"
+        if [ "$PEAK" = "UNKNOWN" ] || awk -v a="$TIME_TEMP" -v b="$PEAK" 'BEGIN { exit !(a > b) }' 2>/dev/null; then PEAK="$TIME_TEMP"; fi
+        case "$SAMPLE_THROTTLE" in DETECTED) THROTTLE="YES" ;; UNKNOWN) [ "$THROTTLE" != "YES" ] && THROTTLE="UNKNOWN" ;; esac
+    done < "$THERMAL_RUNTIME_DIR/session.samples"
+    if [ "$COUNT" -gt 0 ]; then AVG="$(awk -v s="$SUM" -v c="$COUNT" 'BEGIN { printf "%.1f", s/c }')"; else AVG="UNKNOWN"; fi
+    echo "THERMAL SESSION REPORT"
+    echo "======================"
+    echo "Start: ${START:-UNKNOWN}°C"
+    echo "Peak: ${PEAK}°C"
+    echo "Average: ${AVG}°C"
+    echo "Final: ${FINAL:-UNKNOWN}°C"
+    echo "Thermal throttling: $THROTTLE"
+    echo "Thermal state: $(thermal_classify "${FINAL:-UNKNOWN}")"
+    thermal_log INFO "thermal game session ended start=${START:-UNKNOWN} peak=$PEAK average=$AVG final=${FINAL:-UNKNOWN} throttle=$THROTTLE"
+    rm -f "$THERMAL_RUNTIME_DIR/session.start" "$THERMAL_RUNTIME_DIR/session.samples" 2>/dev/null || :
+}
+
+case "${1:-status}" in
+    status) [ "$#" -eq 1 ] || { echo "Usage: thermal-controller status|inspect|monitor [--interval seconds]|dry-run" >&2; exit 2; }; thermal_status ;;
+    inspect) [ "$#" -eq 1 ] || { echo "Usage: thermal-controller status|inspect|monitor [--interval seconds]|dry-run" >&2; exit 2; }; thermal_inspect ;;
+    monitor) shift; thermal_monitor "$@" ;;
+    dry-run) [ "$#" -eq 1 ] || { echo "Usage: thermal-controller status|inspect|monitor [--interval seconds]|dry-run" >&2; exit 2; }; thermal_dry_run ;;
+    session-start) [ "$#" -eq 1 ] || exit 2; thermal_session_start ;;
+    session-sample) [ "$#" -eq 1 ] || exit 2; thermal_session_sample ;;
+    session-stop) [ "$#" -eq 1 ] || exit 2; thermal_session_stop ;;
+    *) echo "Usage: thermal-controller status|inspect|monitor [--interval seconds]|dry-run" >&2; exit 2 ;;
+esac

@@ -1,18 +1,3 @@
 #!/system/bin/sh
-
-echo "AX-T615 thermal framework (READ-ONLY)"
-FOUND="no"
-
-for ZONE in /sys/class/thermal/thermal_zone[0-9]*; do
-    [ -d "$ZONE" ] || continue
-    FOUND="yes"
-    TYPE="unknown"
-    TEMP="unknown"
-    [ -r "$ZONE/type" ] && TYPE="$(cat "$ZONE/type" 2>/dev/null)"
-    [ -r "$ZONE/temp" ] && TEMP="$(cat "$ZONE/temp" 2>/dev/null)"
-    echo "${ZONE##*/}: type=$TYPE temperature=$TEMP"
-done
-
-[ "$FOUND" = "yes" ] || echo "No readable thermal zones discovered."
-echo "Thermal configuration was not changed."
-exit 0
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname "$0")" 2>/dev/null && pwd)"
+exec sh "$SCRIPT_DIR/thermal-controller" "$@"

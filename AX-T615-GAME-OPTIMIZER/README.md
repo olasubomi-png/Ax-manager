@@ -216,6 +216,44 @@ frequency selection is disabled until actual device testing explicitly enables
 a validated profile request. All apply, validation, backup, modification,
 restore, and error events are recorded in `logs/cpu.log`.
 
+## Step 5A — Thermal Monitoring
+
+Step 5A adds a read-only thermal monitoring and throttle-detection layer. It
+does not change thermal trip points, thermal zones, CPU or GPU frequencies,
+governors, system properties, cooling devices, or kernel parameters.
+
+```sh
+./bin/thermal-controller status
+./bin/thermal-controller inspect
+./bin/thermal-controller monitor --interval 2
+./bin/thermal-controller dry-run
+./bin/axgo thermal
+./bin/axgo thermal status
+./bin/axgo thermal inspect
+./bin/axgo thermal monitor
+./bin/axgo thermal dry-run
+```
+
+The controller dynamically discovers zones under `/sys/class/thermal/` and
+`/sys/devices/virtual/thermal/`, without assuming thermal-zone numbers. It
+reports zone type, current temperature, readable trip points and policy
+information, plus cooling-device type and state. Numeric temperatures are
+validated before conversion: Linux/Android millidegree values such as
+`42500` are shown as `42.5°C`; ambiguous or malformed values are `UNKNOWN`.
+
+The monitoring decision layer classifies the highest readable zone as `COOL`,
+`NORMAL`, `WARM`, `HOT`, `CRITICAL`, or `UNKNOWN`. Its recommendations only
+describe whether additional performance work should be considered. Throttle
+detection reports `DETECTED`, `NOT DETECTED`, or `UNKNOWN` based on readable
+cooling-device evidence; a rising temperature or a frequency below maximum is
+not treated as proof of throttling.
+
+Game sessions capture starting, peak, average, and final temperatures, thermal
+state, and throttle state in a thermal session report. Samples and discovery
+events are recorded in `logs/thermal.log`. Android and vendor thermal policies
+remain authoritative. AX-manager does **not** disable, override, or modify
+Android thermal protection.
+
 ## Future development roadmap
 
 1. Identify the module manager/environment and confirm its packaging contract.

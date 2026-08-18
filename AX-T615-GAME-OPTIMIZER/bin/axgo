@@ -42,6 +42,13 @@ case "$COMMAND" in
         shift
         exec sh "$SCRIPT_DIR/recovery" "${1:-status}"
         ;;
+    thermal)
+        shift
+        if [ "$#" -eq 0 ]; then
+            exec sh "$SCRIPT_DIR/thermal-controller" status
+        fi
+        exec sh "$SCRIPT_DIR/thermal-controller" "$@"
+        ;;
     gaming)
         echo "Gaming optimization is not implemented yet."
         echo "No hardware settings were changed."
@@ -50,7 +57,7 @@ case "$COMMAND" in
         exec sh "$SCRIPT_DIR/cpu-reset"
         ;;
     *)
-        echo "Usage: axgo {status|detect|capabilities [--save]|cpu [status|inspect|dry-run|apply <profile>|restore|reset]|games|game {status|detect|start|stop|current}|profile [get|set <profile>]|session [start|stop|status|current]|recovery [status|reset]|gaming|reset}"
+        echo "Usage: axgo {status|detect|capabilities [--save]|cpu [status|inspect|dry-run|apply <profile>|restore|reset]|games|game {status|detect|start|stop|current}|profile [get|set <profile>]|session [start|stop|status|current]|recovery [status|reset]|thermal [status|inspect|monitor|dry-run]|gaming|reset}"
         exit 2
         ;;
 esac
