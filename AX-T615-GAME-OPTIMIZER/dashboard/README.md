@@ -1,4 +1,4 @@
-# VEGAS-inject Dashboard/UI v2
+# VEGAS-inject Dashboard/UI v2 + Evidence Engine
 
 Dashboard/UI v2 is a **static, read-only observability interface** for unified VEGAS-inject outputs. It presents the AX-T615 Game Optimizer, System Observer, and Performance Observer without changing their contracts. The dashboard is deliberately separate from optimizer engines: it does not contain decision logic, execute arbitrary commands, or provide a hardware-control path.
 
@@ -14,7 +14,7 @@ validated JSON snapshot
 dashboard/index.html
 ```
 
-The exporter invokes the existing `orchestrator-evidence`, `orchestrator-decision`, `orchestrator`, `session`, and `profile` outputs. It does not reinterpret their policy. The browser renders the exported fields as text and rejects snapshots that are not explicitly marked `read_only: true`.
+The exporter invokes the existing `orchestrator-evidence`, `orchestrator-decision`, `orchestrator`, `session`, `profile`, and fixed `evidence-engine` outputs. It does not reinterpret their policy. The browser renders the exported fields as text and rejects snapshots that are not explicitly marked `read_only: true`.
 
 ## Open the dashboard
 
@@ -48,3 +48,9 @@ This prevents a web page from becoming an arbitrary shell executor. The dashboar
 ## Data availability
 
 The dashboard displays **Unavailable**, **Not detected**, or **No data** when a sensor, session, or bounded history is absent. It does not estimate missing values. Historical charts render only when an integration provides an explicit bounded `history` array in a validated snapshot.
+
+## Evidence engine visibility
+
+Phase 6 adds an optional, backward-compatible `evidence_engine` envelope. The dashboard presents only its source-derived **quality classification**, **freshness**, **provenance**, per-metric **confidence**, retained bounded-history count, observed trends, conditions, and any explicit **conservative fallback** reason. Evidence states remain distinct: `VALID`, `UNKNOWN`, `UNAVAILABLE`, `STALE`, and `INVALID` are not treated as interchangeable values.
+
+Local history is bounded and available only to the fixed evidence engine. The UI neither writes to that history nor fabricates a trend when the retained sample window is insufficient. A fallback is informational: it communicates that existing policy elected the conservative read-only branch; it cannot change hardware, processes, game state, charging, kernel values, or memory settings.

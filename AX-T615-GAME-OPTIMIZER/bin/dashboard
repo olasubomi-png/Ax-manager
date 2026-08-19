@@ -80,6 +80,17 @@ plugin_observability_json() {
     printf '{"system_observer":%s,"performance_observer":%s}' "$SYSTEM" "$PERFORMANCE"
 }
 
+evidence_engine_json() {
+    APP_ROOT=$(CDPATH= cd -- "$AXGO_ROOT/.." 2>/dev/null && pwd || :)
+    ENGINE="${VEGAS_EVIDENCE_ENGINE:-$APP_ROOT/bin/evidence-engine}"
+    ENGINE_JSON=''
+    if [ -n "$APP_ROOT" ] && [ -r "$ENGINE" ]; then
+        ENGINE_JSON=$(ORCH_EVIDENCE_FILE="$TMP_EVIDENCE" AXGO_ROOT="$AXGO_ROOT" sh "$ENGINE" snapshot 2>/dev/null || :)
+    fi
+    [ -n "$ENGINE_JSON" ] || ENGINE_JSON='{"schema":"1","source":"unavailable","read_only":true,"quality":{"classification":"UNSAFE_UNKNOWN","conditions":"NONE","fallback_required":"YES","fallback_reason":"evidence engine unavailable"},"metrics":{},"history":{"maximum_samples":8,"retained_samples":0,"contains_personal_data":false,"trends":{}},"safety":{"read_only":"YES","hardware_writes":"NO","forbidden_actions_blocked":"YES"}}'
+    printf '%s' "$ENGINE_JSON"
+}
+
 json_pair() {
     KEY="$1"
     RAW="$2"
@@ -144,6 +155,11 @@ snapshot() {
     json_pair confidence "$(value CONFIDENCE "$DECISION")"; printf ','
     json_pair priority "$(value PRIORITY "$DECISION")"; printf ','
     json_pair reason "$(value REASON "$DECISION")"; printf ','
+    json_pair evidence_quality "$(value EVIDENCE_QUALITY "$DECISION")"; printf ','
+    json_pair evidence_conditions "$(value EVIDENCE_CONDITIONS "$DECISION")"; printf ','
+    json_pair evidence_freshness "$(value EVIDENCE_FRESHNESS "$DECISION")"; printf ','
+    json_pair conservative_fallback_required "$(value CONSERVATIVE_FALLBACK_REQUIRED "$DECISION")"; printf ','
+    json_pair conservative_fallback_reason "$(value CONSERVATIVE_FALLBACK_REASON "$DECISION")"; printf ','
     json_pair evidence_summary "$(value EVIDENCE_SUMMARY "$DECISION")"; printf ','
     json_pair recommended_actions "$(value RECOMMENDED_ACTIONS "$DECISION")"; printf ','
     json_pair recovery_conditions "$(value RECOVERY_CONDITIONS "$DECISION")"; printf ','
@@ -170,6 +186,9 @@ snapshot() {
     else
         printf '{}'
     fi
+    printf ','
+    printf '"evidence_engine":'
+    evidence_engine_json
     printf ','
     printf '"safety":{'
     json_pair blocked_actions "$(value BLOCKED_ACTIONS "$DECISION")"; printf ','

@@ -7,10 +7,11 @@ APP_ROOT=$(CDPATH= cd -- "$PLUGIN_DIR/../.." && pwd)
 MODULE_ROOT="$APP_ROOT/AX-T615-GAME-OPTIMIZER"
 AXGO="$MODULE_ROOT/bin/axgo"
 DASHBOARD="$MODULE_ROOT/bin/dashboard"
+EVIDENCE_ENGINE="$APP_ROOT/bin/evidence-engine"
 
 usage() {
     cat <<'EOF'
-Usage: plugin.sh {status|capabilities|games|game-detection|profiles|fps-analysis|performance-analysis|memory-monitoring|thermal-monitoring|power-telemetry|orchestrator-status|dashboard [path|snapshot|core-snapshot]|dry-run}
+Usage: plugin.sh {status|capabilities|games|game-detection|profiles|fps-analysis|performance-analysis|memory-monitoring|thermal-monitoring|power-telemetry|orchestrator-status|evidence {status|capabilities|inspect|evaluate|snapshot|history}|dashboard [path|snapshot|core-snapshot]|dry-run}
 
 This is a fixed read-only operation allowlist. No plugin metadata is executed.
 EOF
@@ -28,6 +29,12 @@ case "${1:-status}" in
     thermal-monitoring) exec sh "$AXGO" thermal status ;;
     power-telemetry) exec sh "$AXGO" power status ;;
     orchestrator-status) exec sh "$AXGO" orchestrator status ;;
+    evidence)
+        case "${2:-status}" in
+            status|capabilities|inspect|evaluate|snapshot|history) exec sh "$EVIDENCE_ENGINE" "${2:-status}" ;;
+            *) usage >&2; exit 2 ;;
+        esac
+        ;;
     dashboard)
         case "${2:-path}" in
             path|snapshot|core-snapshot) exec sh "$DASHBOARD" "${2:-path}" ;;

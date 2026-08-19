@@ -1,0 +1,318 @@
+#!/usr/bin/env sh
+# VEGAS-inject evidence engine: fixed read-only normalization over repository-owned AX-T615 telemetry adapters.
+set -u
+
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
+APP_ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
+DEFAULT_AXGO_ROOT="$APP_ROOT/AX-T615-GAME-OPTIMIZER"
+AXGO_ROOT="$DEFAULT_AXGO_ROOT"
+EVIDENCE_ADAPTER="$AXGO_ROOT/bin/orchestrator-evidence"
+MAX_AGE_SECONDS="${EVIDENCE_MAX_AGE_SECONDS:-300}"
+HISTORY_LIMIT=8
+DEFAULT_RUNTIME_DIR="$APP_ROOT/runtime/evidence-engine"
+RUNTIME_DIR="${VEGAS_EVIDENCE_RUNTIME_DIR:-$DEFAULT_RUNTIME_DIR}"
+
+# Local bounded history is permitted only beneath this repository; it is never a device-control path.
+case "$RUNTIME_DIR" in
+    "$APP_ROOT"/*) ;;
+    *) RUNTIME_DIR="$DEFAULT_RUNTIME_DIR" ;;
+esac
+HISTORY_FILE="$RUNTIME_DIR/samples.log"
+
+usage() {
+    cat <<'EOF'
+Usage: evidence-engine {status|capabilities|inspect|evaluate|snapshot|history}
+
+The Evidence Engine is a fixed, read-only VEGAS-inject component. It normalizes
+repository-owned AX-T615 telemetry, records only a bounded local metric history,
+and never changes hardware, games, processes, power, charging, or system settings.
+EOF
+}
+
+json_escape() { printf '%s' "$1" | tr -d '\r\n' | sed 's/\\/\\\\/g; s/"/\\"/g'; }
+
+value() {
+    KEY="$1"
+    DATA="$2"
+    RESULT=$(printf '%s\n' "$DATA" | awk -F= -v key="$KEY" '$1 == key { value=$0; sub(/^[^=]*=/, "", value); print value }' | tail -n 1)
+    [ -n "$RESULT" ] && printf '%s' "$RESULT" || printf '%s' 'UNKNOWN'
+}
+
+source_value() {
+    KEY="$1"
+    SOURCE_FILE="${ORCH_EVIDENCE_FILE:-}"
+    if [ -n "$SOURCE_FILE" ] && [ -r "$SOURCE_FILE" ]; then
+        RESULT=$(awk -F= -v key="$KEY" '$1 == key { value=$0; sub(/^[^=]*=/, "", value); print value }' "$SOURCE_FILE" 2>/dev/null | tail -n 1)
+        [ -n "$RESULT" ] && { printf '%s' "$RESULT"; return; }
+    fi
+    case "$KEY" in
+        EVIDENCE_AGE_SECONDS) printf '%s' "${VEGAS_EVIDENCE_AGE_SECONDS:-UNKNOWN}" ;;
+        DISPLAY_REFRESH_HZ) printf '%s' "${ORCH_DISPLAY_REFRESH_HZ:-UNAVAILABLE}" ;;
+        *) printf '%s' 'UNKNOWN' ;;
+    esac
+}
+
+is_number() { printf '%s' "$1" | awk 'BEGIN { ok=0 } /^-?[0-9]+([.][0-9]+)?$/ { ok=1 } END { exit(ok ? 0 : 1) }'; }
+
+is_token() { printf '%s' "$1" | awk 'BEGIN { ok=0 } /^[A-Za-z0-9_.:+-]+$/ { ok=1 } END { exit(ok ? 0 : 1) }'; }
+
+collect() {
+    ORCH_EVIDENCE_FILE="${ORCH_EVIDENCE_FILE:-}" AXGO_ROOT="$AXGO_ROOT" AXGO_DATA_ROOT="$AXGO_ROOT" sh "$EVIDENCE_ADAPTER" 2>/dev/null || :
+}
+
+freshness_for() {
+    AGE="$1"
+    if is_number "$AGE"; then
+        awk -v age="$AGE" -v max="$MAX_AGE_SECONDS" 'BEGIN { printf "%s", (age > max ? "STALE" : "FRESH") }'
+    else
+        printf '%s' 'UNKNOWN'
+    fi
+}
+
+metric_state() {
+    RAW="$1"
+    KIND="$2"
+    case "$RAW" in
+        UNKNOWN|'') printf '%s' 'UNKNOWN'; return ;;
+        UNAVAILABLE) printf '%s' 'UNAVAILABLE'; return ;;
+    esac
+    [ "$FRESHNESS" = STALE ] && { printf '%s' 'STALE'; return; }
+    case "$KIND" in
+        numeric) is_number "$RAW" && printf '%s' 'VALID' || printf '%s' 'INVALID' ;;
+        token) is_token "$RAW" && printf '%s' 'VALID' || printf '%s' 'INVALID' ;;
+        *) printf '%s' 'INVALID' ;;
+    esac
+}
+
+metric_confidence() {
+    case "$1" in
+        VALID) [ "$FRESHNESS" = FRESH ] && printf '%s' 'HIGH' || printf '%s' 'MEDIUM' ;;
+        STALE) printf '%s' 'LOW' ;;
+        UNKNOWN|UNAVAILABLE) printf '%s' 'LOW' ;;
+        *) printf '%s' 'NONE' ;;
+    esac
+}
+
+metric_validity() {
+    case "$1" in
+        VALID) printf '%s' 'TRUSTED' ;;
+        STALE) printf '%s' 'STALE' ;;
+        UNKNOWN|UNAVAILABLE) printf '%s' 'NOT_OBSERVED' ;;
+        *) printf '%s' 'REJECTED' ;;
+    esac
+}
+
+metric_json() {
+    M_NAME="$1"
+    M_RAW="$2"
+    M_UNIT="$3"
+    M_KIND="$4"
+    M_PROVENANCE="$5"
+    M_STATE=$(metric_state "$M_RAW" "$M_KIND")
+    printf '"%s":{"metric":"%s","value":"%s","unit":"%s","state":"%s","timestamp":"%s","freshness":"%s","provenance":"%s","confidence":"%s","validity":"%s"}' \
+        "$(json_escape "$M_NAME")" "$(json_escape "$M_NAME")" "$(json_escape "$M_RAW")" "$(json_escape "$M_UNIT")" \
+        "$(json_escape "$M_STATE")" "$(json_escape "$SAMPLE_TIMESTAMP")" "$(json_escape "$FRESHNESS")" \
+        "$(json_escape "$M_PROVENANCE")" "$(json_escape "$(metric_confidence "$M_STATE")")" "$(json_escape "$(metric_validity "$M_STATE")")"
+}
+
+metric_state_for() { metric_state "$1" "$2"; }
+
+append_condition() {
+    CONDITION="$1"
+    if [ -z "$CONDITIONS" ]; then CONDITIONS="$CONDITION"; else CONDITIONS="$CONDITIONS,$CONDITION"; fi
+}
+
+load_evidence() {
+    EVIDENCE=$(collect)
+    SAMPLE_TIMESTAMP=$(value TIMESTAMP "$EVIDENCE")
+    [ "$SAMPLE_TIMESTAMP" = unknown-time ] && SAMPLE_TIMESTAMP=UNKNOWN
+    AGE_SECONDS=$(source_value EVIDENCE_AGE_SECONDS)
+    FRESHNESS=$(freshness_for "$AGE_SECONDS")
+    PROVENANCE='AX-T615_ORCHESTRATOR_EVIDENCE'
+
+    CPU_UTILIZATION=$(value CPU_UTILIZATION "$EVIDENCE")
+    CPU_STATE=$(value CPU_STATE "$EVIDENCE")
+    GPU_UTILIZATION=$(value GPU_UTILIZATION "$EVIDENCE")
+    GPU_STATE=$(value GPU_STATE "$EVIDENCE")
+    MEMORY_USAGE_PERCENT=$(value MEMORY_USAGE_PERCENT "$EVIDENCE")
+    MEMORY_AVAILABLE_MB=$(value MEMORY_AVAILABLE_MB "$EVIDENCE")
+    MEMORY_STATE=$(value MEMORY_STATE "$EVIDENCE")
+    THERMAL_TEMP_C=$(value THERMAL_TEMP_C "$EVIDENCE")
+    THERMAL_STATE=$(value THERMAL_STATE "$EVIDENCE")
+    THERMAL_TREND=$(value THERMAL_TREND "$EVIDENCE")
+    FPS=$(value FPS "$EVIDENCE")
+    FRAME_TIME_MS=$(value FRAME_TIME_MS "$EVIDENCE")
+    FRAME_PACING=$(value FRAME_PACING "$EVIDENCE")
+    FPS_TREND=$(value FPS_TREND "$EVIDENCE")
+    BATTERY_PERCENT=$(value BATTERY_PERCENT "$EVIDENCE")
+    BATTERY_HEALTH=$(value BATTERY_HEALTH "$EVIDENCE")
+    BATTERY_TEMP_C=$(value BATTERY_TEMP_C "$EVIDENCE")
+    CHARGING_STATE=$(value CHARGING_STATE "$EVIDENCE")
+    POWER_STATE=$(value POWER_STATE "$EVIDENCE")
+    ESTIMATED_WATTS=$(value ESTIMATED_WATTS "$EVIDENCE")
+    DRAIN_RATE=$(value DRAIN_RATE "$EVIDENCE")
+    DISPLAY_REFRESH_HZ=$(source_value DISPLAY_REFRESH_HZ)
+}
+
+critical_state() {
+    metric_state_for "$1" "$2"
+}
+
+evaluate_quality() {
+    THERMAL_NUMERIC_VALIDITY=$(critical_state "$THERMAL_TEMP_C" numeric)
+    THERMAL_STATE_VALIDITY=$(critical_state "$THERMAL_STATE" token)
+    BATTERY_VALIDITY=$(critical_state "$BATTERY_PERCENT" numeric)
+    BATTERY_HEALTH_VALIDITY=$(critical_state "$BATTERY_HEALTH" token)
+    POWER_VALIDITY=$(critical_state "$POWER_STATE" token)
+    CONDITIONS=''
+    FALLBACK_REQUIRED=NO
+    FALLBACK_REASON='NONE'
+
+    # Existing AX-T615 fixtures and adapters authoritatively expose a qualitative
+    # thermal state even where a numeric temperature sensor is unavailable. The
+    # state remains safety-critical; numeric temperature is normalized and shown
+    # explicitly as UNKNOWN/UNAVAILABLE rather than making valid legacy evidence
+    # unsafe by itself.
+    for CRITICAL in "$THERMAL_STATE_VALIDITY" "$BATTERY_VALIDITY" "$BATTERY_HEALTH_VALIDITY" "$POWER_VALIDITY"; do
+        [ "$CRITICAL" = VALID ] || { EVIDENCE_QUALITY=UNSAFE_UNKNOWN; FALLBACK_REQUIRED=YES; FALLBACK_REASON='safety-critical evidence is missing, stale, or invalid'; break; }
+    done
+    [ "${EVIDENCE_QUALITY:-}" = UNSAFE_UNKNOWN ] || [ "$THERMAL_NUMERIC_VALIDITY" != INVALID ] || {
+        EVIDENCE_QUALITY=UNSAFE_UNKNOWN
+        FALLBACK_REQUIRED=YES
+        FALLBACK_REASON='safety-critical evidence is missing, stale, or invalid'
+    }
+    [ -n "${EVIDENCE_QUALITY:-}" ] || EVIDENCE_QUALITY=HEALTHY
+
+    if [ "$EVIDENCE_QUALITY" = HEALTHY ]; then
+        if { is_number "$THERMAL_TEMP_C" && awk -v value="$THERMAL_TEMP_C" 'BEGIN { exit(value >= 45 ? 0 : 1) }'; } || case "$THERMAL_STATE" in HOT|CRITICAL|EMERGENCY|THROTTLED) true;; *) false;; esac; then
+            append_condition THERMAL_ESCALATION
+            EVIDENCE_QUALITY=DEGRADED
+            FALLBACK_REQUIRED=YES
+            FALLBACK_REASON='thermal escalation requires conservative policy'
+        fi
+        if { is_number "$MEMORY_USAGE_PERCENT" && awk -v value="$MEMORY_USAGE_PERCENT" 'BEGIN { exit(value >= 90 ? 0 : 1) }'; } || case "$MEMORY_STATE" in HIGH_PRESSURE|CRITICAL) true;; *) false;; esac; then
+            append_condition MEMORY_PRESSURE
+            EVIDENCE_QUALITY=DEGRADED
+            FALLBACK_REQUIRED=YES
+            FALLBACK_REASON='memory pressure requires conservative policy'
+        fi
+        if { is_number "$FPS" && awk -v value="$FPS" 'BEGIN { exit(value < 45 ? 0 : 1) }'; } || [ "$FPS_TREND" = DECLINING ]; then
+            append_condition FPS_INSTABILITY
+            [ "$EVIDENCE_QUALITY" = HEALTHY ] && EVIDENCE_QUALITY=DEGRADED
+        fi
+        case "$FRAME_PACING" in UNSTABLE|JANKY|POOR) append_condition FRAME_PACING_DEGRADATION; [ "$EVIDENCE_QUALITY" = HEALTHY ] && EVIDENCE_QUALITY=DEGRADED;; esac
+        if { is_number "$BATTERY_PERCENT" && awk -v value="$BATTERY_PERCENT" 'BEGIN { exit(value <= 15 ? 0 : 1) }'; } || case "$POWER_STATE" in CRITICAL|BATTERY_PROTECTION) true;; *) false;; esac; then
+            append_condition BATTERY_POWER_ANOMALY
+            EVIDENCE_QUALITY=DEGRADED
+            FALLBACK_REQUIRED=YES
+            FALLBACK_REASON='battery or power anomaly requires conservative policy'
+        fi
+    fi
+    if [ "$EVIDENCE_QUALITY" = HEALTHY ]; then
+        OPTIONAL_VALID=0
+        for OPTIONAL in "$(metric_state_for "$CPU_UTILIZATION" numeric)" "$(metric_state_for "$GPU_UTILIZATION" numeric)" "$(metric_state_for "$MEMORY_USAGE_PERCENT" numeric)" "$(metric_state_for "$FPS" numeric)" "$(metric_state_for "$FRAME_TIME_MS" numeric)"; do
+            [ "$OPTIONAL" = VALID ] && OPTIONAL_VALID=$((OPTIONAL_VALID + 1))
+        done
+        [ "$OPTIONAL_VALID" -lt 3 ] && EVIDENCE_QUALITY=INSUFFICIENT
+    fi
+    [ -n "$CONDITIONS" ] || CONDITIONS=NONE
+}
+
+history_count() {
+    [ -r "$HISTORY_FILE" ] || { printf '%s' 0; return; }
+    awk -F'|' 'NF == 10 { count++ } END { print count + 0 }' "$HISTORY_FILE" 2>/dev/null
+}
+
+record_sample() {
+    mkdir -p "$RUNTIME_DIR" 2>/dev/null || return 0
+    printf '%s|%s|%s|%s|%s|%s|%s|%s|%s|%s\n' \
+        "$SAMPLE_TIMESTAMP" "$CPU_UTILIZATION" "$GPU_UTILIZATION" "$MEMORY_USAGE_PERCENT" "$THERMAL_TEMP_C" "$FPS" "$FRAME_TIME_MS" "$BATTERY_PERCENT" "$ESTIMATED_WATTS" "$DRAIN_RATE" >> "$HISTORY_FILE" 2>/dev/null || return 0
+    TMP_HISTORY="$RUNTIME_DIR/.samples.$$.tmp"
+    tail -n "$HISTORY_LIMIT" "$HISTORY_FILE" 2>/dev/null > "$TMP_HISTORY" && mv "$TMP_HISTORY" "$HISTORY_FILE" 2>/dev/null || rm -f "$TMP_HISTORY" 2>/dev/null || :
+}
+
+trend_for() {
+    FIELD="$1"
+    [ -r "$HISTORY_FILE" ] || { printf '%s' 'INSUFFICIENT'; return; }
+    VALUES=$(awk -F'|' -v field="$FIELD" 'NF == 10 && $field ~ /^-?[0-9]+([.][0-9]+)?$/ { first = (count == 0 ? $field : first); last=$field; count++ } END { if (count < 2) print ""; else print first "|" last }' "$HISTORY_FILE" 2>/dev/null)
+    [ -n "$VALUES" ] || { printf '%s' 'INSUFFICIENT'; return; }
+    FIRST_VALUE=${VALUES%%|*}
+    LAST_VALUE=${VALUES#*|}
+    awk -v first="$FIRST_VALUE" -v last="$LAST_VALUE" 'BEGIN { if (last > first) print "RISING"; else if (last < first) print "DECLINING"; else print "STABLE" }'
+}
+
+evaluate() {
+    load_evidence
+    evaluate_quality
+    printf 'EVIDENCE_ENGINE_SCHEMA=1\n'
+    printf 'EVIDENCE_TIMESTAMP=%s\n' "$SAMPLE_TIMESTAMP"
+    printf 'EVIDENCE_FRESHNESS=%s\n' "$FRESHNESS"
+    printf 'EVIDENCE_PROVENANCE=%s\n' "$PROVENANCE"
+    printf 'EVIDENCE_QUALITY=%s\n' "$EVIDENCE_QUALITY"
+    printf 'EVIDENCE_CONDITIONS=%s\n' "$CONDITIONS"
+    printf 'EVIDENCE_FALLBACK_REQUIRED=%s\n' "$FALLBACK_REQUIRED"
+    printf 'EVIDENCE_FALLBACK_REASON=%s\n' "$FALLBACK_REASON"
+    printf 'READ_ONLY=YES\nHARDWARE_WRITES=NO\nFORBIDDEN_ACTIONS_BLOCKED=YES\n'
+}
+
+snapshot() {
+    load_evidence
+    evaluate_quality
+    record_sample
+    printf '{'
+    printf '"schema":"1","source":"vegas-inject-evidence-engine-read-only","read_only":true,'
+    printf '"generated_at":"%s","freshness":"%s","provenance":"%s",' "$(json_escape "$SAMPLE_TIMESTAMP")" "$(json_escape "$FRESHNESS")" "$(json_escape "$PROVENANCE")"
+    printf '"quality":{"classification":"%s","conditions":"%s","fallback_required":"%s","fallback_reason":"%s"},' \
+        "$(json_escape "$EVIDENCE_QUALITY")" "$(json_escape "$CONDITIONS")" "$(json_escape "$FALLBACK_REQUIRED")" "$(json_escape "$FALLBACK_REASON")"
+    printf '"metrics":{'
+    metric_json cpu_utilization "$CPU_UTILIZATION" percent numeric "$PROVENANCE"; printf ','
+    metric_json gpu_utilization "$GPU_UTILIZATION" percent numeric "$PROVENANCE"; printf ','
+    metric_json memory_usage_percent "$MEMORY_USAGE_PERCENT" percent numeric "$PROVENANCE"; printf ','
+    metric_json memory_available_mb "$MEMORY_AVAILABLE_MB" MB numeric "$PROVENANCE"; printf ','
+    metric_json thermal_temperature "$THERMAL_TEMP_C" C numeric "$PROVENANCE"; printf ','
+    metric_json thermal_state "$THERMAL_STATE" state token "$PROVENANCE"; printf ','
+    metric_json battery_percent "$BATTERY_PERCENT" percent numeric "$PROVENANCE"; printf ','
+    metric_json battery_health "$BATTERY_HEALTH" state token "$PROVENANCE"; printf ','
+    metric_json power_state "$POWER_STATE" state token "$PROVENANCE"; printf ','
+    metric_json estimated_watts "$ESTIMATED_WATTS" W numeric "$PROVENANCE"; printf ','
+    metric_json drain_rate "$DRAIN_RATE" percent_per_hour numeric "$PROVENANCE"; printf ','
+    metric_json display_refresh_hz "$DISPLAY_REFRESH_HZ" Hz numeric AX-T615_DISPLAY_STATUS; printf ','
+    metric_json fps "$FPS" fps numeric "$PROVENANCE"; printf ','
+    metric_json frame_time_ms "$FRAME_TIME_MS" ms numeric "$PROVENANCE"; printf ','
+    metric_json frame_pacing "$FRAME_PACING" state token "$PROVENANCE"
+    printf '},'
+    printf '"history":{"maximum_samples":%s,"retained_samples":%s,"contains_personal_data":false,"trends":{' "$HISTORY_LIMIT" "$(history_count)"
+    printf '"cpu_utilization":"%s","gpu_utilization":"%s","memory_usage_percent":"%s","thermal_temperature":"%s","fps":"%s","frame_time_ms":"%s","battery_percent":"%s","estimated_watts":"%s","drain_rate":"%s"' \
+        "$(trend_for 2)" "$(trend_for 3)" "$(trend_for 4)" "$(trend_for 5)" "$(trend_for 6)" "$(trend_for 7)" "$(trend_for 8)" "$(trend_for 9)" "$(trend_for 10)"
+    printf '}},'
+    printf '"safety":{"read_only":"YES","hardware_writes":"NO","network_operations":"NO","process_control":"NO","personal_data_collection":"NO","forbidden_actions_blocked":"YES"}'
+    printf '}\n'
+}
+
+status() {
+    printf 'COMPONENT=evidence-engine\nSTATUS=AVAILABLE\nREAD_ONLY=YES\nHARDWARE_WRITES=NO\nLOCAL_BOUNDED_HISTORY=YES\nHISTORY_LIMIT=%s\nFORBIDDEN_ACTIONS_BLOCKED=YES\n' "$HISTORY_LIMIT"
+}
+
+capabilities() {
+    printf 'COMPONENT=evidence-engine\nCAPABILITIES=status,capabilities,inspect,evaluate,snapshot,history\nEVIDENCE_STATES=VALID,UNKNOWN,UNAVAILABLE,STALE,INVALID\nTELEMETRY=cpu,gpu,memory,thermal,battery,power,display,fps,frame_time,frame_pacing\nREAD_ONLY=YES\nHARDWARE_WRITES=NO\n'
+}
+
+inspect() {
+    status
+    printf 'SCHEMA=1\nPROVENANCE=AX-T615_ORCHESTRATOR_EVIDENCE\nFRESHNESS_POLICY=EVIDENCE_AGE_SECONDS<=%s\nQUALITY=HEALTHY,DEGRADED,INSUFFICIENT,UNSAFE_UNKNOWN\nCONSERVATIVE_FALLBACK=YES\n' "$MAX_AGE_SECONDS"
+}
+
+history() {
+    printf 'HISTORY_LIMIT=%s\nHISTORY_RETAINED=%s\nPERSONAL_DATA=NO\nREAD_ONLY=YES\n' "$HISTORY_LIMIT" "$(history_count)"
+}
+
+case "${1:-help}" in
+    status) [ "$#" -eq 1 ] || { usage >&2; exit 2; }; status ;;
+    capabilities) [ "$#" -eq 1 ] || { usage >&2; exit 2; }; capabilities ;;
+    inspect) [ "$#" -eq 1 ] || { usage >&2; exit 2; }; inspect ;;
+    evaluate) [ "$#" -eq 1 ] || { usage >&2; exit 2; }; evaluate ;;
+    snapshot) [ "$#" -eq 1 ] || { usage >&2; exit 2; }; snapshot ;;
+    history) [ "$#" -eq 1 ] || { usage >&2; exit 2; }; history ;;
+    help|-h|--help) usage ;;
+    *) usage >&2; exit 2 ;;
+esac

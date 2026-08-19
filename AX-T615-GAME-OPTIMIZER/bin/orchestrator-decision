@@ -5,11 +5,19 @@ SCRIPT_DIR=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
 AXGO_ROOT="${AXGO_ROOT:-$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)}"
 EVIDENCE_FILE="${ORCH_EVIDENCE_FILE:-}"
 [ -n "$EVIDENCE_FILE" ] || EVIDENCE_FILE="${1:-}"
+EVIDENCE_ENGINE="$AXGO_ROOT/../bin/evidence-engine"
 
 value() {
     KEY="$1"
     [ -r "$EVIDENCE_FILE" ] || { printf '%s' UNKNOWN; return; }
     RESULT="$(awk -F= -v key="$KEY" '$1 == key { value=$0; sub(/^[^=]*=/, "", value); print value }' "$EVIDENCE_FILE" 2>/dev/null | tail -n 1)"
+    [ -n "$RESULT" ] && printf '%s' "$RESULT" || printf '%s' UNKNOWN
+}
+
+result_value() {
+    KEY="$1"
+    DATA="$2"
+    RESULT="$(printf '%s\n' "$DATA" | awk -F= -v key="$KEY" '$1 == key { value=$0; sub(/^[^=]*=/, "", value); print value }' | tail -n 1)"
     [ -n "$RESULT" ] && printf '%s' "$RESULT" || printf '%s' UNKNOWN
 }
 
@@ -45,6 +53,20 @@ POWER_STATE="$(value POWER_STATE)"
 DEMAND="$(value DEMAND)"
 SAFETY_STATE="$(value SAFETY_STATE)"
 TELEMETRY_ERROR="$(value TELEMETRY_ERROR)"
+
+ENGINE_EVALUATION='EVIDENCE_QUALITY=UNSAFE_UNKNOWN
+EVIDENCE_CONDITIONS=NONE
+EVIDENCE_FRESHNESS=UNKNOWN
+EVIDENCE_FALLBACK_REQUIRED=YES
+EVIDENCE_FALLBACK_REASON=evidence engine unavailable'
+if [ -r "$EVIDENCE_ENGINE" ]; then
+    ENGINE_EVALUATION=$(ORCH_EVIDENCE_FILE="$EVIDENCE_FILE" AXGO_ROOT="$AXGO_ROOT" sh "$EVIDENCE_ENGINE" evaluate 2>/dev/null || printf '%s' "$ENGINE_EVALUATION")
+fi
+EVIDENCE_QUALITY=$(result_value EVIDENCE_QUALITY "$ENGINE_EVALUATION")
+EVIDENCE_CONDITIONS=$(result_value EVIDENCE_CONDITIONS "$ENGINE_EVALUATION")
+EVIDENCE_FRESHNESS=$(result_value EVIDENCE_FRESHNESS "$ENGINE_EVALUATION")
+EVIDENCE_FALLBACK_REQUIRED=$(result_value EVIDENCE_FALLBACK_REQUIRED "$ENGINE_EVALUATION")
+EVIDENCE_FALLBACK_REASON=$(result_value EVIDENCE_FALLBACK_REASON "$ENGINE_EVALUATION")
 
 STATE=balanced
 PRIORITY=PERFORMANCE
@@ -82,6 +104,13 @@ elif { le "$BATTERY_PERCENT" 15; } || [ "$POWER_STATE" = BATTERY_PROTECTION ] ||
     REASON="battery level, health, or power state requires conservation"
     ACTIONS="recommend_battery_protection,collect_telemetry,continue_monitoring"
     RECOVERY="battery above caution, health usable, and stable for 3 consecutive samples"
+elif [ "$EVIDENCE_FALLBACK_REQUIRED" = YES ]; then
+    STATE=conservative
+    PRIORITY=SAFETY
+    CONFIDENCE=LOW
+    REASON="$EVIDENCE_FALLBACK_REASON"
+    ACTIONS="recommend_conservative,collect_telemetry,continue_monitoring"
+    RECOVERY="trusted fresh safety evidence for 3 consecutive samples"
 elif contains "CRITICAL,HIGH_PRESSURE" "$MEMORY_STATE" || contains "CRITICAL,HIGH,PRESSURE" "$CPU_STATE" || contains "CRITICAL,HIGH,PRESSURE" "$GPU_STATE" || [ "$FRAME_PACING" = UNSTABLE ] || [ "$FRAME_PACING" = JANKY ]; then
     STATE=conservative
     PRIORITY=STABILITY
@@ -116,6 +145,11 @@ printf '%s\n' \
     "DECISION_SCHEMA=1" \
     "EVIDENCE_SCHEMA=1" \
     "EVIDENCE_STATUS=$EVIDENCE_STATUS" \
+    "EVIDENCE_QUALITY=$EVIDENCE_QUALITY" \
+    "EVIDENCE_CONDITIONS=$EVIDENCE_CONDITIONS" \
+    "EVIDENCE_FRESHNESS=$EVIDENCE_FRESHNESS" \
+    "CONSERVATIVE_FALLBACK_REQUIRED=$EVIDENCE_FALLBACK_REQUIRED" \
+    "CONSERVATIVE_FALLBACK_REASON=$EVIDENCE_FALLBACK_REASON" \
     "TIMESTAMP=$TIMESTAMP" \
     "SESSION_ID=$SESSION_ID" \
     "GAME=$GAME" \

@@ -26,3 +26,14 @@
 - [x] Add or expand tests for structure, mobile layout, snapshot load/fallback, UNKNOWN/UNAVAILABLE values, plugins, safety, security, refresh, and Termux paths.
 - [x] Run focused dashboard validation, full regressions, JavaScript/CSS/HTML checks, static frontend safety scans, and review the intended diff.
 - [x] Commit the exact requested release message, push to `origin/main`, and verify synchronization.
+
+## Phase 6 — Advanced Telemetry & Evidence Engine
+
+- [x] Inspect the current evidence, decision, plugin, dashboard, compatibility, and test contracts against the Phase 6 specification.
+- [x] Define stable read-only metric states, timestamps, freshness, provenance, confidence, validity, bounded history, trends, quality, and conservative-fallback semantics.
+- [x] Implement the fixed modular evidence engine and allowlisted plugin evidence aggregation without dynamic metadata execution or hardware control.
+- [x] Integrate deterministic evidence quality, condition detection, and conservative findings into unified CLI snapshots while preserving legacy schemas.
+- [x] Extend dashboard rendering and documentation with text-safe evidence availability, freshness, provenance, confidence, trend, quality, and fallback presentation.
+- [x] Add Phase 6 normalization, valid/unknown/unavailable/stale/invalid, timestamp, trend, bounded-history, condition, safety, isolation, compatibility, dashboard, and Termux tests.
+- [x] Run focused validations, complete regressions, static forbidden-operation scans, and source-diff review.
+- [x] Commit `feat: add advanced telemetry evidence engine`, push to `origin/main`, and verify clean synchronization.

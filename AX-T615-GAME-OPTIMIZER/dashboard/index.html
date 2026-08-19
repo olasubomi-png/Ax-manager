@@ -24,6 +24,7 @@
           <a class="nav-item active" href="#overview"><span class="nav-mark"></span>Overview</a>
           <a class="nav-item" href="#telemetry"><span class="nav-mark"></span>Telemetry</a>
           <a class="nav-item" href="#orchestrator"><span class="nav-mark"></span>Orchestrator</a>
+          <a class="nav-item" href="#evidence-engine"><span class="nav-mark"></span>Evidence</a>
           <a class="nav-item" href="#profiles"><span class="nav-mark"></span>Profiles</a>
           <a class="nav-item" href="#plugins"><span class="nav-mark"></span>Plugins</a>
           <a class="nav-item" href="#safety"><span class="nav-mark"></span>Safety</a>
@@ -117,6 +118,15 @@
             <article class="evidence-panel"><h3>Supporting evidence</h3><p id="evidenceSummary">No evidence summary available.</p><div class="evidence-key" id="evidenceKey"></div></article>
             <article class="actions-panel"><h3>Recommended logical actions</h3><ul id="actionsList"><li>Unavailable</li></ul><p class="microcopy">These are logical recommendations only. This dashboard does not run them as hardware actions.</p></article>
             <article class="recovery-panel"><h3>Recovery status</h3><strong id="recoveryState">Not assessed</strong><p id="recoveryDetail">Load a normalized VEGAS-inject snapshot to see the current recovery condition.</p><dl class="dossier-facts"><div><dt>Previous state</dt><dd id="previousStateValue">Unavailable</dd></div><div><dt>Lifecycle</dt><dd id="lifecycleValue">Unavailable</dd></div></dl></article>
+          </div>
+        </section>
+
+        <section id="evidence-engine" class="section-block evidence-engine-panel" aria-labelledby="evidence-engine-title">
+          <div class="section-heading"><div><p class="eyebrow">Normalized evidence / conservative policy input</p><h2 id="evidence-engine-title">Evidence quality ledger</h2></div><p class="section-note">Observed metric states, timestamps, history, and provenance remain explicit. This panel never estimates missing values.</p></div>
+          <div class="evidence-engine-grid">
+            <article class="evidence-engine-summary"><p class="eyebrow">Current quality</p><strong id="evidenceEngineQuality">UNKNOWN</strong><p id="evidenceEngineFallbackReason">No fallback rationale available.</p><dl><div><dt>Freshness</dt><dd id="evidenceEngineFreshness">UNKNOWN</dd></div><div><dt>Provenance</dt><dd id="evidenceEngineProvenance">Unavailable</dd></div><div><dt>Thermal confidence</dt><dd id="evidenceEngineConfidence">UNKNOWN</dd></div><div><dt>Bounded history</dt><dd id="evidenceEngineHistory">Unavailable</dd></div></dl></article>
+            <article class="evidence-engine-guard"><p class="eyebrow">Conservative handling</p><h3 id="evidenceEngineFallback">UNKNOWN</h3><p>Conditions are informational policy evidence only. They do not apply hardware, process, charging, memory, game, kernel, or thermal changes.</p><dl><div><dt>Detected conditions</dt><dd id="evidenceEngineConditions">NONE</dd></div><div><dt>Engine boundary</dt><dd>READ-ONLY / NO CONTROL</dd></div></dl></article>
+            <article class="evidence-engine-trends"><p class="eyebrow">Bounded metric trends</p><h3>Observed direction</h3><ul id="evidenceTrendList"><li>Trend: Unavailable</li></ul><p class="microcopy">Trends use only retained local evidence samples and remain unavailable when the sample window is insufficient.</p></article>
           </div>
         </section>
 
