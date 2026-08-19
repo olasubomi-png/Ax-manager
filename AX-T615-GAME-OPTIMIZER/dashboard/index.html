@@ -26,6 +26,7 @@
           <a class="nav-item" href="#orchestrator"><span class="nav-mark"></span>Orchestrator</a>
           <a class="nav-item" href="#evidence-engine"><span class="nav-mark"></span>Evidence</a>
           <a class="nav-item" href="#policy-recommendations"><span class="nav-mark"></span>Policy</a>
+          <a class="nav-item" href="#controlled-actions"><span class="nav-mark"></span>Actions</a>
           <a class="nav-item" href="#profiles"><span class="nav-mark"></span>Profiles</a>
           <a class="nav-item" href="#plugins"><span class="nav-mark"></span>Plugins</a>
           <a class="nav-item" href="#safety"><span class="nav-mark"></span>Safety</a>
@@ -146,6 +147,15 @@
             <article class="policy-summary"><p class="eyebrow">Current policy state</p><strong id="policyState">UNKNOWN</strong><p id="policyReason">No validated policy recommendation is available.</p><dl><div><dt>Recommendation</dt><dd id="policyRecommendation">Unavailable</dd></div><div><dt>Confidence</dt><dd id="policyConfidence">UNKNOWN</dd></div><div><dt>Priority</dt><dd id="policyPriority">UNKNOWN</dd></div><div><dt>Bounded history</dt><dd id="policyHistoryCount">Unavailable</dd></div></dl></article>
             <article class="policy-evidence"><p class="eyebrow">Policy inputs</p><h3>Safety takes precedence</h3><dl><div><dt>Evidence quality</dt><dd id="policyEvidenceQuality">UNKNOWN</dd></div><div><dt>Bottleneck</dt><dd id="policyBottleneck">UNKNOWN</dd></div><div><dt>Safety classification</dt><dd id="policySafetyClassification">UNKNOWN</dd></div><div><dt>Rejected options</dt><dd id="policyRejectedOptions">Unavailable</dd></div></dl><p class="microcopy">Rejected options remain visible to explain why performance preference cannot bypass safety or read-only boundaries.</p></article>
             <article class="policy-provenance"><p class="eyebrow">Policy audit context</p><h3>Traceable, not applied</h3><dl><div><dt>Provenance</dt><dd id="policyProvenance">Unavailable</dd></div><div><dt>Timestamp</dt><dd id="policyTimestamp">Unavailable</dd></div><div><dt>Action layer</dt><dd>NOT IMPLEMENTED</dd></div></dl><p class="microcopy">Evidence → Analysis → Policy → Recommendation → Future Action Layer. This dashboard stops at the recommendation boundary.</p></article>
+          </div>
+        </section>
+
+        <section id="controlled-actions" class="section-block action-panel" aria-labelledby="action-title">
+          <div class="section-heading"><div><p class="eyebrow">Controlled-action architecture / observability only</p><h2 id="action-title">Controlled Actions</h2></div><p class="section-note">This panel reports a fixed, locked dry-run plan. It contains no controls and cannot apply a recommendation from the browser.</p></div>
+          <div class="action-grid">
+            <article class="action-summary"><p class="eyebrow">Action boundary</p><strong id="actionMode">DRY RUN</strong><p class="action-lock-notice">LOCKED BY DEFAULT</p><p id="actionPlan">No managed action plan is available.</p><dl><div><dt>Action lock</dt><dd id="actionLock">ENABLED</dd></div><div><dt>Validation</dt><dd id="actionValidation">REQUIRED</dd></div><div><dt>Planned action</dt><dd id="actionPlannedAction">Unavailable</dd></div><div><dt>Current result</dt><dd id="actionResult">Unavailable</dd></div></dl></article>
+            <article class="action-safety"><p class="eyebrow">Safety validation</p><h3>Explicit apply is unavailable here</h3><dl><div><dt>Recommendation</dt><dd id="actionRecommendation">Unavailable</dd></div><div><dt>Policy state</dt><dd id="actionPolicyState">UNKNOWN</dd></div><div><dt>Evidence quality</dt><dd id="actionEvidenceQuality">UNKNOWN</dd></div><div><dt>Concurrency lock</dt><dd id="actionConcurrency">UNKNOWN</dd></div><div><dt>Rollback</dt><dd id="actionRollback">Unavailable</dd></div></dl><p class="microcopy">Safety gates, an enabled action lock, and managed-state-only rollback remain visible. No physical, process, network, or plugin command is exposed.</p></article>
+            <article class="action-audit"><p class="eyebrow">Fixed registry &amp; bounded audit</p><h3>Plan trace</h3><dl><div><dt>Allowed managed actions</dt><dd id="actionAvailableActions">Unavailable</dd></div><div><dt>Blocked action classes</dt><dd id="actionBlockedActions">Unavailable</dd></div><div><dt>Audit history</dt><dd id="actionAuditHistory">Unavailable</dd></div><div><dt>Timestamp</dt><dd id="actionTimestamp">Unavailable</dd></div></dl><p class="microcopy">Audit entries are bounded local managed-state records. They are not commands, user activity logs, or a device-control channel.</p></article>
           </div>
         </section>
 

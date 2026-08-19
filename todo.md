@@ -60,3 +60,15 @@
 - [x] Update product, module, plugin, and dashboard documentation with the Evidence → Analysis → Policy → Recommendation → [Future Action Layer] boundary.
 - [x] Run focused validations, complete regressions, static forbidden-operation scans, and source-diff review.
 - [x] Commit `feat: add policy and recommendation engine`, push to `origin/main`, and verify clean synchronization.
+
+## Phase 9 — Controlled Action Layer Architecture
+
+- [x] Inspect Phase 9 contracts and the current telemetry, evidence, analysis, policy, recommendation, plugin, CLI, dashboard, documentation, and test surfaces.
+- [x] Define immutable allowed and blocked action registries, structured action records, default dry-run mode, default enabled action lock, bounded audit history, cooldown, concurrency state, and rollback contract.
+- [x] Implement the fixed action engine with only allowlisted IDs, deterministic validation gates, explicit-apply intent, no arbitrary execution, no hardware controls, and fixed rollback operations.
+- [x] Integrate action routes with AX-T615, plugin manager, unified VEGAS snapshots, advisory decision context, policy recommendations, and backwards-compatible dashboard exports.
+- [x] Extend the dashboard with text-safe Controlled Actions observability for mode, lock, allowed/blocked actions, plan, validation, dry-run, result, rollback, and bounded audit history.
+- [x] Add controlled-action, policy/evidence integration, unknown/stale/invalid rejection, lock, concurrency, duplicate, stale-lock, rollback, dashboard, plugin isolation, safety, and Termux contract tests.
+- [x] Update product, module, action-engine, plugin, dashboard, and safety documentation with the Recommendation → Action Plan → Validation → Dry Run → Explicit Apply → Verification → Rollback boundary.
+- [x] Run focused validation, complete regression, forbidden-operation scans, source-diff review, and generated-artifact cleanup.
+- [x] Commit `feat: add controlled action layer architecture`, push to `origin/main`, and verify clean synchronization.

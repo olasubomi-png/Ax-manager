@@ -54,6 +54,9 @@ contains "$SNAPSHOT" '"analysis":{"schema":"1","source":"vegas-inject-bottleneck
 contains "$SNAPSHOT" '"advisory_only":"YES"' "intelligent analysis remains advisory only"
 contains "$SNAPSHOT" '"policy":{"schema":"1","source":"vegas-inject-policy-engine-read-only"' "snapshot exposes backward-compatible policy envelope"
 contains "$SNAPSHOT" '"action_layer":"NOT_IMPLEMENTED"' "policy remains recommendation-only"
+contains "$SNAPSHOT" '"action":{"schema":"1","source":"vegas-inject-controlled-action-engine"' "snapshot exposes backward-compatible controlled action envelope"
+contains "$SNAPSHOT" '"dry_run_default":"YES"' "controlled action envelope keeps dry-run default"
+contains "$SNAPSHOT" '"action_lock_default":"ENABLED"' "controlled action envelope keeps emergency lock default"
 
 CORE_SNAPSHOT=$(ORCH_EVIDENCE_FILE="$FIXTURES/healthy/evidence.env" AXGO_ROOT="$MODULE_ROOT" DASHBOARD_RUNTIME_DIR="$TMP/core-runtime" ORCH_RUNTIME_DIR="$TMP/core-orchestrator" sh "$MODULE_ROOT/bin/dashboard" core-snapshot)
 contains "$CORE_SNAPSHOT" '"decision":{"state":"balanced"' "core snapshot preserves orchestrator decision"
@@ -61,6 +64,7 @@ contains "$CORE_SNAPSHOT" '"plugins":{}' "core snapshot omits duplicated observe
 contains "$CORE_SNAPSHOT" '"evidence_engine":{' "core snapshot retains fixed Evidence Engine envelope"
 contains "$CORE_SNAPSHOT" '"analysis":{' "core snapshot retains fixed intelligent analysis envelope"
 contains "$CORE_SNAPSHOT" '"policy":{' "core snapshot retains fixed policy envelope"
+contains "$CORE_SNAPSHOT" '"action":{' "core snapshot retains fixed controlled-action envelope"
 not_contains "$CORE_SNAPSHOT" '"system_observer"' "core snapshot excludes nested System Observer data"
 not_contains "$CORE_SNAPSHOT" '"performance_observer"' "core snapshot excludes nested Performance Observer data"
 
@@ -91,6 +95,11 @@ contains "$(cat "$MODULE_ROOT/dashboard/assets/app.js")" 'analysisRecommendation
 contains "$(cat "$MODULE_ROOT/dashboard/index.html")" 'Policy &amp; Recommendations' "UI exposes the policy recommendations section"
 contains "$(cat "$MODULE_ROOT/dashboard/assets/app.js")" 'Invalid policy section.' "UI rejects malformed policy envelopes"
 contains "$(cat "$MODULE_ROOT/dashboard/assets/app.js")" 'policyRecommendation' "UI renders policy recommendations text-safely"
+contains "$(cat "$MODULE_ROOT/dashboard/index.html")" 'Controlled Actions' "UI exposes controlled-action observability"
+contains "$(cat "$MODULE_ROOT/dashboard/index.html")" 'LOCKED BY DEFAULT' "UI labels default controlled-action lock"
+contains "$(cat "$MODULE_ROOT/dashboard/assets/app.js")" 'Invalid action section.' "UI rejects malformed controlled-action envelopes"
+contains "$(cat "$MODULE_ROOT/dashboard/assets/app.js")" 'actionPlannedAction' "UI renders controlled-action plans text-safely"
+not_contains "$(cat "$MODULE_ROOT/dashboard/index.html")" 'id="actionApply"' "UI exposes no action execution button"
 
 printf 'STEP12_DASHBOARD_TESTS: %s passed, %s failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

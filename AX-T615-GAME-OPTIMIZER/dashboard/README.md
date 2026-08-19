@@ -14,7 +14,7 @@ validated JSON snapshot
 dashboard/index.html
 ```
 
-The exporter invokes the existing `orchestrator-evidence`, `orchestrator-decision`, `orchestrator`, `session`, `profile`, fixed `evidence-engine`, fixed `bottleneck-engine`, and fixed `policy-engine` outputs. It does not reinterpret their policy. The browser renders the exported fields as text and rejects snapshots that are not explicitly marked `read_only: true`.
+The exporter invokes the existing `orchestrator-evidence`, `orchestrator-decision`, `orchestrator`, `session`, `profile`, fixed `evidence-engine`, fixed `bottleneck-engine`, fixed `policy-engine`, and fixed `action-engine` outputs. It does not reinterpret their policy. The browser renders the exported fields as text and rejects snapshots that are not explicitly marked `read_only: true`.
 
 ## Open the dashboard
 
@@ -67,4 +67,10 @@ Phase 8 adds an optional, backward-compatible `policy` envelope alongside `evide
 
 The **Policy & Recommendations** panel shows the selected policy state, recommendation, confidence, priority, rationale, evidence quality, bottleneck context, safety classification, rejected options, provenance, timestamp, and bounded sample count. The fixed policy hierarchy prioritizes unknown/invalid safety evidence, thermal protection, memory safety, and battery/power protection ahead of performance and profile preferences. The panel preserves `UNKNOWN` or `Unavailable` values and cannot infer a policy or execute a recommendation.
 
-The complete data path is **Evidence → Analysis → Policy → Recommendation → [Future Action Layer]**. This dashboard ends at **Recommendation**: it does not implement the bracketed future action layer, profile application, hardware control, charging control, display changes, thermal changes, memory changes, process control, or game modification.
+## Controlled Actions visibility
+
+Phase 9 adds an optional, backward-compatible `action` envelope alongside `evidence_engine`, `analysis`, and `policy`. It contains only fixed observability fields: `mode`, `action_lock`, `validation`, `planned_action`, `result`, `recommendation`, `policy_state`, `evidence_quality`, `concurrency`, `rollback`, `available_actions`, `blocked_actions`, bounded `audit_history`, and `generated_at`. The browser validates this envelope as an object and renders every field through text nodes.
+
+The **Controlled Actions** panel begins in **DRY RUN** and presents the lock, plan, validation, result, managed-state-only rollback, immutable allowed and blocked action registries, timestamp, and bounded audit count. It contains no action button, form, endpoint, browser-to-shell bridge, or hardware-control affordance. Snapshot refresh remains a static-file read only and cannot unlock, apply, or roll back an action.
+
+The complete data path is **Evidence → Analysis → Policy → Recommendation → Action Plan → Validation → Dry Run → Explicit Apply → Verification → Rollback**. This dashboard stops at observability: it does not implement action application, profile application, hardware control, charging control, display changes, thermal changes, memory changes, process control, or game modification.

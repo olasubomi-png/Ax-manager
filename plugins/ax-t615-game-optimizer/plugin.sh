@@ -10,10 +10,11 @@ DASHBOARD="$MODULE_ROOT/bin/dashboard"
 EVIDENCE_ENGINE="$APP_ROOT/bin/evidence-engine"
 BOTTLENECK_ENGINE="$APP_ROOT/bin/bottleneck-engine"
 POLICY_ENGINE="$APP_ROOT/bin/policy-engine"
+ACTION_ENGINE="$APP_ROOT/bin/action-engine"
 
 usage() {
     cat <<'EOF'
-Usage: plugin.sh {status|capabilities|games|game-detection|profiles|fps-analysis|performance-analysis|memory-monitoring|thermal-monitoring|power-telemetry|orchestrator-status|evidence {status|capabilities|inspect|evaluate|snapshot|history}|analysis {status|analyze|snapshot|capabilities}|policy {status|evaluate|snapshot|capabilities}|dashboard [path|snapshot|core-snapshot]|dry-run}
+Usage: plugin.sh {status|capabilities|games|game-detection|profiles|fps-analysis|performance-analysis|memory-monitoring|thermal-monitoring|power-telemetry|orchestrator-status|evidence {status|capabilities|inspect|evaluate|snapshot|history}|analysis {status|analyze|snapshot|capabilities}|policy {status|evaluate|snapshot|capabilities}|action {status|capabilities|plan|validate|dry-run|apply|rollback|history|lock|unlock}|dashboard [path|snapshot|core-snapshot]|dry-run}
 
 This is a fixed read-only operation allowlist. No plugin metadata is executed.
 EOF
@@ -46,6 +47,16 @@ case "${1:-status}" in
     policy)
         case "${2:-status}" in
             status|evaluate|snapshot|capabilities) exec sh "$POLICY_ENGINE" "${2:-status}" ;;
+            *) usage >&2; exit 2 ;;
+        esac
+        ;;
+    action)
+        case "${2:-status}" in
+            status|capabilities|history|lock) exec sh "$ACTION_ENGINE" "${2:-status}" ;;
+            plan|validate|dry-run) exec sh "$ACTION_ENGINE" "${2:-status}" refresh_telemetry ;;
+            apply) exec sh "$ACTION_ENGINE" apply refresh_telemetry --explicit-apply ;;
+            rollback) exec sh "$ACTION_ENGINE" rollback refresh_telemetry ;;
+            unlock) exec sh "$ACTION_ENGINE" unlock --explicit-unlock ;;
             *) usage >&2; exit 2 ;;
         esac
         ;;
