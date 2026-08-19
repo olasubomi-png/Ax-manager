@@ -115,7 +115,7 @@ plugin_capabilities() {
     validate "$ID" >/dev/null || { validate "$ID"; return 1; }
     case "$ID" in
         ax-t615-game-optimizer)
-            CAPS='status,capabilities,games,game-detection,profiles,fps-analysis,performance-analysis,memory-monitoring,thermal-monitoring,power-telemetry,orchestrator-status,evidence,analysis,policy,action,dashboard,dry-run'
+            CAPS='status,capabilities,games,game-detection,profiles,fps-analysis,performance-analysis,memory-monitoring,thermal-monitoring,power-telemetry,orchestrator-status,evidence,analysis,policy,action,control,dashboard,dry-run'
             ;;
         system-observer)
             CAPS='status,capabilities,inspect,snapshot'
@@ -208,6 +208,12 @@ invoke() {
         ax-t615-game-optimizer:action)
             case "$ARGUMENT" in
                 ''|status|evaluate|simulate|capabilities) exec sh "$PLUGIN_ENTRYPOINT" action "${ARGUMENT:-status}" ;;
+                *) printf 'PLUGIN_ERROR=OPERATION_REJECTED\n' >&2; return 2 ;;
+            esac
+            ;;
+        ax-t615-game-optimizer:control)
+            case "$ARGUMENT" in
+                ''|status|snapshot|evaluate|simulate|capabilities) exec sh "$PLUGIN_ENTRYPOINT" control "${ARGUMENT:-status}" ;;
                 *) printf 'PLUGIN_ERROR=OPERATION_REJECTED\n' >&2; return 2 ;;
             esac
             ;;

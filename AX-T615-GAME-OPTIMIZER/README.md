@@ -38,6 +38,22 @@ commands and are never used to force hardware frequencies.
   architecture
 - `axgo` command interfaces for discovery and gaming-engine management
 
+## Phase 10 — VEGAS Control Plane compatibility
+
+Phase 10 adds repository-level `bin/control-plane` composition for the established Evidence → Analysis → Policy → Recommendation → Action Safety Gate sequence. The AX-T615 module remains the authoritative source for its existing telemetry, evidence, analysis, policy, session, profile, orchestrator, and dashboard outputs. The control plane only reads those validated outputs, preserves their provenance and unavailable states, and exposes a deterministic lifecycle for cross-component observation.
+
+```sh
+sh ../bin/control-plane status
+sh ../bin/control-plane snapshot
+sh ../bin/control-plane evaluate
+sh ../bin/control-plane simulate
+sh ../bin/control-plane capabilities
+```
+
+The AX-T615 plugin adapter exposes the same fixed `control {status|snapshot|evaluate|simulate|capabilities}` compatibility operation through the registry. No caller-provided action ID, package target, profile target, file path, shell fragment, or device-control parameter is accepted. `simulate` delegates only to the existing simulation-only Action Safety Gate; no AX-T615 hardware, game, process, memory, thermal, battery, charging, governor, or Android-property change is made.
+
+The dashboard snapshot now carries an optional backward-compatible `control_plane` envelope. It is descriptive: it shows component availability, state, confidence, evidence quality, provenance, lifecycle, simulation state, and bounded audit metadata through text-only browser rendering. It never creates a browser-to-shell bridge, executes a CLI command, or turns the static dashboard into a device-control interface.
+
 ## Step 2 — Hardware & Kernel Discovery
 
 The project now includes a read-only diagnostic engine for inspecting the

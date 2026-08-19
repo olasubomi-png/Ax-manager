@@ -1,0 +1,347 @@
+#!/usr/bin/env sh
+# VEGAS-inject Phase 10: fixed read-only orchestration over validated existing components.
+set -u
+
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
+APP_ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
+AXGO_ROOT="${AXGO_ROOT:-$APP_ROOT/AX-T615-GAME-OPTIMIZER}"
+AXGO_DATA_ROOT="${AXGO_DATA_ROOT:-$AXGO_ROOT}"
+PLUGIN_MANAGER="$APP_ROOT/bin/plugin-manager"
+EVIDENCE_ENGINE="$APP_ROOT/bin/evidence-engine"
+BOTTLENECK_ENGINE="$APP_ROOT/bin/bottleneck-engine"
+POLICY_ENGINE="$APP_ROOT/bin/policy-engine"
+ACTION_GATE="$APP_ROOT/bin/action-gate"
+ORCHESTRATOR="$AXGO_ROOT/bin/orchestrator"
+DEFAULT_RUNTIME_DIR="$APP_ROOT/runtime/control-plane"
+CONTROL_RUNTIME_DIR="${VEGAS_CONTROL_PLANE_RUNTIME_DIR:-$DEFAULT_RUNTIME_DIR}"
+MAX_AUDIT_RECORDS=16
+
+# The audit path is deliberately constrained to the repository. It records only
+# non-sensitive simulation safety outcomes and cannot target a device path.
+case "$CONTROL_RUNTIME_DIR" in
+    "$APP_ROOT"/*) ;;
+    *) CONTROL_RUNTIME_DIR="$DEFAULT_RUNTIME_DIR" ;;
+esac
+CONTROL_AUDIT_FILE="$CONTROL_RUNTIME_DIR/control-plane-audit.log"
+
+usage() {
+    cat <<'EOF'
+Usage: control-plane {status|snapshot|evaluate|simulate|capabilities}
+
+The VEGAS Control Plane composes fixed Evidence, Analysis, Policy, Recommendation,
+and Action Safety Gate outputs. It is read-only and simulation-only. No real action
+layer, device control, dynamic dispatch, network operation, or arbitrary execution exists.
+EOF
+}
+
+now() { date '+%Y-%m-%dT%H:%M:%S%z' 2>/dev/null || printf '%s' 'unknown-time'; }
+
+escape() { printf '%s' "$1" | tr -d '\r\n' | sed 's/\\/\\\\/g; s/"/\\"/g'; }
+
+json_string() {
+    KEY="$1"
+    DATA="$2"
+    VALUE=$(printf '%s' "$DATA" | sed -n "s/.*\"$KEY\":\"\([^\"]*\)\".*/\1/p" | head -n 1)
+    [ -n "$VALUE" ] && printf '%s' "$VALUE" || printf '%s' 'UNKNOWN'
+}
+
+json_nested_string() {
+    PARENT="$1"
+    KEY="$2"
+    DATA="$3"
+    VALUE=$(printf '%s' "$DATA" | sed -n "s/.*\"$PARENT\":{[^}]*\"$KEY\":\"\([^\"]*\)\".*/\1/p" | head -n 1)
+    [ -n "$VALUE" ] && printf '%s' "$VALUE" || printf '%s' 'UNKNOWN'
+}
+
+key_value() {
+    KEY="$1"
+    DATA="$2"
+    VALUE=$(printf '%s\n' "$DATA" | awk -F= -v key="$KEY" '$1 == key { value=$0; sub(/^[^=]*=/, "", value); print value }' | tail -n 1)
+    [ -n "$VALUE" ] && printf '%s' "$VALUE" || printf '%s' 'UNKNOWN'
+}
+
+json_object_or() {
+    DATA="$1"
+    FALLBACK="$2"
+    case "$DATA" in
+        \{*\}) printf '%s' "$DATA" ;;
+        *) printf '%s' "$FALLBACK" ;;
+    esac
+}
+
+confidence_for_quality() {
+    case "$1" in
+        HEALTHY|VALID) printf '%s' 'HIGH' ;;
+        DEGRADED|INSUFFICIENT) printf '%s' 'MEDIUM' ;;
+        *) printf '%s' 'LOW' ;;
+    esac
+}
+
+availability_for_quality() {
+    case "$1" in
+        HEALTHY|VALID|DEGRADED|INSUFFICIENT) printf '%s' 'AVAILABLE' ;;
+        *) printf '%s' 'UNAVAILABLE' ;;
+    esac
+}
+
+safe_confidence() {
+    case "$1" in HIGH|MEDIUM) return 0 ;; *) return 1 ;; esac
+}
+
+unsafe_state() {
+    case "$1" in ''|UNKNOWN|UNAVAILABLE|STALE|INVALID|UNSAFE_UNKNOWN|INSUFFICIENT_EVIDENCE|MALFORMED|MISSING) return 0 ;; *) return 1 ;; esac
+}
+
+valid_policy_state() {
+    case "$1" in SAFE|BALANCED|CONSERVATIVE|PERFORMANCE_ADVISORY|COOL_ADVISORY|BATTERY_ADVISORY|SAFETY_BLOCKED) return 0 ;; *) return 1 ;; esac
+}
+
+valid_recommendation() {
+    case "$1" in remain_conservative|collect_more_evidence|continue_monitoring|retain_current_profile|consider_performance_profile|consider_cool_profile|consider_battery_profile|inspect_frame_pacing|inspect_cpu_pressure|inspect_thermal_conditions|inspect_memory_pressure|inspect_power_conditions) return 0 ;; *) return 1 ;; esac
+}
+
+run_evidence() {
+    ORCH_EVIDENCE_FILE="${ORCH_EVIDENCE_FILE:-}" AXGO_ROOT="$AXGO_ROOT" AXGO_DATA_ROOT="$AXGO_DATA_ROOT" sh "$EVIDENCE_ENGINE" snapshot 2>/dev/null || :
+}
+
+run_analysis() {
+    ORCH_EVIDENCE_FILE="${ORCH_EVIDENCE_FILE:-}" AXGO_ROOT="$AXGO_ROOT" AXGO_DATA_ROOT="$AXGO_DATA_ROOT" sh "$BOTTLENECK_ENGINE" snapshot 2>/dev/null || :
+}
+
+run_policy() {
+    ORCH_EVIDENCE_FILE="${ORCH_EVIDENCE_FILE:-}" AXGO_ROOT="$AXGO_ROOT" AXGO_DATA_ROOT="$AXGO_DATA_ROOT" sh "$POLICY_ENGINE" snapshot 2>/dev/null || :
+}
+
+run_gate() {
+    OPERATION="$1"
+    ORCH_EVIDENCE_FILE="${ORCH_EVIDENCE_FILE:-}" AXGO_ROOT="$AXGO_ROOT" AXGO_DATA_ROOT="$AXGO_DATA_ROOT" sh "$ACTION_GATE" "$OPERATION" 2>/dev/null || :
+}
+
+run_orchestrator_status() {
+    AXGO_ROOT="$AXGO_ROOT" AXGO_DATA_ROOT="$AXGO_DATA_ROOT" ORCH_RUNTIME_DIR="${ORCH_RUNTIME_DIR:-$AXGO_DATA_ROOT/runtime/orchestrator}" sh "$ORCHESTRATOR" status 2>/dev/null || :
+}
+
+plugin_status() { sh "$PLUGIN_MANAGER" status "$1" 2>/dev/null || :; }
+
+plugin_stage() {
+    AX_STATUS=$(plugin_status ax-t615-game-optimizer)
+    SYSTEM_STATUS=$(plugin_status system-observer)
+    PERFORMANCE_STATUS=$(plugin_status performance-observer)
+    AX_LIFECYCLE=$(key_value LIFECYCLE "$AX_STATUS")
+    SYSTEM_LIFECYCLE=$(key_value LIFECYCLE "$SYSTEM_STATUS")
+    PERFORMANCE_LIFECYCLE=$(key_value LIFECYCLE "$PERFORMANCE_STATUS")
+    if [ "$AX_LIFECYCLE" = ENABLED ] && [ "$SYSTEM_LIFECYCLE" = ENABLED ] && [ "$PERFORMANCE_LIFECYCLE" = ENABLED ]; then
+        PLUGINS_AVAILABILITY=AVAILABLE
+        PLUGINS_STATE=READY
+        PLUGINS_CONFIDENCE=HIGH
+    else
+        PLUGINS_AVAILABILITY=UNAVAILABLE
+        PLUGINS_STATE=DEGRADED
+        PLUGINS_CONFIDENCE=LOW
+    fi
+}
+
+load_components() {
+    EVIDENCE=$(json_object_or "$(run_evidence)" '{"schema":"1","source":"unavailable","read_only":true,"quality":{"classification":"UNSAFE_UNKNOWN","fallback_required":"YES","fallback_reason":"evidence engine unavailable"},"metrics":{},"safety":{"read_only":"YES"}}')
+    ANALYSIS=$(json_object_or "$(run_analysis)" '{"schema":"1","source":"unavailable","read_only":true,"classification":"INSUFFICIENT_EVIDENCE","confidence":"LOW","evidence_quality":"UNSAFE_UNKNOWN","provenance":"unavailable","reason":"analysis engine unavailable","safety":{"read_only":"YES"}}')
+    POLICY=$(json_object_or "$(run_policy)" '{"schema":"1","source":"unavailable","read_only":true,"policy_state":"INSUFFICIENT_EVIDENCE","recommendation":"remain_conservative","confidence":"LOW","evidence_quality":"UNSAFE_UNKNOWN","provenance":"unavailable","reason":"policy engine unavailable","safety":{"read_only":"YES"}}')
+    ACTION_GATE_RESULT=$(json_object_or "$(run_gate evaluate)" '{"schema":"1","source":"unavailable","read_only":true,"gate_state":"BLOCKED","simulation_status":"SIMULATION_BLOCKED","simulated_recommendation":"remain_conservative","confidence":"LOW","evidence_quality":"UNSAFE_UNKNOWN","provenance":"unavailable","reason":"action gate unavailable","safety":{"read_only":"YES","simulation_only":"YES"}}')
+    ORCHESTRATOR_STATUS=$(run_orchestrator_status)
+    plugin_stage
+
+    GENERATED_AT=$(json_string generated_at "$EVIDENCE")
+    EVIDENCE_QUALITY=$(json_nested_string quality classification "$EVIDENCE")
+    EVIDENCE_SOURCE=$(json_string source "$EVIDENCE")
+    EVIDENCE_AVAILABILITY=$(availability_for_quality "$EVIDENCE_QUALITY")
+    EVIDENCE_CONFIDENCE=$(confidence_for_quality "$EVIDENCE_QUALITY")
+
+    ANALYSIS_STATE=$(json_string classification "$ANALYSIS")
+    ANALYSIS_CONFIDENCE=$(json_string confidence "$ANALYSIS")
+    ANALYSIS_QUALITY=$(json_string evidence_quality "$ANALYSIS")
+    [ "$ANALYSIS_QUALITY" = UNKNOWN ] && ANALYSIS_QUALITY="$EVIDENCE_QUALITY"
+    ANALYSIS_PROVENANCE=$(json_string provenance "$ANALYSIS")
+    ANALYSIS_AVAILABILITY=AVAILABLE
+    unsafe_state "$ANALYSIS_STATE" && ANALYSIS_AVAILABILITY=UNAVAILABLE
+
+    POLICY_STATE=$(json_string policy_state "$POLICY")
+    RECOMMENDATION=$(json_string recommendation "$POLICY")
+    POLICY_CONFIDENCE=$(json_string confidence "$POLICY")
+    POLICY_QUALITY=$(json_string evidence_quality "$POLICY")
+    [ "$POLICY_QUALITY" = UNKNOWN ] && POLICY_QUALITY="$EVIDENCE_QUALITY"
+    POLICY_PROVENANCE=$(json_string provenance "$POLICY")
+    POLICY_AVAILABILITY=AVAILABLE
+    valid_policy_state "$POLICY_STATE" || POLICY_AVAILABILITY=UNAVAILABLE
+
+    RAW_GATE_STATE=$(json_string gate_state "$ACTION_GATE_RESULT")
+    GATE_SIMULATION_STATUS=$(json_string simulation_status "$ACTION_GATE_RESULT")
+    GATE_CONFIDENCE=$(json_string confidence "$ACTION_GATE_RESULT")
+    GATE_QUALITY=$(json_string evidence_quality "$ACTION_GATE_RESULT")
+    [ "$GATE_QUALITY" = UNKNOWN ] && GATE_QUALITY="$EVIDENCE_QUALITY"
+    GATE_PROVENANCE=$(json_string provenance "$ACTION_GATE_RESULT")
+    GATE_REASON=$(json_string reason "$ACTION_GATE_RESULT")
+    GATE_AVAILABILITY=AVAILABLE
+    unsafe_state "$RAW_GATE_STATE" && GATE_AVAILABILITY=UNAVAILABLE
+
+    SYSTEM_STATE=$(key_value ORCHESTRATOR_STATE "$ORCHESTRATOR_STATUS")
+    SYSTEM_LIFECYCLE=$(key_value ORCHESTRATOR_LIFECYCLE "$ORCHESTRATOR_STATUS")
+    SYSTEM_AVAILABILITY=AVAILABLE
+    [ "$SYSTEM_STATE" = UNKNOWN ] && SYSTEM_AVAILABILITY=UNAVAILABLE
+}
+
+evaluate_safety() {
+    CONTROL_GATE_STATE=BLOCKED
+    CONTROL_REASON='required control-plane safety context is unavailable'
+    CONTROL_SAFE=NO
+
+    case "$EVIDENCE_QUALITY" in HEALTHY|VALID) ;; *) CONTROL_REASON="evidence quality $EVIDENCE_QUALITY requires conservative blocking"; return ;; esac
+    [ "$EVIDENCE_AVAILABILITY" = AVAILABLE ] || { CONTROL_REASON='evidence stage is unavailable'; return; }
+    [ "$ANALYSIS_AVAILABILITY" = AVAILABLE ] || { CONTROL_REASON='analysis stage is unavailable'; return; }
+    [ "$POLICY_AVAILABILITY" = AVAILABLE ] || { CONTROL_REASON='policy stage is unavailable'; return; }
+    [ "$PLUGINS_AVAILABILITY" = AVAILABLE ] || { CONTROL_REASON='required registered plugin is unavailable'; return; }
+    valid_recommendation "$RECOMMENDATION" || { CONTROL_REASON='policy recommendation is not fixed or recognized'; return; }
+    [ "$RAW_GATE_STATE" = ALLOWED ] || { CONTROL_REASON="$GATE_REASON"; return; }
+    [ "$GATE_AVAILABILITY" = AVAILABLE ] || { CONTROL_REASON='action gate stage is unavailable'; return; }
+
+    CONTROL_GATE_STATE=ALLOWED
+    CONTROL_REASON='all fixed component outputs are available and validated; recommendation remains simulation-only'
+    CONTROL_SAFE=YES
+}
+
+set_lifecycle() {
+    OPERATION="$1"
+    if [ "$CONTROL_SAFE" != YES ]; then
+        LIFECYCLE=BLOCKED
+    else
+        case "$OPERATION" in
+            simulate) LIFECYCLE=SIMULATING ;;
+            evaluate) LIFECYCLE=EVALUATING ;;
+            snapshot|status) LIFECYCLE=GATED ;;
+            *) LIFECYCLE=IDLE ;;
+        esac
+    fi
+}
+
+ensure_audit_runtime() {
+    umask 077
+    mkdir -p "$CONTROL_RUNTIME_DIR" 2>/dev/null
+}
+
+audit_count() {
+    [ -r "$CONTROL_AUDIT_FILE" ] || { printf '%s' 0; return; }
+    awk 'END { print NR + 0 }' "$CONTROL_AUDIT_FILE" 2>/dev/null
+}
+
+append_simulation_audit() {
+    ensure_audit_runtime || return 1
+    TEMP_AUDIT="$CONTROL_AUDIT_FILE.tmp.$$"
+    RECORD="timestamp=$(now);operation=simulate;lifecycle=$LIFECYCLE;evidence_quality=$EVIDENCE_QUALITY;analysis_state=$ANALYSIS_STATE;policy_state=$POLICY_STATE;action_gate_state=$CONTROL_GATE_STATE;simulation=true;executed=false;hardware_changed=false"
+    { [ -r "$CONTROL_AUDIT_FILE" ] && tail -n $((MAX_AUDIT_RECORDS - 1)) "$CONTROL_AUDIT_FILE" 2>/dev/null || :; printf '%s\n' "$RECORD"; } > "$TEMP_AUDIT" 2>/dev/null || return 1
+    mv -f "$TEMP_AUDIT" "$CONTROL_AUDIT_FILE" 2>/dev/null
+}
+
+emit_snapshot() {
+    OPERATION="$1"
+    AUDIT_APPENDED="$2"
+    printf '{'
+    printf '"schema":"1",'
+    printf '"component":"vegas-control-plane",'
+    printf '"product":"VEGAS-inject Control Plane",'
+    printf '"source":"vegas-inject-control-plane-read-only",'
+    printf '"generated_at":"%s",' "$(escape "$GENERATED_AT")"
+    printf '"read_only":true,'
+    printf '"simulation_only":true,'
+    printf '"state":"%s",' "$(escape "$CONTROL_GATE_STATE")"
+    printf '"lifecycle":"%s",' "$(escape "$LIFECYCLE")"
+    printf '"operation":"%s",' "$(escape "$OPERATION")"
+    printf '"system":{"state":"%s","confidence":"%s","evidence_quality":"%s","provenance":"AX-T615-orchestrator","availability":"%s","lifecycle":"%s"},' \
+        "$(escape "$SYSTEM_STATE")" "$(escape "$(confidence_for_quality "$EVIDENCE_QUALITY")")" "$(escape "$EVIDENCE_QUALITY")" "$(escape "$SYSTEM_AVAILABILITY")" "$(escape "$SYSTEM_LIFECYCLE")"
+    printf '"evidence":{"state":"%s","confidence":"%s","evidence_quality":"%s","provenance":"%s","availability":"%s","result":%s},' \
+        "$(escape "$EVIDENCE_QUALITY")" "$(escape "$EVIDENCE_CONFIDENCE")" "$(escape "$EVIDENCE_QUALITY")" "$(escape "$EVIDENCE_SOURCE")" "$(escape "$EVIDENCE_AVAILABILITY")" "$EVIDENCE"
+    printf '"analysis":{"state":"%s","confidence":"%s","evidence_quality":"%s","provenance":"%s","availability":"%s","result":%s},' \
+        "$(escape "$ANALYSIS_STATE")" "$(escape "$ANALYSIS_CONFIDENCE")" "$(escape "$ANALYSIS_QUALITY")" "$(escape "$ANALYSIS_PROVENANCE")" "$(escape "$ANALYSIS_AVAILABILITY")" "$ANALYSIS"
+    printf '"policy":{"state":"%s","confidence":"%s","evidence_quality":"%s","provenance":"%s","availability":"%s","recommendation":"%s","reason":"%s","result":%s},' \
+        "$(escape "$POLICY_STATE")" "$(escape "$POLICY_CONFIDENCE")" "$(escape "$POLICY_QUALITY")" "$(escape "$POLICY_PROVENANCE")" "$(escape "$POLICY_AVAILABILITY")" "$(escape "$RECOMMENDATION")" "$(escape "$(json_string reason "$POLICY")")" "$POLICY"
+    printf '"recommendation":{"state":"%s","confidence":"%s","evidence_quality":"%s","provenance":"%s","availability":"%s","value":"%s","executable":false,"reason":"recommendations are advisory and never executable in this control plane"},' \
+        "$(escape "$POLICY_STATE")" "$(escape "$POLICY_CONFIDENCE")" "$(escape "$POLICY_QUALITY")" "$(escape "$POLICY_PROVENANCE")" "$(escape "$POLICY_AVAILABILITY")" "$(escape "$RECOMMENDATION")"
+    printf '"action_gate":{"state":"%s","confidence":"%s","evidence_quality":"%s","provenance":"%s","availability":"%s","simulation_status":"%s","simulated_recommendation":"%s","executed":false,"hardware_changed":false,"result":%s},' \
+        "$(escape "$CONTROL_GATE_STATE")" "$(escape "$GATE_CONFIDENCE")" "$(escape "$GATE_QUALITY")" "$(escape "$GATE_PROVENANCE")" "$(escape "$GATE_AVAILABILITY")" "$(escape "$GATE_SIMULATION_STATUS")" "$(escape "$(json_string simulated_recommendation "$ACTION_GATE_RESULT")")" "$ACTION_GATE_RESULT"
+    printf '"plugins":{"state":"%s","confidence":"%s","evidence_quality":"%s","provenance":"plugin-manager-fixed-registry","availability":"%s","registered":{"ax_t615":{"lifecycle":"%s","availability":"%s"},"system_observer":{"lifecycle":"%s","availability":"%s"},"performance_observer":{"lifecycle":"%s","availability":"%s"}}},' \
+        "$(escape "$PLUGINS_STATE")" "$(escape "$PLUGINS_CONFIDENCE")" "$(escape "$EVIDENCE_QUALITY")" "$(escape "$PLUGINS_AVAILABILITY")" \
+        "$(escape "$AX_LIFECYCLE")" "$(escape "$(key_value AVAILABILITY "$AX_STATUS")")" "$(escape "$SYSTEM_LIFECYCLE")" "$(escape "$(key_value AVAILABILITY "$SYSTEM_STATUS")")" "$(escape "$PERFORMANCE_LIFECYCLE")" "$(escape "$(key_value AVAILABILITY "$PERFORMANCE_STATUS")")"
+    printf '"safety":{"state":"%s","confidence":"HIGH","evidence_quality":"%s","provenance":"vegas-control-plane-fixed-safety-contract","availability":"AVAILABLE","read_only":true,"simulation_only":true,"executed":false,"hardware_changed":false,"hardware_writes":false,"process_control":false,"network":false,"arbitrary_execution":false,"dynamic_dispatch":false,"real_action_layer":"NOT_IMPLEMENTED","reason":"%s"},' \
+        "$(escape "$CONTROL_GATE_STATE")" "$(escape "$EVIDENCE_QUALITY")" "$(escape "$CONTROL_REASON")"
+    printf '"provenance":{"state":"DERIVED","confidence":"HIGH","evidence_quality":"%s","provenance":"fixed-control-plane","availability":"AVAILABLE","evidence":"%s","analysis":"%s","policy":"%s","action_gate":"%s","plugins":"plugin-manager-fixed-registry"},' \
+        "$(escape "$EVIDENCE_QUALITY")" "$(escape "$EVIDENCE_SOURCE")" "$(escape "$ANALYSIS_PROVENANCE")" "$(escape "$POLICY_PROVENANCE")" "$(escape "$GATE_PROVENANCE")"
+    printf '"simulation":{"simulation":true,"executed":false,"hardware_changed":false,"operation":"%s","audit_appended":"%s"},' "$(escape "$OPERATION")" "$(escape "$AUDIT_APPENDED")"
+    printf '"audit":{"count":%s,"maximum":%s,"bounded":true,"repository_local":true,"read_only_record":true,"contains_credentials":false,"contains_personal_information":false,"contains_arbitrary_system_data":false}' "$(audit_count)" "$MAX_AUDIT_RECORDS"
+    printf '}\n'
+}
+
+prepare() {
+    OPERATION="$1"
+    load_components
+    evaluate_safety
+    set_lifecycle "$OPERATION"
+}
+
+status() {
+    prepare status
+    printf 'VEGAS CONTROL PLANE\n'
+    printf 'Lifecycle: %s\n' "$LIFECYCLE"
+    printf 'Evidence: %s (%s)\n' "$EVIDENCE_QUALITY" "$EVIDENCE_AVAILABILITY"
+    printf 'Analysis: %s (%s)\n' "$ANALYSIS_STATE" "$ANALYSIS_CONFIDENCE"
+    printf 'Policy: %s\n' "$POLICY_STATE"
+    printf 'Recommendation: %s\n' "$RECOMMENDATION"
+    printf 'Action Gate: %s\n' "$CONTROL_GATE_STATE"
+    printf 'Simulation only: YES\nReal action execution: NOT_AVAILABLE\nHardware writes: NO\n'
+    printf 'Audit records: %s/%s\n' "$(audit_count)" "$MAX_AUDIT_RECORDS"
+}
+
+evaluate() {
+    prepare evaluate
+    emit_snapshot evaluate NO
+}
+
+simulate() {
+    prepare simulate
+    AUDIT_APPENDED=NO
+    if [ "$CONTROL_SAFE" = YES ]; then
+        ACTION_GATE_RESULT=$(json_object_or "$(run_gate simulate)" "$ACTION_GATE_RESULT")
+        RAW_GATE_STATE=$(json_string gate_state "$ACTION_GATE_RESULT")
+        GATE_SIMULATION_STATUS=$(json_string simulation_status "$ACTION_GATE_RESULT")
+        GATE_CONFIDENCE=$(json_string confidence "$ACTION_GATE_RESULT")
+        GATE_QUALITY=$(json_string evidence_quality "$ACTION_GATE_RESULT")
+        GATE_PROVENANCE=$(json_string provenance "$ACTION_GATE_RESULT")
+        GATE_REASON=$(json_string reason "$ACTION_GATE_RESULT")
+        [ "$RAW_GATE_STATE" = ALLOWED ] || { CONTROL_SAFE=NO; CONTROL_GATE_STATE=BLOCKED; CONTROL_REASON="$GATE_REASON"; LIFECYCLE=BLOCKED; }
+    fi
+    append_simulation_audit && AUDIT_APPENDED=YES || :
+    emit_snapshot simulate "$AUDIT_APPENDED"
+}
+
+capabilities() {
+    cat <<'EOF'
+CONTROL_PLANE_CAPABILITIES=status,snapshot,evaluate,simulate,capabilities
+LIFECYCLE_STATES=IDLE,OBSERVING,ANALYZING,EVALUATING,GATED,SIMULATING,BLOCKED
+READ_ONLY=YES
+SIMULATION_ONLY=YES
+HARDWARE_WRITES=NO
+PROCESS_CONTROL=NO
+NETWORK=NO
+ARBITRARY_EXECUTION=NO
+DYNAMIC_DISPATCH=NO
+REAL_ACTION_LAYER=NOT_IMPLEMENTED
+BOUNDED_REPOSITORY_LOCAL_AUDIT=YES
+AUDIT_MAXIMUM=16
+EOF
+}
+
+case "${1:-status}" in
+    status) [ "$#" -eq 1 ] || { usage >&2; exit 2; }; status ;;
+    snapshot) [ "$#" -eq 1 ] || { usage >&2; exit 2; }; prepare snapshot; emit_snapshot snapshot NO ;;
+    evaluate) [ "$#" -eq 1 ] || { usage >&2; exit 2; }; evaluate ;;
+    simulate) [ "$#" -eq 1 ] || { usage >&2; exit 2; }; simulate ;;
+    capabilities) [ "$#" -eq 1 ] || { usage >&2; exit 2; }; capabilities ;;
+    help|-h|--help) usage ;;
+    *) usage >&2; exit 2 ;;
+esac

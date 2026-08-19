@@ -14,7 +14,7 @@ validated JSON snapshot
 dashboard/index.html
 ```
 
-The exporter invokes the existing `orchestrator-evidence`, `orchestrator-decision`, `orchestrator`, `session`, `profile`, fixed `evidence-engine`, fixed `bottleneck-engine`, fixed `policy-engine`, legacy internal `action-engine`, and public fixed `action-gate` outputs. It does not reinterpret their policy. The browser renders the exported fields as text and rejects snapshots that are not explicitly marked `read_only: true`.
+The exporter invokes the existing `orchestrator-evidence`, `orchestrator-decision`, `orchestrator`, `session`, `profile`, fixed `evidence-engine`, fixed `bottleneck-engine`, fixed `policy-engine`, legacy internal `action-engine`, public fixed `action-gate`, and fixed repository-level `control-plane` outputs. It does not reinterpret their policy. The browser renders the exported fields as text and rejects snapshots that are not explicitly marked `read_only: true`.
 
 ## Open the dashboard
 
@@ -80,3 +80,9 @@ The public simulation-only Action Safety Gate adds an optional, backward-compati
 The **Action Safety Gate** panel presents the gate state, simulation result, simulated recommendation, reason, evidence quality, confidence, audit count, and clear no-real-action statement. It contains no action button, form, endpoint, browser-to-shell bridge, profile target, or hardware-control affordance. Loading or refreshing a static snapshot cannot evaluate or simulate an action.
 
 The public data path is **Evidence → Analysis → Policy → Recommendation → Action Gate → [Future Real Action Layer]**. This dashboard ends at the gate: it does not implement action application, profile application, hardware control, charging control, display changes, thermal changes, memory changes, process control, or game modification.
+
+## VEGAS Control Plane visibility
+
+Phase 10 adds an optional, backward-compatible `control_plane` envelope. It contains fixed records for `evidence`, `analysis`, `policy`, `recommendation`, `action_gate`, `plugins`, `safety`, `provenance`, `simulation`, and bounded `audit`, plus a deterministic lifecycle. Every stage reports only its existing state, confidence, evidence quality, provenance, and availability. The browser validates the envelope as an object and writes every displayed value through `textContent`; malformed or missing control-plane data is preserved as unavailable rather than inferred.
+
+The **VEGAS Control Plane** panel shows the fixed component chain, lifecycle, recommendation-only output, Action Gate state, simulation state, audit count/bound, and provenance. It has no controls, forms, endpoints, dynamic command path, URL input, browser-to-shell bridge, action ID, profile target, or device-control affordance. Loading a dashboard snapshot cannot evaluate, simulate, apply, roll back, or modify a device action.

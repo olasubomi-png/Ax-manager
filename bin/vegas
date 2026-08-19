@@ -5,6 +5,7 @@ set -u
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
 APP_ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
 MANAGER="$SCRIPT_DIR/plugin-manager"
+CONTROL_PLANE="$SCRIPT_DIR/control-plane"
 PLUGIN="ax-t615-game-optimizer"
 PLUGIN_IDS='ax-t615-game-optimizer system-observer performance-observer'
 PRODUCT_META="$APP_ROOT/vegas.json"
@@ -24,6 +25,7 @@ Usage:
   vegas analysis {status|analyze|snapshot|capabilities}
   vegas policy {status|evaluate|snapshot|capabilities}
   vegas action {status|evaluate|simulate|capabilities}
+  vegas control {status|snapshot|evaluate|simulate|capabilities}
   vegas gaming {status|snapshot|dashboard [path|snapshot]|capabilities|games|detect|profiles|fps|performance|memory|thermal|power|orchestrator|dry-run}
   vegas system {status|capabilities|inspect|snapshot}
   vegas performance {status|capabilities|inspect|snapshot}
@@ -51,6 +53,13 @@ json_object() {
     DATA="$2"
     RESULT=$(printf '%s' "$DATA" | sed -n "s/.*\"$KEY\":{\([^}]*\)}.*/{\1}/p" | head -n 1)
     [ -n "$RESULT" ] && printf '%s' "$RESULT" || printf '%s' '{}'
+}
+
+gaming_evidence_value() {
+    KEY="$1"
+    DATA="$2"
+    RESULT=$(printf '%s' "$DATA" | sed -n "s/^[^{]*{[^}]*\"evidence\":{[^}]*\"$KEY\":\"\([^\"]*\)\".*/\1/p" | head -n 1)
+    [ -n "$RESULT" ] && printf '%s' "$RESULT" || printf '%s' 'UNKNOWN'
 }
 
 product_version() {
@@ -116,6 +125,11 @@ action_snapshot() {
     [ -n "$OUTPUT" ] && printf '%s' "$OUTPUT" || printf '%s' '{"schema":"1","source":"unavailable","read_only":true,"action_gate":"ENABLED","execution_mode":"SIMULATION_ONLY","real_action_execution":"NOT_AVAILABLE","gate_state":"BLOCKED","simulation_status":"SIMULATION_BLOCKED","simulated_recommendation":"remain_conservative","reason":"action gate unavailable","evidence_quality":"UNSAFE_UNKNOWN","confidence":"LOW","audit":{"count":0,"maximum":16,"bounded":true,"immutable":true},"safety":{"hardware_writes":"NO","process_control":"NO","network_operations":"NO","arbitrary_execution":"NO","filesystem_control":"NO"}}'
 }
 
+control_plane_snapshot() {
+    OUTPUT=$(ORCH_EVIDENCE_FILE="${ORCH_EVIDENCE_FILE:-}" AXGO_ROOT="${AXGO_ROOT:-$APP_ROOT/AX-T615-GAME-OPTIMIZER}" AXGO_DATA_ROOT="${AXGO_DATA_ROOT:-${AXGO_ROOT:-$APP_ROOT/AX-T615-GAME-OPTIMIZER}}" sh "$CONTROL_PLANE" snapshot 2>/dev/null || :)
+    [ -n "$OUTPUT" ] && printf '%s' "$OUTPUT" || printf '%s' '{"schema":"1","component":"vegas-control-plane","source":"unavailable","read_only":true,"simulation_only":true,"lifecycle":"BLOCKED","state":"BLOCKED","evidence":{"state":"UNSAFE_UNKNOWN","confidence":"LOW","evidence_quality":"UNSAFE_UNKNOWN","provenance":"unavailable","availability":"UNAVAILABLE"},"analysis":{"state":"INSUFFICIENT_EVIDENCE","confidence":"LOW","evidence_quality":"UNSAFE_UNKNOWN","provenance":"unavailable","availability":"UNAVAILABLE"},"policy":{"state":"INSUFFICIENT_EVIDENCE","confidence":"LOW","evidence_quality":"UNSAFE_UNKNOWN","provenance":"unavailable","availability":"UNAVAILABLE"},"recommendation":{"state":"INSUFFICIENT_EVIDENCE","confidence":"LOW","evidence_quality":"UNSAFE_UNKNOWN","provenance":"unavailable","availability":"UNAVAILABLE","value":"remain_conservative","executable":false},"action_gate":{"state":"BLOCKED","confidence":"LOW","evidence_quality":"UNSAFE_UNKNOWN","provenance":"unavailable","availability":"UNAVAILABLE","simulation_status":"SIMULATION_BLOCKED","executed":false,"hardware_changed":false},"plugins":{"state":"DEGRADED","confidence":"LOW","evidence_quality":"UNSAFE_UNKNOWN","provenance":"plugin-manager-fixed-registry","availability":"UNAVAILABLE"},"safety":{"state":"BLOCKED","read_only":true,"simulation_only":true,"hardware_writes":false,"process_control":false,"network":false,"arbitrary_execution":false,"dynamic_dispatch":false},"provenance":{"state":"DERIVED","availability":"UNAVAILABLE"},"simulation":{"simulation":true,"executed":false,"hardware_changed":false},"audit":{"count":0,"maximum":16,"bounded":true}}'
+}
+
 json_escape() {
     printf '%s' "$1" | tr -d '\r\n' | sed 's/\\/\\\\/g; s/"/\\"/g'
 }
@@ -174,6 +188,7 @@ unified_snapshot() {
     ANALYSIS=$(analysis_snapshot)
     POLICY=$(policy_snapshot)
     ACTION=$(action_snapshot)
+    CONTROL=$(control_plane_snapshot)
     GENERATED_AT=$(json_value generated_at "$GAMING")
     DECISION=$(json_object decision "$GAMING")
     printf '{'
@@ -190,6 +205,7 @@ unified_snapshot() {
     printf '"analysis":%s,' "$ANALYSIS"
     printf '"policy":%s,' "$POLICY"
     printf '"action":%s,' "$ACTION"
+    printf '"control_plane":%s,' "$CONTROL"
     printf '"gaming":%s,' "$GAMING"
     printf '"decision":%s,' "$DECISION"
     printf '"safety":%s' "$(safety_json)"
@@ -198,7 +214,6 @@ unified_snapshot() {
 
 unified_status() {
     GAMING=$(gaming_snapshot)
-    GAMING_EVIDENCE=$(json_object evidence "$GAMING")
     SUMMARY=$(sh "$MANAGER" summary 2>/dev/null || :)
     if platform_ready; then
         PLATFORM='READY'
@@ -216,13 +231,13 @@ unified_status() {
         printf '  %-28s %s\n' "$ID" "$(plugin_readiness "$ID")"
     done
     printf '\nEvidence:\n'
-    printf '  CPU:       %s\n' "$(json_value cpu_utilization "$GAMING_EVIDENCE")"
-    printf '  GPU:       %s\n' "$(json_value gpu_utilization "$GAMING_EVIDENCE")"
-    printf '  Memory:    %s\n' "$(json_value memory_usage_percent "$GAMING_EVIDENCE")"
-    printf '  Thermal:   %s\n' "$(json_value thermal_temp_c "$GAMING_EVIDENCE")"
-    printf '  FPS:       %s\n' "$(json_value fps "$GAMING_EVIDENCE")"
-    printf '  Battery:   %s\n' "$(json_value battery_percent "$GAMING_EVIDENCE")"
-    printf '  Power:     %s\n' "$(json_value power_state "$GAMING_EVIDENCE")"
+    printf '  CPU:       %s\n' "$(gaming_evidence_value cpu_utilization "$GAMING")"
+    printf '  GPU:       %s\n' "$(gaming_evidence_value gpu_utilization "$GAMING")"
+    printf '  Memory:    %s\n' "$(gaming_evidence_value memory_usage_percent "$GAMING")"
+    printf '  Thermal:   %s\n' "$(gaming_evidence_value thermal_temp_c "$GAMING")"
+    printf '  FPS:       %s\n' "$(gaming_evidence_value fps "$GAMING")"
+    printf '  Battery:   %s\n' "$(gaming_evidence_value battery_percent "$GAMING")"
+    printf '  Power:     %s\n' "$(gaming_evidence_value power_state "$GAMING")"
     EVIDENCE_ENGINE=$(evidence_engine_snapshot)
     QUALITY=$(json_object quality "$EVIDENCE_ENGINE")
     printf '  Evidence quality: %s\n' "$(json_value classification "$QUALITY")"
@@ -233,6 +248,8 @@ unified_status() {
     printf '  Recommendation policy: %s — %s\n' "$(json_value policy_state "$POLICY_ENGINE")" "$(json_value recommendation "$POLICY_ENGINE")"
     ACTION_GATE=$(action_snapshot)
     printf '  Action safety gate: %s; simulation: %s\n' "$(json_value gate_state "$ACTION_GATE")" "$(json_value simulation_status "$ACTION_GATE")"
+    CONTROL=$(control_plane_snapshot)
+    printf '  Control plane: %s; lifecycle: %s\n' "$(json_value state "$CONTROL")" "$(json_value lifecycle "$CONTROL")"
     printf '\nPolicy:\n'
     DECISION=$(json_object decision "$GAMING")
     printf '  State: %s\n' "$(json_value state "$DECISION")"
@@ -272,6 +289,11 @@ ACTION SAFETY GATE
   Simulation only; real action execution not available
   Hardware, process, network, filesystem-control, and arbitrary-execution capabilities: BLOCKED
   Bounded immutable simulation audit
+
+CONTROL PLANE
+  Fixed Evidence → Analysis → Policy → Recommendation → Action Safety Gate orchestration
+  Simulation only; real action execution not available
+  Bounded repository-local non-sensitive simulation audit
 EOF
 }
 
@@ -284,7 +306,7 @@ unified_inspect() {
     printf 'Read-only: YES\n'
     printf 'Safety classification: READ_ONLY_OBSERVABILITY\n'
     printf 'Registered plugins: ax-t615-game-optimizer, system-observer, performance-observer\n'
-    printf 'Supported operations: status, snapshot, inspect, capabilities, plugin health, evidence, analysis, policy, action, gaming, system, performance\n'
+    printf 'Supported operations: status, snapshot, inspect, capabilities, plugin health, evidence, analysis, policy, action, control, gaming, system, performance\n'
     printf 'Evidence categories: cpu, gpu, memory, thermal, fps, battery, power, system, gaming\n'
     printf 'Control capabilities: Action Safety Gate simulation only; real action execution not available\n'
 }
@@ -385,6 +407,13 @@ case "${1:-help}" in
         shift
         case "${1:-status}" in
             status|evaluate|simulate|capabilities) [ "$#" -le 1 ] || { usage >&2; exit 2; }; exec sh "$MANAGER" invoke "$PLUGIN" action "${1:-status}" ;;
+            *) usage >&2; exit 2 ;;
+        esac
+        ;;
+    control)
+        shift
+        case "${1:-status}" in
+            status|snapshot|evaluate|simulate|capabilities) [ "$#" -le 1 ] || { usage >&2; exit 2; }; exec sh "$CONTROL_PLANE" "${1:-status}" ;;
             *) usage >&2; exit 2 ;;
         esac
         ;;

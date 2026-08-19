@@ -13,6 +13,7 @@ BOTTLENECK="$ROOT/bin/bottleneck-engine"
 POLICY="$ROOT/bin/policy-engine"
 ACTION="$ROOT/bin/action-engine"
 ACTION_GATE="$ROOT/bin/action-gate"
+CONTROL="$ROOT/bin/control-plane"
 HEALTHY="$ROOT/AX-T615-GAME-OPTIMIZER/tests/fixtures/orchestrator/healthy/evidence.env"
 UNKNOWN="$ROOT/AX-T615-GAME-OPTIMIZER/tests/fixtures/orchestrator/unknown/evidence.env"
 TMP="${VEGAS_UNIFIED_TEST_TMP:-$ROOT/tests/.tmp/vegas-unified-$$}"
@@ -61,6 +62,8 @@ contains "$SNAPSHOT" '"policy":{"schema":"1"' 'unified snapshot includes read-on
 contains "$SNAPSHOT" '"action":{"schema":"1"' 'unified snapshot includes Action Safety Gate envelope'
 contains "$SNAPSHOT" '"execution_mode":"SIMULATION_ONLY"' 'unified action envelope remains simulation only'
 contains "$SNAPSHOT" '"real_action_execution":"NOT_AVAILABLE"' 'unified action envelope blocks real execution'
+contains "$SNAPSHOT" '"control_plane":{"schema":"1","component":"vegas-control-plane"' 'unified snapshot includes fixed control-plane envelope'
+contains "$SNAPSHOT" '"simulation_only":true' 'unified control-plane envelope remains simulation only'
 
 INSPECT=$(sh "$VEGAS" inspect)
 contains "$INSPECT" 'Plugin count: 3' 'unified inspect reports plugin count'
@@ -113,6 +116,16 @@ contains "$ACTION_SNAPSHOT" '"read_only":true' 'fixed action snapshot remains re
 contains "$ACTION_SNAPSHOT" '"real_action_execution":"NOT_AVAILABLE"' 'fixed action snapshot blocks real execution'
 expect_failure 'legacy action apply route is rejected' sh "$VEGAS" action apply
 expect_failure 'arbitrary action route is rejected' sh "$VEGAS" action ../../outside
+CONTROL_STATUS=$(ORCH_EVIDENCE_FILE="$HEALTHY" sh "$VEGAS" control status)
+contains "$CONTROL_STATUS" 'VEGAS CONTROL PLANE' 'fixed control route exposes the unified control plane'
+contains "$CONTROL_STATUS" 'Hardware writes: NO' 'fixed control route excludes hardware writes'
+CONTROL_SNAPSHOT=$(ORCH_EVIDENCE_FILE="$HEALTHY" sh "$VEGAS" control snapshot)
+contains "$CONTROL_SNAPSHOT" '"component":"vegas-control-plane"' 'fixed control snapshot declares control-plane provenance'
+contains "$CONTROL_SNAPSHOT" '"real_action_layer":"NOT_IMPLEMENTED"' 'fixed control snapshot declares no real action layer'
+UNKNOWN_CONTROL=$(ORCH_EVIDENCE_FILE="$UNKNOWN" sh "$VEGAS" control snapshot)
+contains "$UNKNOWN_CONTROL" '"lifecycle":"BLOCKED"' 'control-plane snapshot fails closed for unknown evidence'
+expect_failure 'legacy control apply route is rejected' sh "$VEGAS" control apply
+expect_failure 'arbitrary control route is rejected' sh "$VEGAS" control ../../outside
 
 AX_BEFORE=$(sh "$MANAGER" status ax-t615-game-optimizer)
 SYSTEM_BEFORE=$(sh "$MANAGER" status system-observer)
@@ -149,7 +162,7 @@ cp "$TMP/original-performance-plugin.json" "$PERFORMANCE_META"
 contains "$(printf '%s' "$TMP")" "$ROOT/tests/.tmp/" 'unified test uses a repository-local temporary directory'
 not_contains "$(grep -nE 'eval[[:space:]]*\(|innerHTML|outerHTML|setprop|force-stop|/[[:space:]]*(proc|sys)/' "$DASHBOARD_APP" "$ROOT/AX-T615-GAME-OPTIMIZER/dashboard/index.html" 2>/dev/null || :)" 'innerHTML' 'dashboard source contains no arbitrary HTML injection'
 
-STATIC_FILES="$ROOT/bin/vegas $ROOT/bin/plugin-manager $BOTTLENECK $POLICY $ACTION $ACTION_GATE $ROOT/plugins/ax-t615-game-optimizer/plugin.sh $DASHBOARD $DASHBOARD_APP"
+STATIC_FILES="$ROOT/bin/vegas $ROOT/bin/plugin-manager $BOTTLENECK $POLICY $ACTION $ACTION_GATE $CONTROL $ROOT/plugins/ax-t615-game-optimizer/plugin.sh $DASHBOARD $DASHBOARD_APP"
 if grep -nE '(^|[[:space:];])eval([[:space:];]|$)|setprop[[:space:]]|[[:space:]]kill([[:space:];]|$)|[[:space:]]pkill([[:space:];]|$)|>[[:space:]]*/(proc|sys)/|sysctl[[:space:]]|curl[[:space:]]|wget[[:space:]]|nc[[:space:]]' $STATIC_FILES >/dev/null 2>&1; then
     fail 'unified source contains no forbidden execution, network, process, or hardware writes'
 else

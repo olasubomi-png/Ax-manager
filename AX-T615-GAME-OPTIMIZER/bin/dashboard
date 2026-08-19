@@ -165,6 +165,17 @@ action_gate_json() {
     printf '%s' "$GATE_JSON"
 }
 
+control_plane_json() {
+    APP_ROOT=$(CDPATH= cd -- "$AXGO_ROOT/.." 2>/dev/null && pwd || :)
+    ENGINE="${VEGAS_CONTROL_PLANE:-$APP_ROOT/bin/control-plane}"
+    CONTROL_JSON=''
+    if [ -n "$APP_ROOT" ] && [ -r "$ENGINE" ]; then
+        CONTROL_JSON=$(ORCH_EVIDENCE_FILE="$TMP_EVIDENCE" AXGO_ROOT="$AXGO_ROOT" AXGO_DATA_ROOT="${AXGO_DATA_ROOT:-$AXGO_ROOT}" sh "$ENGINE" snapshot 2>/dev/null || :)
+    fi
+    [ -n "$CONTROL_JSON" ] || CONTROL_JSON='{"schema":"1","component":"vegas-control-plane","source":"unavailable","read_only":true,"simulation_only":true,"lifecycle":"BLOCKED","state":"BLOCKED","evidence":{"state":"UNSAFE_UNKNOWN","confidence":"LOW","evidence_quality":"UNSAFE_UNKNOWN","provenance":"unavailable","availability":"UNAVAILABLE"},"analysis":{"state":"INSUFFICIENT_EVIDENCE","confidence":"LOW","evidence_quality":"UNSAFE_UNKNOWN","provenance":"unavailable","availability":"UNAVAILABLE"},"policy":{"state":"INSUFFICIENT_EVIDENCE","confidence":"LOW","evidence_quality":"UNSAFE_UNKNOWN","provenance":"unavailable","availability":"UNAVAILABLE"},"recommendation":{"state":"INSUFFICIENT_EVIDENCE","confidence":"LOW","evidence_quality":"UNSAFE_UNKNOWN","provenance":"unavailable","availability":"UNAVAILABLE","value":"remain_conservative","executable":false},"action_gate":{"state":"BLOCKED","confidence":"LOW","evidence_quality":"UNSAFE_UNKNOWN","provenance":"unavailable","availability":"UNAVAILABLE","simulation_status":"SIMULATION_BLOCKED","executed":false,"hardware_changed":false},"plugins":{"state":"DEGRADED","confidence":"LOW","evidence_quality":"UNSAFE_UNKNOWN","provenance":"plugin-manager-fixed-registry","availability":"UNAVAILABLE"},"safety":{"state":"BLOCKED","read_only":true,"simulation_only":true,"hardware_writes":false,"process_control":false,"network":false,"arbitrary_execution":false,"dynamic_dispatch":false,"real_action_layer":"NOT_IMPLEMENTED"},"provenance":{"state":"DERIVED","availability":"UNAVAILABLE"},"simulation":{"simulation":true,"executed":false,"hardware_changed":false},"audit":{"count":0,"maximum":16,"bounded":true}}'
+    printf '%s' "$CONTROL_JSON"
+}
+
 json_pair() {
     KEY="$1"
     RAW="$2"
@@ -251,6 +262,9 @@ snapshot() {
     printf ','
     printf '"action_gate":'
     action_gate_json
+    printf ','
+    printf '"control_plane":'
+    control_plane_json
     printf ','
     printf '"orchestrator":{'
     json_pair lifecycle "$(value ORCHESTRATOR_LIFECYCLE "$ORCHESTRATOR")"; printf ','

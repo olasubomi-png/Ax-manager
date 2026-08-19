@@ -83,3 +83,14 @@
 - [x] Update root, VEGAS-inject, AX-T615 module, dashboard, and architecture documentation with the Evidence → Analysis → Policy → Recommendation → Action Gate → [Future Real Action Layer] boundary.
 - [x] Run focused checks, complete regression, safety scans, source-diff review, and generated-artifact cleanup.
 - [x] Commit `feat: add controlled action safety gate`, push to `origin/main`, and verify clean synchronization.
+
+## Phase 10 — Unified Orchestration & Control-Plane Integration
+
+- [x] Inspect the Phase 10 specification and current Evidence → Analysis → Policy → Recommendation → Action Gate contracts, CLI/plugin routes, dashboard schema, documentation, and clean baseline.
+- [x] Define deterministic fixed control-plane status, snapshot, evaluate, simulate, and capabilities contracts with lifecycle, stage availability, confidence, evidence quality, provenance, fail-safe behavior, and a bounded repository-local audit.
+- [x] Implement `bin/control-plane` as a POSIX-shell orchestration layer that consumes validated existing component outputs without duplicating decision logic or permitting real execution.
+- [x] Integrate fixed `vegas control` routing, existing plugin-manager and AX-T615 adapter compatibility, normalized dashboard snapshot data, and simulation-only Action Gate delegation.
+- [x] Extend the text-safe dashboard and all requested product, architecture, AX-T615, dashboard, control-plane, and safety documentation without browser-to-shell bridges or HTML injection sinks.
+- [x] Add Termux-safe control-plane contract tests covering schema, lifecycle, fallback states, simulation invariants, audit bounds, isolation, dashboard compatibility, and forbidden capability scans.
+- [x] Run focused checks, complete regression, safety scans, source-diff review, and generated-artifact cleanup.
+- [x] Commit `feat: unify vegas control plane`, push to `origin/main`, and verify clean synchronization.

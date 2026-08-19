@@ -12,7 +12,9 @@ VEGAS-inject CLI and plugin manager
 AX-T615 Game Optimizer plugin     System Observer plugin     Performance Observer plugin
         ↓ read-only telemetry and policy engines
         ↓ bounded non-sensitive application and host observation
-Orchestrator evidence → bounded analysis → fixed policy → recommendation → action safety gate → simulated result → [future real action layer]
+Orchestrator evidence → bounded analysis → fixed policy → recommendation → action safety gate → simulated result
+        ↓ fixed read-only composition
+VEGAS Control Plane → validated JSON snapshot → [future real action layer: NOT IMPLEMENTED]
         ↓ validated JSON snapshot
 Static dashboard and logical recommendation
 ```
@@ -40,6 +42,11 @@ The existing `AX-T615-GAME-OPTIMIZER/bin/axgo` remains the direct compatibility 
 | `sh bin/vegas action evaluate` | Evaluate the internally derived policy recommendation against fixed safety gates without creating an action request. |
 | `sh bin/vegas action simulate` | Emit a deterministic simulated recommendation result and bounded local audit entry; no device, process, game, or managed-state action occurs. |
 | `sh bin/vegas action capabilities` | List only the four fixed Action Safety Gate operations and all explicitly blocked control categories. |
+| `sh bin/vegas control status` | Report the fixed Evidence → Analysis → Policy → Recommendation → Action Gate lifecycle without applying an action. |
+| `sh bin/vegas control snapshot` | Emit the normalized deterministic control-plane envelope with component availability, provenance, confidence, evidence quality, safety, simulation, and bounded-audit fields. |
+| `sh bin/vegas control evaluate` | Evaluate the composed existing outputs without creating an action request, audit record, or device change. |
+| `sh bin/vegas control simulate` | Delegate only to the Action Safety Gate’s simulation route and report the resulting read-only control-plane snapshot. |
+| `sh bin/vegas control capabilities` | List the five fixed control-plane operations and explicitly unavailable execution categories. |
 | `sh bin/vegas plugin health` | Validate registry, metadata, fixed adapter syntax, supported operations, and safety declarations for every registered plugin. |
 | `sh bin/vegas plugin list` | List registered, validated read-only plugins. |
 | `sh bin/vegas plugin info ax-t615-game-optimizer` | Show fixed metadata and lifecycle information. |
@@ -65,9 +72,11 @@ The AX-T615 plugin exposes only established observability operations: status, ca
 
 ## Evidence, analysis, policy, recommendation, and action safety gate
 
-The product maintains a deliberately constrained safety boundary. **Evidence** is normalized, provenance-labeled observation. **Analysis** is a deterministic explanation of which supported bottleneck signal may be present, plus bounded trend context and confidence. **Policy** selects a recommendation-only state using the documented safety order: safety evidence, thermal, memory, battery/power, performance, then profile preference. **Recommendation** is a read-only instruction to inspect, monitor, collect more evidence, remain conservative, or consider a named logical profile. The **Action Safety Gate** derives a fixed internal simulation request from that policy output, validates it against immutable safety gates, and returns only `SIMULATED_RECOMMENDATION` or `BLOCKED`.
+The product maintains a deliberately constrained safety boundary. **Evidence** is normalized, provenance-labeled observation. **Analysis** is a deterministic explanation of which supported bottleneck signal may be present, plus bounded trend context and confidence. **Policy** selects a recommendation-only state using the documented safety order: safety evidence, thermal, memory, battery/power, performance, then profile preference. **Recommendation** is a read-only instruction to inspect, monitor, collect more evidence, remain conservative, or consider a named logical profile. The **Action Safety Gate** derives a fixed internal simulation request from that policy output, validates it against immutable safety gates, and returns only `SIMULATED_RECOMMENDATION` or `BLOCKED`. The **VEGAS Control Plane** then composes those existing validated outputs, AX-T615 orchestration state, and plugin health into a fixed lifecycle and snapshot; it never recomputes policy, creates an executable request, or turns a simulation into an action.
 
 > `Evidence → Analysis → Policy → Recommendation → Action Gate → [Future Real Action Layer]` stops at the Action Gate. The `analysis`, `policy`, and `action_gate` envelopes cannot authorize an executable path, action ID, device setting, process, game, or package target. The only gate mutation is a bounded local audit record created by `simulate`; it never creates an applied-state marker or a rollback target.
+
+The Phase 10 control-plane interface preserves that stop condition. Its only public forms are fixed `status`, `snapshot`, `evaluate`, `simulate`, and `capabilities` operations; unavailable or unsafe component input yields an explicit fail-closed `BLOCKED` lifecycle. It can emit a bounded local simulation audit only through the existing Action Safety Gate, with no write to a device-control surface. See [`bin/CONTROL_PLANE.md`](bin/CONTROL_PLANE.md) for the architecture and normalized envelope.
 
 ## Safety guarantees
 
@@ -79,6 +88,7 @@ Unknown telemetry remains unavailable. Safety policy prioritizes thermal and bat
 |---|---|
 | `bin/vegas` | Main VEGAS-inject CLI. |
 | `bin/plugin-manager` | Registry, validation, lifecycle, capabilities, and safe routing. |
+| `bin/control-plane` | Fixed Phase 10 composition of existing evidence, analysis, policy, Action Safety Gate, orchestration, and plugin health outputs. |
 | `plugins/` | Registry plus declarative metadata and fixed adapters. |
 | `AX-T615-GAME-OPTIMIZER/` | Existing validated engines, dashboard, policies, tests, runtime, and logs. |
 | `tests/` | VEGAS-inject registry, compatibility, safety, and integration tests. |

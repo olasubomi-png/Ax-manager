@@ -59,6 +59,8 @@ contains "$SNAPSHOT" '"dry_run_default":"YES"' "controlled action envelope keeps
 contains "$SNAPSHOT" '"action_lock_default":"ENABLED"' "controlled action envelope keeps emergency lock default"
 contains "$SNAPSHOT" '"action_gate":{"schema":"1","source":"vegas-inject-action-safety-gate"' "snapshot exposes simulation-only Action Safety Gate envelope"
 contains "$SNAPSHOT" '"real_action_execution":"NOT_AVAILABLE"' "Action Safety Gate envelope blocks real execution"
+contains "$SNAPSHOT" '"control_plane":{"schema":"1","component":"vegas-control-plane"' "snapshot exposes backward-compatible VEGAS Control Plane envelope"
+contains "$SNAPSHOT" '"real_action_layer":"NOT_IMPLEMENTED"' "Control Plane envelope blocks real action layer"
 
 CORE_SNAPSHOT=$(ORCH_EVIDENCE_FILE="$FIXTURES/healthy/evidence.env" AXGO_ROOT="$MODULE_ROOT" DASHBOARD_RUNTIME_DIR="$TMP/core-runtime" ORCH_RUNTIME_DIR="$TMP/core-orchestrator" sh "$MODULE_ROOT/bin/dashboard" core-snapshot)
 contains "$CORE_SNAPSHOT" '"decision":{"state":"balanced"' "core snapshot preserves orchestrator decision"
@@ -68,8 +70,9 @@ contains "$CORE_SNAPSHOT" '"analysis":{' "core snapshot retains fixed intelligen
 contains "$CORE_SNAPSHOT" '"policy":{' "core snapshot retains fixed policy envelope"
 contains "$CORE_SNAPSHOT" '"action":{' "core snapshot retains fixed controlled-action envelope"
 contains "$CORE_SNAPSHOT" '"action_gate":{' "core snapshot retains simulation-only Action Safety Gate envelope"
-not_contains "$CORE_SNAPSHOT" '"system_observer"' "core snapshot excludes nested System Observer data"
-not_contains "$CORE_SNAPSHOT" '"performance_observer"' "core snapshot excludes nested Performance Observer data"
+contains "$CORE_SNAPSHOT" '"control_plane":{' "core snapshot retains fixed Control Plane envelope"
+not_contains "$CORE_SNAPSHOT" '"system_observer":{"schema"' "core snapshot excludes duplicated System Observer envelope data"
+not_contains "$CORE_SNAPSHOT" '"performance_observer":{"schema"' "core snapshot excludes duplicated Performance Observer envelope data"
 
 cp "$FIXTURES/healthy/evidence.env" "$TMP/evidence.env"
 EXPORT_OUTPUT=$(ORCH_EVIDENCE_FILE="$TMP/evidence.env" AXGO_ROOT="$MODULE_ROOT" DASHBOARD_RUNTIME_DIR="$TMP/export-runtime" ORCH_RUNTIME_DIR="$TMP/export-orchestrator" sh "$MODULE_ROOT/bin/dashboard" export)
@@ -108,6 +111,11 @@ contains "$(cat "$MODULE_ROOT/dashboard/index.html")" 'SIMULATION ONLY' "UI labe
 contains "$(cat "$MODULE_ROOT/dashboard/assets/app.js")" 'Invalid action gate section.' "UI rejects malformed Action Safety Gate envelopes"
 contains "$(cat "$MODULE_ROOT/dashboard/assets/app.js")" 'actionGateRecommendation' "UI renders Action Safety Gate recommendations text-safely"
 not_contains "$(cat "$MODULE_ROOT/dashboard/index.html")" 'id="actionGateApply"' "UI exposes no Action Safety Gate execution button"
+contains "$(cat "$MODULE_ROOT/dashboard/index.html")" 'VEGAS Control Plane' "UI exposes fixed Control Plane observability"
+contains "$(cat "$MODULE_ROOT/dashboard/index.html")" 'cannot execute a device action' "UI labels Control Plane no-execution boundary"
+contains "$(cat "$MODULE_ROOT/dashboard/assets/app.js")" 'Invalid control plane section.' "UI rejects malformed Control Plane envelopes"
+contains "$(cat "$MODULE_ROOT/dashboard/assets/app.js")" 'controlPlaneRecommendation' "UI renders Control Plane recommendations text-safely"
+not_contains "$(cat "$MODULE_ROOT/dashboard/index.html")" 'id="controlPlaneSimulate"' "UI exposes no Control Plane simulation button"
 
 printf 'STEP12_DASHBOARD_TESTS: %s passed, %s failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

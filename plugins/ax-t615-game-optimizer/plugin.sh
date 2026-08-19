@@ -12,10 +12,11 @@ BOTTLENECK_ENGINE="$APP_ROOT/bin/bottleneck-engine"
 POLICY_ENGINE="$APP_ROOT/bin/policy-engine"
 ACTION_ENGINE="$APP_ROOT/bin/action-engine"
 ACTION_GATE="$APP_ROOT/bin/action-gate"
+CONTROL_PLANE="$APP_ROOT/bin/control-plane"
 
 usage() {
     cat <<'EOF'
-Usage: plugin.sh {status|capabilities|games|game-detection|profiles|fps-analysis|performance-analysis|memory-monitoring|thermal-monitoring|power-telemetry|orchestrator-status|evidence {status|capabilities|inspect|evaluate|snapshot|history}|analysis {status|analyze|snapshot|capabilities}|policy {status|evaluate|snapshot|capabilities}|action {status|evaluate|simulate|capabilities}|dashboard [path|snapshot|core-snapshot]|dry-run}
+Usage: plugin.sh {status|capabilities|games|game-detection|profiles|fps-analysis|performance-analysis|memory-monitoring|thermal-monitoring|power-telemetry|orchestrator-status|evidence {status|capabilities|inspect|evaluate|snapshot|history}|analysis {status|analyze|snapshot|capabilities}|policy {status|evaluate|snapshot|capabilities}|action {status|evaluate|simulate|capabilities}|control {status|snapshot|evaluate|simulate|capabilities}|dashboard [path|snapshot|core-snapshot]|dry-run}
 
 This is a fixed read-only operation allowlist. No plugin metadata is executed.
 EOF
@@ -54,6 +55,12 @@ case "${1:-status}" in
     action)
         case "${2:-status}" in
             status|evaluate|simulate|capabilities) exec sh "$ACTION_GATE" "${2:-status}" ;;
+            *) usage >&2; exit 2 ;;
+        esac
+        ;;
+    control)
+        case "${2:-status}" in
+            status|snapshot|evaluate|simulate|capabilities) exec sh "$CONTROL_PLANE" "${2:-status}" ;;
             *) usage >&2; exit 2 ;;
         esac
         ;;

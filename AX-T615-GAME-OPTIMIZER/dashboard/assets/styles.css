@@ -20,6 +20,8 @@
 @media (max-width:1050px) { .action-gate-grid { grid-template-columns:1fr 1fr; }.action-gate-audit { grid-column:1/-1; } }
 @media (max-width:780px) { .action-gate-panel { padding-top:60px; }.action-gate-grid { grid-template-columns:1fr; }.action-gate-audit { grid-column:auto; }.action-gate-summary,.action-gate-safety,.action-gate-audit { min-height:0; } }
 @media (max-width:520px) { .action-gate-grid dl { grid-template-columns:1fr; } }
+/* Phase 10 control-plane observability: teal signals fixed component composition, never an interactive control. */
+.control-plane-panel .action-gate-summary { border-top-color:var(--teal); }.control-plane-panel .action-gate-safety { border-top-color:var(--amber); }.control-plane-panel .action-gate-audit { border-top-color:var(--teal-dark); }.control-plane-panel .action-gate-summary>strong { color:var(--teal-dark); }.control-plane-panel .action-gate-grid { background:rgba(11,122,117,.24); }.control-plane-panel .action-gate-summary,.control-plane-panel .action-gate-safety,.control-plane-panel .action-gate-audit { background:linear-gradient(180deg,rgba(11,122,117,.055),var(--paper) 34%); }
 :root { --ink:#182225; --ink-soft:#3d4a4d; --bone:#f4f1ea; --paper:#fbfaf6; --fog:#e2dfd7; --line:#d6d2c9; --teal:#0b7a75; --teal-dark:#075c58; --amber:#b97820; --red:#a54135; --muted:#7a807f; --shadow:0 20px 50px rgba(24,34,37,.09); --display:"Space Grotesk",sans-serif; --body:"IBM Plex Sans",sans-serif; }
 * { box-sizing:border-box; }
 html { scroll-behavior:smooth; background:var(--bone); }
