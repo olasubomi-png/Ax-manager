@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>VEGAS-inject · Read-only</title>
+    <style>
+      :root { color-scheme: dark; font-family: system-ui, sans-serif; background: #10171a; color: #eaf3ed; }
+      body { margin: 0; padding: 24px; line-height: 1.5; }
+      main { max-width: 720px; margin: 0 auto; }
+      h1 { margin: 0 0 4px; color: #b8f39d; font-size: 1.7rem; }
+      p { color: #c8d4cc; }
+      .badge { display: inline-block; margin: 14px 0; padding: 5px 9px; border: 1px solid #6f9c7b; border-radius: 4px; color: #b8f39d; font-size: .78rem; font-weight: 700; letter-spacing: .08em; }
+      section { margin-top: 18px; padding: 16px; border-left: 3px solid #6f9c7b; background: #182321; }
+      dt { color: #9db0a2; font-size: .82rem; text-transform: uppercase; letter-spacing: .06em; }
+      dd { margin: 2px 0 12px; color: #f2f8f3; }
+      dd:last-child { margin-bottom: 0; }
+      footer { margin-top: 22px; color: #93a49a; font-size: .85rem; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>VEGAS-inject</h1>
+      <p>AxManager module for gaming observability on supported Android devices.</p>
+      <span class="badge">READ-ONLY · SIMULATION-ONLY</span>
+      <section aria-label="Module safety boundary">
+        <dl>
+          <dt>Module action</dt><dd>Fixed to advisory simulation; no device action is available.</dd>
+          <dt>Telemetry state</dt><dd>Unknown data remains explicitly unknown; this WebUI does not execute commands or refresh telemetry.</dd>
+          <dt>Hardware changes</dt><dd>Not supported. No write path exists for system settings, governors, memory, charging, or process control.</dd>
+          <dt>WebUI behavior</dt><dd>Static, text-only, and non-interactive. No browser-to-shell bridge is present.</dd>
+        </dl>
+      </section>
+      <footer>VEGAS-inject v1.0.0 · AxManager v1.4.8-compatible package</footer>
+    </main>
+  </body>
+</html>

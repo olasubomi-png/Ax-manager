@@ -1,0 +1,7 @@
+id=vegas-inject
+name=VEGAS-inject (Read-only)
+version=1.0.0-axmanager
+versionCode=10000
+author=VEGAS-inject maintainers
+description=Read-only gaming observability with simulation-only recommendations.
+axeronPlugin=14800

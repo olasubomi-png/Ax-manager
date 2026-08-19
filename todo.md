@@ -115,3 +115,13 @@
 - [x] Run shell and browser syntax checks, security and adversarial suites, plugin, observer, AX-T615, evidence, policy, Action Gate, Control Plane, dashboard, compatibility, final-release tests, and the complete regression matrix.
 - [x] Perform clean-room public-interface verification; remove generated logs, runtime state, snapshots, temporary files, and test artifacts; then complete static scans and final source-diff review.
 - [x] Commit `release: finalize vegas-inject v1.0`, push to `origin/main`, verify clean synchronization, and record only the executed verification results in the final release report.
+
+## Phase 13 — AxManager v1.4.8 Plugin Packaging
+
+- [x] Inspect the official AxManager v1.4.8 source release and documentation to establish the actual module directory, `module.prop`, `axeronPlugin`, entrypoint, WebUI, installer, lifecycle, permission, discovery, and launch contracts.
+- [x] Map only the existing VEGAS-inject runtime files required for the verified AxManager contract, define the fixed module ID and compatible version metadata, and exclude repository, runtime, test, generated, secret, and personal-data artifacts.
+- [x] Build `dist/vegas-inject/` using the real AxManager v1.4.8 module format with POSIX `MODDIR=${0%/*}` entrypoints, fixed read-only and simulation-only routing, minimal permissions, and the documented WebUI mechanism where supported.
+- [x] Add module installation, enable/disable, uninstall, WebUI, safety, simulation-boundary, limitation, and compatibility documentation; create `tests/test_axmanager_plugin_package.sh` for package structure and security verification.
+- [x] Build `dist/vegas-inject.zip`, extract it into a clean repository-local directory, validate all package fields and contents, and execute or inspect the relevant official AxManager v1.4.8 validation/install path to verify actual recognition.
+- [x] Run VEGAS regression, security audit, plugin, Action Gate, Control Plane, dashboard, package, AxManager compatibility, clean-extraction, syntax, static safety, and source-diff checks; remove generated artifacts and complete release preflight.
+- [x] Commit `release: package vegas-inject for axmanager v1.4.8`, push to `origin/main`, verify clean synchronization, and report only executed AxManager compatibility and package validation results.

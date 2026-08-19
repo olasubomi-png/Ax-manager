@@ -1,0 +1,5 @@
+# Reproducible AxManager package staging tree; dist/vegas-inject.zip is the tracked release artifact.
+/dist/vegas-inject/
+
+# Termux-safe local scratch directory used by the shell test harnesses.
+/tests/.tmp/
