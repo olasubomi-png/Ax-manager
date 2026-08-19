@@ -1,5 +1,6 @@
 #!/usr/bin/env sh
-# VEGAS-inject Phase 9: fixed controlled-action architecture. No arbitrary execution or device control.
+# Phase 15 design contract: capability-gated action planning with fixed schemas.
+# This file never writes hardware controls, /proc, /sys, Android properties, games, or arbitrary paths.
 set -u
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
@@ -10,62 +11,42 @@ POLICY_ENGINE="$APP_ROOT/bin/policy-engine"
 ACTION_RUNTIME_DIR="${VEGAS_ACTION_RUNTIME_DIR:-$AXGO_DATA_ROOT/runtime/controlled-actions}"
 ACTION_AUDIT_FILE="$ACTION_RUNTIME_DIR/audit.log"
 ACTION_LOCK_FILE="$ACTION_RUNTIME_DIR/action-lock.state"
-EXECUTION_LOCK_DIR="$ACTION_RUNTIME_DIR/execution.lock"
-MANAGED_STATE_FILE="$ACTION_RUNTIME_DIR/managed-state"
-LAST_ACTION_FILE="$ACTION_RUNTIME_DIR/last-action"
 MAX_AUDIT_RECORDS=16
-COOLDOWN_SECONDS=60
-STALE_LOCK_SECONDS=30
 
 usage() {
     cat <<'EOF'
-Usage: action-engine {status|capabilities|plan <action-id>|validate <action-id>|dry-run <action-id>|apply <action-id> --explicit-apply|rollback <action-id>|history|lock|unlock --explicit-unlock}
+Usage: action-engine {status|snapshot|capabilities|plan <action-id>|validate <action-id>|dry-run <action-id>|apply <action-id> --dry-run|verify <action-id>|rollback <action-id>|history|lock|unlock --explicit-unlock}
 
-Fixed allowlisted controlled-action architecture. DRY_RUN and ACTION_LOCK=ENABLED are the defaults.
-No arbitrary command, path, metadata, plugin, device, process, network, /proc, /sys, or Android-property action is available.
+Fixed capability-gated action architecture. Every public apply route is dry-run only.
+Unverified device controls are UNSUPPORTED and no hardware, process, network, game,
+/proc, /sys, Android-property, root, arbitrary command, or arbitrary path action exists.
 EOF
 }
 
-now() {
-    date '+%Y-%m-%dT%H:%M:%S%z' 2>/dev/null || printf '%s' 'unknown-time'
-}
+now() { date '+%Y-%m-%dT%H:%M:%S%z' 2>/dev/null || printf '%s' 'unknown-time'; }
 
-epoch_now() {
-    date '+%s' 2>/dev/null || printf '%s' 0
-}
-
-escape() {
-    printf '%s' "$1" | tr -d '\r\n' | sed 's/\\/\\\\/g; s/"/\\"/g'
-}
+escape() { printf '%s' "$1" | tr -d '\r\n' | sed 's/\\/\\\\/g; s/"/\\"/g'; }
 
 key_value() {
-    KEY="$1"
-    DATA="$2"
+    KEY="$1"; DATA="$2"
     VALUE=$(printf '%s\n' "$DATA" | awk -F= -v key="$KEY" '$1 == key { value=$0; sub(/^[^=]*=/, "", value); print value }' | tail -n 1)
     [ -n "$VALUE" ] && printf '%s' "$VALUE" || printf '%s' 'UNKNOWN'
 }
 
 json_value() {
-    KEY="$1"
-    DATA="$2"
+    KEY="$1"; DATA="$2"
     VALUE=$(printf '%s' "$DATA" | sed -n "s/.*\"$KEY\":\"\([^\"]*\)\".*/\1/p" | head -n 1)
     [ -n "$VALUE" ] && printf '%s' "$VALUE" || printf '%s' 'UNKNOWN'
 }
 
-ensure_runtime() {
-    umask 077
-    mkdir -p "$ACTION_RUNTIME_DIR" 2>/dev/null
-}
-
-read_file() {
-    [ -r "$1" ] && cat "$1" 2>/dev/null || :
-}
+ensure_runtime() { umask 077; mkdir -p "$ACTION_RUNTIME_DIR" 2>/dev/null; }
+read_file() { [ -r "$1" ] && cat "$1" 2>/dev/null || :; }
 
 write_file() {
     ensure_runtime || return 1
-    TMP_FILE="$1.tmp.$$"
-    printf '%s\n' "$2" > "$TMP_FILE" 2>/dev/null || return 1
-    mv -f "$TMP_FILE" "$1" 2>/dev/null
+    TEMP_FILE="$1.tmp.$$"
+    printf '%s\n' "$2" > "$TEMP_FILE" 2>/dev/null || return 1
+    mv -f "$TEMP_FILE" "$1" 2>/dev/null
 }
 
 action_lock_state() {
@@ -75,16 +56,18 @@ action_lock_state() {
 
 allowed_action() {
     case "$1" in
-        refresh_telemetry|reset_recommendation_state|clear_temporary_runtime_state) return 0 ;;
+        refresh_telemetry|profile_balanced_advisory|profile_performance_advisory|thermal_protection_advisory|memory_conservative_advisory|battery_conservative_advisory) return 0 ;;
         *) return 1 ;;
     esac
 }
 
 action_type() {
     case "$1" in
-        refresh_telemetry) printf '%s' 'READ_ONLY_TELEMETRY' ;;
-        reset_recommendation_state) printf '%s' 'MANAGED_RECOMMENDATION_STATE' ;;
-        clear_temporary_runtime_state) printf '%s' 'MANAGED_RUNTIME_STATE' ;;
+        refresh_telemetry) printf '%s' 'READ_ONLY_OBSERVATION' ;;
+        profile_balanced_advisory|profile_performance_advisory) printf '%s' 'PROFILE_POLICY_ADVISORY' ;;
+        thermal_protection_advisory) printf '%s' 'THERMAL_PROTECTION_ADVISORY' ;;
+        memory_conservative_advisory) printf '%s' 'MEMORY_SAFETY_ADVISORY' ;;
+        battery_conservative_advisory) printf '%s' 'BATTERY_SAFETY_ADVISORY' ;;
         *) printf '%s' 'UNKNOWN' ;;
     esac
 }
@@ -92,17 +75,22 @@ action_type() {
 action_target() {
     case "$1" in
         refresh_telemetry) printf '%s' 'vegas-inject-evidence-snapshot' ;;
-        reset_recommendation_state) printf '%s' 'vegas-inject-managed-recommendation-state' ;;
-        clear_temporary_runtime_state) printf '%s' 'vegas-inject-managed-temporary-runtime-state' ;;
+        profile_balanced_advisory|profile_performance_advisory) printf '%s' 'vegas-inject-profile-policy' ;;
+        thermal_protection_advisory) printf '%s' 'vegas-inject-thermal-policy' ;;
+        memory_conservative_advisory) printf '%s' 'vegas-inject-memory-policy' ;;
+        battery_conservative_advisory) printf '%s' 'vegas-inject-battery-policy' ;;
         *) printf '%s' 'UNKNOWN' ;;
     esac
 }
 
 action_purpose() {
     case "$1" in
-        refresh_telemetry) printf '%s' 'request a new bounded read-only telemetry observation' ;;
-        reset_recommendation_state) printf '%s' 'reset only the VEGAS-inject managed recommendation marker' ;;
-        clear_temporary_runtime_state) printf '%s' 'clear only the VEGAS-inject managed temporary action marker' ;;
+        refresh_telemetry) printf '%s' 'request a bounded read-only telemetry observation' ;;
+        profile_balanced_advisory) printf '%s' 'record the existing balanced-profile recommendation without changing a game or device setting' ;;
+        profile_performance_advisory) printf '%s' 'record a performance-profile advisory; capability is not verified on this device' ;;
+        thermal_protection_advisory) printf '%s' 'record a thermal-safety advisory; thermal control is not exposed' ;;
+        memory_conservative_advisory) printf '%s' 'record a memory-safety advisory; memory subsystem control is not exposed' ;;
+        battery_conservative_advisory) printf '%s' 'record a battery-safety advisory; battery or charging control is not exposed' ;;
         *) printf '%s' 'UNKNOWN' ;;
     esac
 }
@@ -110,26 +98,28 @@ action_purpose() {
 action_policy_states() {
     case "$1" in
         refresh_telemetry) printf '%s' 'SAFE,BALANCED,CONSERVATIVE,PERFORMANCE_ADVISORY,COOL_ADVISORY,BATTERY_ADVISORY' ;;
-        reset_recommendation_state|clear_temporary_runtime_state) printf '%s' 'SAFE,BALANCED,CONSERVATIVE,COOL_ADVISORY,BATTERY_ADVISORY' ;;
+        profile_balanced_advisory) printf '%s' 'SAFE,BALANCED,CONSERVATIVE,COOL_ADVISORY,BATTERY_ADVISORY' ;;
+        profile_performance_advisory) printf '%s' 'PERFORMANCE_ADVISORY' ;;
+        thermal_protection_advisory|memory_conservative_advisory) printf '%s' 'SAFETY_BLOCKED,CONSERVATIVE' ;;
+        battery_conservative_advisory) printf '%s' 'BATTERY_ADVISORY,CONSERVATIVE' ;;
         *) printf '%s' 'NONE' ;;
     esac
 }
 
-action_rollback_available() {
+capability_state() {
     case "$1" in
-        refresh_telemetry) printf '%s' 'NO' ;;
-        reset_recommendation_state|clear_temporary_runtime_state) printf '%s' 'YES' ;;
-        *) printf '%s' 'NO' ;;
+        refresh_telemetry) printf '%s' 'SUPPORTED_READ_ONLY' ;;
+        profile_balanced_advisory) printf '%s' 'SUPPORTED_POLICY_RECORD_ONLY' ;;
+        profile_performance_advisory|thermal_protection_advisory|memory_conservative_advisory|battery_conservative_advisory) printf '%s' 'UNSUPPORTED_DEVICE_CAPABILITY_UNVERIFIED' ;;
+        *) printf '%s' 'UNKNOWN' ;;
     esac
 }
 
-action_max_duration() {
-    case "$1" in
-        refresh_telemetry) printf '%s' 5 ;;
-        reset_recommendation_state|clear_temporary_runtime_state) printf '%s' 1 ;;
-        *) printf '%s' 0 ;;
-    esac
+is_dry_run_executable() {
+    case "$1" in refresh_telemetry|profile_balanced_advisory) return 0 ;; *) return 1 ;; esac
 }
+
+in_csv() { printf '%s\n' ",$1," | grep -Fq ",$2,"; }
 
 blocked_action_registry() {
     cat <<'EOF'
@@ -139,6 +129,7 @@ GPU_CONTROLS=BLOCKED
 THERMAL_CONTROLS=BLOCKED
 BATTERY_CONTROLS=BLOCKED
 CHARGING_CONTROLS=BLOCKED
+POWER_HAL_CONTROLS=BLOCKED
 PROCESS_CONTROLS=BLOCKED
 MEMORY_SUBSYSTEM_CONTROLS=BLOCKED
 PROC_FILESYSTEM=BLOCKED
@@ -154,15 +145,9 @@ EOF
 
 is_blocked_identifier() {
     case "$1" in
-        *cpu*|*gpu*|*governor*|*thermal*|*battery*|*charging*|*process*|*force-stop*|*kill*|*zram*|*swap*|*lmkd*|*proc*|*sys*|*property*|*shell*|*exec*|*network*|*root*) return 0 ;;
+        *cpu*|*gpu*|*governor*|*frequency*|*thermal*control*|*battery*control*|*charging*|*power_hal*|*process*|*force-stop*|*kill*|*zram*|*swap*|*lmkd*|*proc*|*sys*|*property*|*shell*|*exec*|*network*|*root*) return 0 ;;
         *) return 1 ;;
     esac
-}
-
-in_csv() {
-    LIST="$1"
-    ITEM="$2"
-    printf '%s\n' ",$LIST," | grep -Fq ",$ITEM,"
 }
 
 policy_snapshot() {
@@ -178,7 +163,6 @@ load_context() {
     EVIDENCE_QUALITY=$(json_value evidence_quality "$POLICY")
     SAFETY_CLASSIFICATION=$(json_value safety_classification "$POLICY")
     PROVENANCE=$(json_value provenance "$POLICY")
-    GENERATED_AT=$(json_value generated_at "$POLICY")
 }
 
 context_validation() {
@@ -186,339 +170,178 @@ context_validation() {
     load_context
     VALIDATION_RESULT=DENIED
     VALIDATION_REASON='unknown validation error'
-    REQUIRED_STATES=$(action_policy_states "$ACTION_ID")
-
     allowed_action "$ACTION_ID" || { VALIDATION_REASON='unknown action identifier'; return 1; }
     is_blocked_identifier "$ACTION_ID" && { VALIDATION_REASON='blocked action category'; return 1; }
-    case "$EVIDENCE_QUALITY" in
-        UNKNOWN|UNSAFE_UNKNOWN|STALE|INVALID|UNAVAILABLE|'') VALIDATION_REASON="evidence quality $EVIDENCE_QUALITY is not actionable"; return 1 ;;
+    CAPABILITY=$(capability_state "$ACTION_ID")
+    case "$CAPABILITY" in
+        UNSUPPORTED_*|UNKNOWN) VALIDATION_REASON="capability state $CAPABILITY does not authorize this action"; return 1 ;;
     esac
-    [ "$SAFETY_CLASSIFICATION" = READ_ONLY_ADVISORY ] || {
-        VALIDATION_REASON="safety classification $SAFETY_CLASSIFICATION denies action planning"
-        return 1
-    }
-    in_csv "$REQUIRED_STATES" "$POLICY_STATE" || {
-        VALIDATION_REASON="policy state $POLICY_STATE is not permitted for $ACTION_ID"
-        return 1
-    }
+    case "$EVIDENCE_QUALITY" in UNKNOWN|UNSAFE_UNKNOWN|STALE|INVALID|UNAVAILABLE|'') VALIDATION_REASON="evidence quality $EVIDENCE_QUALITY is not actionable"; return 1 ;; esac
+    case "$SAFETY_CLASSIFICATION" in READ_ONLY_ADVISORY|READ_ONLY_CONSERVATIVE) : ;; *) VALIDATION_REASON="safety classification $SAFETY_CLASSIFICATION denies action planning"; return 1 ;; esac
+    in_csv "$(action_policy_states "$ACTION_ID")" "$POLICY_STATE" || { VALIDATION_REASON="policy state $POLICY_STATE is not permitted for $ACTION_ID"; return 1; }
     case "$CONFIDENCE" in HIGH|MEDIUM|LOW) : ;; *) VALIDATION_REASON='policy confidence is unavailable'; return 1 ;; esac
     VALIDATION_RESULT=VALID
-    VALIDATION_REASON='fixed action ID, policy state, evidence quality, freshness classification, safety classification, telemetry, parameters, and rollback contract validated'
+    VALIDATION_REASON='fixed action ID, detected capability, evidence quality, policy state, safety classification, bounded parameters, and no-device-write contract validated'
     return 0
-}
-
-cooldown_remaining() {
-    ACTION_ID="$1"
-    LAST=$(read_file "$LAST_ACTION_FILE")
-    LAST_ID=$(key_value ACTION_ID "$LAST")
-    LAST_EPOCH=$(key_value APPLIED_EPOCH "$LAST")
-    CURRENT_EPOCH=$(epoch_now)
-    case "$LAST_EPOCH" in ''|*[!0-9]*) LAST_EPOCH=0 ;; esac
-    case "$CURRENT_EPOCH" in ''|*[!0-9]*) CURRENT_EPOCH=0 ;; esac
-    if [ "$LAST_ID" = "$ACTION_ID" ] && [ "$CURRENT_EPOCH" -ge "$LAST_EPOCH" ] && [ $((CURRENT_EPOCH - LAST_EPOCH)) -lt "$COOLDOWN_SECONDS" ]; then
-        printf '%s' $((COOLDOWN_SECONDS - (CURRENT_EPOCH - LAST_EPOCH)))
-    else
-        printf '%s' 0
-    fi
-}
-
-recover_stale_execution_lock() {
-    [ -d "$EXECUTION_LOCK_DIR" ] || return 0
-    CREATED=$(read_file "$EXECUTION_LOCK_DIR/created_epoch")
-    CURRENT=$(epoch_now)
-    case "$CREATED" in ''|*[!0-9]*) return 1 ;; esac
-    case "$CURRENT" in ''|*[!0-9]*) return 1 ;; esac
-    if [ "$CURRENT" -ge "$CREATED" ] && [ $((CURRENT - CREATED)) -gt "$STALE_LOCK_SECONDS" ]; then
-        rm -f "$EXECUTION_LOCK_DIR/created_epoch" 2>/dev/null || return 1
-        rmdir "$EXECUTION_LOCK_DIR" 2>/dev/null || return 1
-        STALE_LOCK_RECOVERED=YES
-        return 0
-    fi
-    return 1
-}
-
-acquire_execution_lock() {
-    ensure_runtime || return 1
-    STALE_LOCK_RECOVERED=NO
-    recover_stale_execution_lock || :
-    mkdir "$EXECUTION_LOCK_DIR" 2>/dev/null || return 1
-    printf '%s\n' "$(epoch_now)" > "$EXECUTION_LOCK_DIR/created_epoch" 2>/dev/null || { rmdir "$EXECUTION_LOCK_DIR" 2>/dev/null || :; return 1; }
-    return 0
-}
-
-release_execution_lock() {
-    rm -f "$EXECUTION_LOCK_DIR/created_epoch" 2>/dev/null || :
-    rmdir "$EXECUTION_LOCK_DIR" 2>/dev/null || :
 }
 
 append_audit() {
     ensure_runtime || return 1
-    RECORD="$1"
-    TEMP_AUDIT="$ACTION_AUDIT_FILE.tmp.$$"
+    RECORD="$1"; TEMP_AUDIT="$ACTION_AUDIT_FILE.tmp.$$"
     { [ -r "$ACTION_AUDIT_FILE" ] && tail -n "$MAX_AUDIT_RECORDS" "$ACTION_AUDIT_FILE" 2>/dev/null || :; printf '%s\n' "$RECORD"; } > "$TEMP_AUDIT" 2>/dev/null || return 1
     tail -n "$MAX_AUDIT_RECORDS" "$TEMP_AUDIT" > "$ACTION_AUDIT_FILE" 2>/dev/null && rm -f "$TEMP_AUDIT" 2>/dev/null
 }
 
 audit_record() {
-    ACTION_ID="$1"
-    MODE="$2"
-    VALIDATION="$3"
-    RESULT="$4"
-    ROLLBACK_RESULT="$5"
-    REASON="$6"
-    printf 'ACTION_AUDIT|timestamp=%s|action_id=%s|mode=%s|policy_state=%s|evidence_quality=%s|validation_result=%s|execution_result=%s|rollback_result=%s|reason=%s|provenance=%s|personal_data=NO|network_transmission=NO' \
-        "$(now)" "$ACTION_ID" "$MODE" "$POLICY_STATE" "$EVIDENCE_QUALITY" "$VALIDATION" "$RESULT" "$ROLLBACK_RESULT" "$(escape "$REASON")" "$(escape "$PROVENANCE")"
+    printf 'ACTION_AUDIT|timestamp=%s|action_id=%s|mode=%s|capability=%s|policy_state=%s|evidence_quality=%s|validation_result=%s|execution_result=%s|verification_result=%s|rollback_result=%s|reason=%s|provenance=%s|personal_data=NO|network_transmission=NO|hardware_changed=NO' \
+        "$(now)" "$1" "$2" "$(capability_state "$1")" "$POLICY_STATE" "$EVIDENCE_QUALITY" "$3" "$4" "$5" "$6" "$(escape "$7")" "$(escape "$PROVENANCE")"
 }
 
 emit_action_record() {
-    ACTION_ID="$1"
-    MODE="$2"
-    RESULT="$3"
-    DRY_RUN="$4"
-    ROLLBACK_AVAILABLE=$(action_rollback_available "$ACTION_ID")
+    ACTION_ID="$1"; MODE="$2"; RESULT="$3"; DRY_RUN="$4"; VERIFICATION="$5"; ROLLBACK="$6"
     printf 'ACTION_ID=%s\n' "$ACTION_ID"
     printf 'ACTION_TYPE=%s\n' "$(action_type "$ACTION_ID")"
     printf 'TARGET=%s\n' "$(action_target "$ACTION_ID")"
+    printf 'PURPOSE=%s\n' "$(action_purpose "$ACTION_ID")"
+    printf 'CAPABILITY_STATE=%s\n' "$(capability_state "$ACTION_ID")"
     printf 'REQUESTED_BY=vegas-inject-fixed-control-plane\n'
-    printf 'POLICY_STATE=%s\n' "$POLICY_STATE"
-    printf 'EVIDENCE_QUALITY=%s\n' "$EVIDENCE_QUALITY"
-    printf 'CONFIDENCE=%s\n' "$CONFIDENCE"
-    printf 'SAFETY_CLASSIFICATION=%s\n' "$SAFETY_CLASSIFICATION"
-    printf 'PRECONDITIONS=%s\n' "$(action_policy_states "$ACTION_ID")"
-    printf 'VALIDATION_RESULT=%s\n' "$VALIDATION_RESULT"
-    printf 'VALIDATION_REASON=%s\n' "$VALIDATION_REASON"
-    printf 'ROLLBACK_AVAILABLE=%s\n' "$ROLLBACK_AVAILABLE"
-    printf 'DRY_RUN=%s\n' "$DRY_RUN"
-    printf 'CREATED_AT=%s\n' "$(now)"
-    printf 'APPLIED_AT=%s\n' "${APPLIED_AT:-NONE}"
-    printf 'RESULT=%s\n' "$RESULT"
-    printf 'PROVENANCE=%s\n' "$PROVENANCE"
-    printf 'MAX_DURATION_SECONDS=%s\n' "$(action_max_duration "$ACTION_ID")"
-    printf 'COOLDOWN_SECONDS=%s\n' "$COOLDOWN_SECONDS"
-    printf 'MODE=%s\n' "$MODE"
-    printf 'ACTION_LOCK=%s\n' "$(action_lock_state)"
-    printf 'HARDWARE_WRITES=NO\nPROCESS_CONTROL=NO\nNETWORK_EXECUTION=NO\nARBITRARY_EXECUTION=NO\n'
+    printf 'POLICY_STATE=%s\nEVIDENCE_QUALITY=%s\nCONFIDENCE=%s\nSAFETY_CLASSIFICATION=%s\n' "$POLICY_STATE" "$EVIDENCE_QUALITY" "$CONFIDENCE" "$SAFETY_CLASSIFICATION"
+    printf 'PRECONDITIONS=%s\nVALIDATION_RESULT=%s\nVALIDATION_REASON=%s\n' "$(action_policy_states "$ACTION_ID")" "$VALIDATION_RESULT" "$VALIDATION_REASON"
+    printf 'DRY_RUN=%s\nMODE=%s\nRESULT=%s\nVERIFICATION_RESULT=%s\nROLLBACK_RESULT=%s\n' "$DRY_RUN" "$MODE" "$RESULT" "$VERIFICATION" "$ROLLBACK"
+    printf 'CREATED_AT=%s\nPROVENANCE=%s\nACTION_LOCK=%s\n' "$(now)" "$PROVENANCE" "$(action_lock_state)"
+    printf 'HARDWARE_WRITES=NO\nPROCESS_CONTROL=NO\nNETWORK_EXECUTION=NO\nARBITRARY_EXECUTION=NO\nDEVICE_ACTION_EXECUTION=NOT_AVAILABLE\n'
 }
 
 plan_action() {
     ACTION_ID="$1"
-    context_validation "$ACTION_ID" || {
-        emit_action_record "$ACTION_ID" DRY_RUN ACTION_DENIED YES
-        return 1
-    }
-    emit_action_record "$ACTION_ID" DRY_RUN PLANNED YES
+    context_validation "$ACTION_ID" || { emit_action_record "$ACTION_ID" PLAN ACTION_DENIED YES NOT_APPLICABLE NOT_APPLICABLE; return 1; }
+    emit_action_record "$ACTION_ID" PLAN PLANNED YES NOT_APPLICABLE NOT_APPLICABLE
 }
 
 validate_action() {
-    ACTION_ID="$1"
-    context_validation "$ACTION_ID" || :
-    emit_action_record "$ACTION_ID" DRY_RUN "${VALIDATION_RESULT}_ONLY" YES
+    ACTION_ID="$1"; context_validation "$ACTION_ID" || :
+    emit_action_record "$ACTION_ID" VALIDATE "${VALIDATION_RESULT}_ONLY" YES NOT_APPLICABLE NOT_APPLICABLE
     [ "$VALIDATION_RESULT" = VALID ]
 }
 
 dry_run_action() {
-    ACTION_ID="$1"
-    context_validation "$ACTION_ID" || :
-    if [ "$VALIDATION_RESULT" = VALID ]; then
+    ACTION_ID="$1"; context_validation "$ACTION_ID" || :
+    if [ "$VALIDATION_RESULT" = VALID ] && is_dry_run_executable "$ACTION_ID"; then
         RESULT=DRY_RUN_VALIDATED
+    elif [ "$VALIDATION_RESULT" = VALID ]; then
+        RESULT=DRY_RUN_UNSUPPORTED_DEVICE_CAPABILITY
     else
         RESULT=ACTION_DENIED
     fi
-    append_audit "$(audit_record "$ACTION_ID" DRY_RUN "$VALIDATION_RESULT" "$RESULT" NOT_APPLICABLE "$VALIDATION_REASON")" || :
-    emit_action_record "$ACTION_ID" DRY_RUN "$RESULT" YES
-    [ "$VALIDATION_RESULT" = VALID ]
-}
-
-apply_fixed_action() {
-    ACTION_ID="$1"
-    case "$ACTION_ID" in
-        refresh_telemetry)
-            POLICY_SNAPSHOT=$(policy_snapshot)
-            [ -n "$POLICY_SNAPSHOT" ] || return 1
-            printf '%s\n' 'REFRESHED_READ_ONLY_TELEMETRY'
-            ;;
-        reset_recommendation_state)
-            write_file "$MANAGED_STATE_FILE" 'MANAGED_STATE=RECOMMENDATION_RESET' || return 1
-            printf '%s\n' 'RESET_MANAGED_RECOMMENDATION_STATE'
-            ;;
-        clear_temporary_runtime_state)
-            write_file "$MANAGED_STATE_FILE" 'MANAGED_STATE=TEMPORARY_RUNTIME_CLEARED' || return 1
-            printf '%s\n' 'CLEARED_MANAGED_TEMPORARY_RUNTIME_STATE'
-            ;;
-        *) return 1 ;;
-    esac
+    append_audit "$(audit_record "$ACTION_ID" DRY_RUN "$VALIDATION_RESULT" "$RESULT" NOT_APPLICABLE NOT_APPLICABLE "$VALIDATION_REASON")" || :
+    emit_action_record "$ACTION_ID" DRY_RUN "$RESULT" YES NOT_APPLICABLE NOT_APPLICABLE
+    [ "$RESULT" = DRY_RUN_VALIDATED ]
 }
 
 apply_action() {
-    ACTION_ID="$1"
-    INTENT="${2:-}"
-    [ "$INTENT" = --explicit-apply ] || { printf 'ACTION_DENIED=EXPLICIT_APPLY_INTENT_REQUIRED\nMODE=DRY_RUN\n'; return 1; }
-    [ "$(action_lock_state)" = DISABLED ] || { printf 'ACTION_DENIED=ACTION_LOCK_ENABLED\nMODE=DRY_RUN\n'; return 1; }
-    context_validation "$ACTION_ID" || {
-        append_audit "$(audit_record "$ACTION_ID" APPLY DENIED ACTION_DENIED NOT_APPLICABLE "$VALIDATION_REASON")" || :
-        emit_action_record "$ACTION_ID" APPLY ACTION_DENIED NO
-        return 1
-    }
-    case "$EVIDENCE_QUALITY" in HEALTHY|VALID) : ;; *)
-        VALIDATION_RESULT=DENIED
-        VALIDATION_REASON='apply requires fresh HEALTHY evidence; dry-run remains available for degraded evidence'
-        append_audit "$(audit_record "$ACTION_ID" APPLY DENIED ACTION_DENIED NOT_APPLICABLE "$VALIDATION_REASON")" || :
-        emit_action_record "$ACTION_ID" APPLY ACTION_DENIED NO
-        return 1
-    esac
-    REMAINING=$(cooldown_remaining "$ACTION_ID")
-    [ "$REMAINING" -eq 0 ] || {
-        VALIDATION_RESULT=DENIED
-        VALIDATION_REASON="action cooldown active for $REMAINING seconds"
-        append_audit "$(audit_record "$ACTION_ID" APPLY DENIED ACTION_DENIED NOT_APPLICABLE "$VALIDATION_REASON")" || :
-        emit_action_record "$ACTION_ID" APPLY ACTION_DENIED NO
-        return 1
-    }
-    acquire_execution_lock || { printf 'ACTION_DENIED=CONCURRENCY_LOCK_ACTIVE\nMODE=DRY_RUN\n'; return 1; }
-    if ! append_audit "$(audit_record "$ACTION_ID" APPLY VALID APPLY_INTENT_ACCEPTED PENDING 'immutable pre-action audit record created')"; then
-        release_execution_lock
-        printf 'ACTION_DENIED=AUDIT_RECORD_REQUIRED\nMODE=DRY_RUN\n'
-        return 1
-    fi
-    EXECUTION_RESULT=$(apply_fixed_action "$ACTION_ID" 2>/dev/null || printf '%s' FAILED)
-    APPLIED_AT=$(now)
-    if [ "$EXECUTION_RESULT" = FAILED ]; then
-        append_audit "$(audit_record "$ACTION_ID" APPLY VALID FAILED NOT_APPLICABLE 'fixed managed-state operation failed')" || :
-        release_execution_lock
-        emit_action_record "$ACTION_ID" APPLY FAILED NO
-        return 1
-    fi
-    context_validation "$ACTION_ID" || POST_VALID=NO
-    POST_VALID=${POST_VALID:-YES}
-    if [ "$POST_VALID" = NO ] || [ "$VALIDATION_RESULT" != VALID ]; then
-        rollback_fixed_action "$ACTION_ID" >/dev/null 2>&1 || :
-        append_audit "$(audit_record "$ACTION_ID" APPLY DENIED ROLLED_BACK AUTOMATIC 'post-action safety verification failed')" || :
-        release_execution_lock
-        emit_action_record "$ACTION_ID" APPLY ROLLED_BACK NO
-        return 1
-    fi
-    write_file "$LAST_ACTION_FILE" "ACTION_ID=$ACTION_ID
-APPLIED_EPOCH=$(epoch_now)
-APPLIED_AT=$APPLIED_AT" || :
-    append_audit "$(audit_record "$ACTION_ID" APPLY VALID "$EXECUTION_RESULT" NOT_REQUIRED 'fixed managed-state operation completed and post-action safety was verified')" || :
-    release_execution_lock
-    emit_action_record "$ACTION_ID" APPLY "$EXECUTION_RESULT" NO
+    ACTION_ID="$1"; INTENT="${2:-}"
+    [ "$INTENT" = --dry-run ] || { printf 'ACTION_DENIED=REAL_DEVICE_APPLY_NOT_AVAILABLE\nMODE=DRY_RUN\nHARDWARE_WRITES=NO\n'; return 1; }
+    dry_run_action "$ACTION_ID"
 }
 
-rollback_fixed_action() {
-    ACTION_ID="$1"
-    case "$ACTION_ID" in
-        reset_recommendation_state|clear_temporary_runtime_state)
-            rm -f "$MANAGED_STATE_FILE" 2>/dev/null || return 1
-            printf '%s\n' 'MANAGED_STATE_ROLLED_BACK'
-            ;;
-        refresh_telemetry)
-            printf '%s\n' 'NO_ROLLBACK_REQUIRED'
-            ;;
-        *) return 1 ;;
-    esac
+verify_action() {
+    ACTION_ID="$1"; allowed_action "$ACTION_ID" || { printf 'VERIFICATION_DENIED=UNKNOWN_ACTION_ID\n'; return 1; }
+    load_context
+    VALIDATION_RESULT=NOT_APPLICABLE
+    VALIDATION_REASON='no real device action exists to verify'
+    append_audit "$(audit_record "$ACTION_ID" VERIFY NOT_APPLICABLE NOT_APPLIED NOT_APPLICABLE NOT_APPLICABLE 'no real device action exists to verify')" || :
+    emit_action_record "$ACTION_ID" VERIFY NOT_APPLIED YES NOT_APPLICABLE NOT_APPLICABLE
 }
 
 rollback_action() {
-    ACTION_ID="$1"
-    allowed_action "$ACTION_ID" || { printf 'ROLLBACK_DENIED=UNKNOWN_ACTION_ID\n'; return 1; }
-    acquire_execution_lock || { printf 'ROLLBACK_DENIED=CONCURRENCY_LOCK_ACTIVE\n'; return 1; }
+    ACTION_ID="$1"; allowed_action "$ACTION_ID" || { printf 'ROLLBACK_DENIED=UNKNOWN_ACTION_ID\n'; return 1; }
     load_context
-    ROLLBACK_AVAILABLE=$(action_rollback_available "$ACTION_ID")
-    if [ "$ROLLBACK_AVAILABLE" = NO ]; then
-        append_audit "$(audit_record "$ACTION_ID" ROLLBACK VALID NO_ROLLBACK_REQUIRED NOT_REQUIRED 'action has no managed-state change to rollback')" || :
-        release_execution_lock
-        printf 'ACTION_ID=%s\nROLLBACK_AVAILABLE=NO\nROLLBACK_RESULT=NO_ROLLBACK_REQUIRED\nACTION_LOCK=%s\n' "$ACTION_ID" "$(action_lock_state)"
-        return 0
-    fi
-    ROLLBACK_RESULT=$(rollback_fixed_action "$ACTION_ID" 2>/dev/null || printf '%s' FAILED)
-    append_audit "$(audit_record "$ACTION_ID" ROLLBACK VALID NOT_APPLICABLE "$ROLLBACK_RESULT" 'fixed managed-state rollback requested')" || :
-    release_execution_lock
-    printf 'ACTION_ID=%s\nROLLBACK_AVAILABLE=YES\nROLLBACK_RESULT=%s\nACTION_LOCK=%s\nHARDWARE_WRITES=NO\n' "$ACTION_ID" "$ROLLBACK_RESULT" "$(action_lock_state)"
-    [ "$ROLLBACK_RESULT" != FAILED ]
+    VALIDATION_RESULT=NOT_APPLICABLE
+    VALIDATION_REASON='no real device action exists to roll back'
+    append_audit "$(audit_record "$ACTION_ID" ROLLBACK NOT_APPLICABLE NOT_APPLIED NOT_APPLICABLE NO_APPLIED_ACTION 'no real device action exists to roll back')" || :
+    emit_action_record "$ACTION_ID" ROLLBACK NOT_APPLIED YES NOT_APPLICABLE NO_APPLIED_ACTION
 }
 
 status() {
     load_context
-    HISTORY_COUNT=0
-    [ -r "$ACTION_AUDIT_FILE" ] && HISTORY_COUNT=$(awk 'END { print NR + 0 }' "$ACTION_AUDIT_FILE" 2>/dev/null)
-    [ -n "$HISTORY_COUNT" ] || HISTORY_COUNT=0
-    printf 'VEGAS-INJECT CONTROLLED ACTIONS\n'
-    printf 'MODE=DRY_RUN\n'
-    printf 'ACTION_LOCK=%s\n' "$(action_lock_state)"
-    printf 'DEFAULT_ACTION_MODE=DRY_RUN\n'
-    printf 'EXPLICIT_APPLY_REQUIRED=YES\n'
-    printf 'CURRENT_RECOMMENDATION=%s\n' "$RECOMMENDATION"
-    printf 'POLICY_STATE=%s\n' "$POLICY_STATE"
-    printf 'EVIDENCE_QUALITY=%s\n' "$EVIDENCE_QUALITY"
-    printf 'CONFIDENCE=%s\n' "$CONFIDENCE"
-    printf 'SAFETY_CLASSIFICATION=%s\n' "$SAFETY_CLASSIFICATION"
-    printf 'PLANNED_ACTION=refresh_telemetry\n'
-    printf 'VALIDATION_STATUS=REQUIRED\n'
-    printf 'AVAILABLE_ACTIONS=refresh_telemetry,reset_recommendation_state,clear_temporary_runtime_state\n'
-    printf 'BLOCKED_ACTIONS=hardware,cpu,gpu,thermal,battery,charging,process,memory,proc,sys,android_properties,root,shell,arbitrary_path,network,plugin_commands\n'
-    printf 'ROLLBACK_AVAILABLE=MANAGED_STATE_ACTIONS_ONLY\n'
-    printf 'AUDIT_HISTORY_COUNT=%s\n' "$HISTORY_COUNT"
-    printf 'AUDIT_HISTORY_MAX=%s\n' "$MAX_AUDIT_RECORDS"
-    printf 'CONCURRENCY_LOCK=%s\n' "$( [ -d "$EXECUTION_LOCK_DIR" ] && printf '%s' ACTIVE || printf '%s' INACTIVE )"
-    printf 'HARDWARE_WRITES=NO\nPROCESS_CONTROL=NO\nNETWORK_EXECUTION=NO\nARBITRARY_EXECUTION=NO\n'
-    printf 'ACTION_LAYER_SCOPE=VEGAS_INJECT_MANAGED_STATE_ONLY\n'
+    HISTORY_COUNT=0; [ -r "$ACTION_AUDIT_FILE" ] && HISTORY_COUNT=$(awk 'END { print NR + 0 }' "$ACTION_AUDIT_FILE" 2>/dev/null); [ -n "$HISTORY_COUNT" ] || HISTORY_COUNT=0
+    printf 'VEGAS-INJECT CAPABILITY-GATED ACTIONS\n'
+    printf 'MODE=DRY_RUN\nACTION_LOCK=%s\nDEFAULT_ACTION_MODE=DRY_RUN\nREAL_DEVICE_APPLY=NOT_AVAILABLE\n' "$(action_lock_state)"
+    printf 'CURRENT_RECOMMENDATION=%s\nPOLICY_STATE=%s\nEVIDENCE_QUALITY=%s\nCONFIDENCE=%s\nSAFETY_CLASSIFICATION=%s\n' "$RECOMMENDATION" "$POLICY_STATE" "$EVIDENCE_QUALITY" "$CONFIDENCE" "$SAFETY_CLASSIFICATION"
+    printf 'PLANNED_ACTION=refresh_telemetry\nVALIDATION_STATUS=REQUIRED\n'
+    printf 'AVAILABLE_ACTIONS=refresh_telemetry,profile_balanced_advisory\nUNSUPPORTED_ACTIONS=profile_performance_advisory,thermal_protection_advisory,memory_conservative_advisory,battery_conservative_advisory\n'
+    printf 'BLOCKED_ACTIONS=hardware,cpu,gpu,governor,frequency,thermal_control,battery_control,charging,power_hal,process,memory_subsystem,proc,sys,android_properties,root,shell,arbitrary_path,network,plugin_commands\n'
+    printf 'ROLLBACK_AVAILABLE=NO_APPLIED_DEVICE_ACTIONS\nAUDIT_HISTORY_COUNT=%s\nAUDIT_HISTORY_MAX=%s\n' "$HISTORY_COUNT" "$MAX_AUDIT_RECORDS"
+    printf 'CONCURRENCY_LOCK=NOT_REQUIRED_FOR_DRY_RUN\nHARDWARE_WRITES=NO\nPROCESS_CONTROL=NO\nNETWORK_EXECUTION=NO\nARBITRARY_EXECUTION=NO\n'
+    printf 'ACTION_LAYER_SCOPE=FIXED_CAPABILITY_GATED_DRY_RUN_ONLY\nDEVICE_CAPABILITIES=UNVERIFIED\nSAFETY_GATE=ENFORCED\n'
+}
+
+snapshot() {
+    load_context
+    HISTORY_COUNT=0; [ -r "$ACTION_AUDIT_FILE" ] && HISTORY_COUNT=$(awk 'END { print NR + 0 }' "$ACTION_AUDIT_FILE" 2>/dev/null); [ -n "$HISTORY_COUNT" ] || HISTORY_COUNT=0
+    printf '{'
+    printf '"schema":"1","component":"vegas-capability-gated-action-engine",'
+    printf '"source":"vegas-inject-fixed-action-engine",'
+    printf '"read_only":true,"mode":"DRY_RUN","action_lock":"%s",' "$(escape "$(action_lock_state)")"
+    printf '"real_device_apply":"NOT_AVAILABLE","device_capabilities":"UNVERIFIED","safety_gate":"ENFORCED",'
+    printf '"current_recommendation":"%s","policy_state":"%s","evidence_quality":"%s","confidence":"%s",' \
+        "$(escape "$RECOMMENDATION")" "$(escape "$POLICY_STATE")" "$(escape "$EVIDENCE_QUALITY")" "$(escape "$CONFIDENCE")"
+    printf '"planned_action":"refresh_telemetry","validation_status":"REQUIRED",'
+    printf '"available_actions":"refresh_telemetry,profile_balanced_advisory",'
+    printf '"unsupported_actions":"profile_performance_advisory,thermal_protection_advisory,memory_conservative_advisory,battery_conservative_advisory",'
+    printf '"blocked_actions":"hardware,cpu,gpu,governor,frequency,thermal_control,battery_control,charging,power_hal,process,memory_subsystem,proc,sys,android_properties,root,shell,arbitrary_path,network,plugin_commands",'
+    printf '"rollback_available":"NO_APPLIED_DEVICE_ACTIONS",'
+    printf '"audit_history":{"count":%s,"maximum":%s,"bounded":true,"repository_local":true},' "$HISTORY_COUNT" "$MAX_AUDIT_RECORDS"
+    printf '"safety":{"hardware_writes":false,"process_control":false,"network_execution":false,"arbitrary_execution":false,"device_action_execution":"NOT_AVAILABLE","browser_execution":false}'
+    printf '}\n'
 }
 
 capabilities() {
     cat <<'EOF'
-VEGAS-INJECT CONTROLLED ACTION CAPABILITIES
+VEGAS-INJECT CAPABILITY-GATED ACTION CAPABILITIES
 MODE=DRY_RUN
 ACTION_LOCK=ENABLED_BY_DEFAULT
-ALLOWLIST=refresh_telemetry,reset_recommendation_state,clear_temporary_runtime_state
-OPERATIONS=status,capabilities,plan,validate,dry-run,apply,rollback,history,lock,unlock
-EXPLICIT_APPLY_REQUIRED=YES
-ROLLBACK=FIXED_MANAGED_STATE_ONLY
+OPERATIONS=status,capabilities,plan,validate,dry-run,apply--dry-run,verify,rollback,history,lock,unlock
+FIXED_ACTIONS=refresh_telemetry,profile_balanced_advisory,profile_performance_advisory,thermal_protection_advisory,memory_conservative_advisory,battery_conservative_advisory
+SUPPORTED_ACTIONS=refresh_telemetry,profile_balanced_advisory
+UNSUPPORTED_DEVICE_ACTIONS=profile_performance_advisory,thermal_protection_advisory,memory_conservative_advisory,battery_conservative_advisory
+REAL_DEVICE_APPLY=NOT_AVAILABLE
+ROLLBACK=NO_APPLIED_DEVICE_ACTIONS
 AUDIT_HISTORY=BOUNDED_LOCAL_ONLY
-HARDWARE_WRITES=BLOCKED
-PROCESS_CONTROL=BLOCKED
-ARBITRARY_EXECUTION=BLOCKED
-NETWORK_EXECUTION=BLOCKED
 EOF
     blocked_action_registry
 }
 
 history() {
-    printf 'ACTION_AUDIT_HISTORY\n'
-    printf 'MAX_RECORDS=%s\n' "$MAX_AUDIT_RECORDS"
-    printf 'PERSONAL_DATA=NO\nNETWORK_TRANSMISSION=NO\n'
+    printf 'ACTION_AUDIT_HISTORY\nMAX_RECORDS=%s\nPERSONAL_DATA=NO\nNETWORK_TRANSMISSION=NO\nHARDWARE_CHANGED=NO\n' "$MAX_AUDIT_RECORDS"
     [ -r "$ACTION_AUDIT_FILE" ] && tail -n "$MAX_AUDIT_RECORDS" "$ACTION_AUDIT_FILE" 2>/dev/null || printf 'NO_AUDIT_RECORDS\n'
 }
 
 lock_actions() {
     write_file "$ACTION_LOCK_FILE" ENABLED || { printf 'ACTION_LOCK=ERROR\n'; return 1; }
-    load_context
-    append_audit "$(audit_record emergency_lock LOCK VALID LOCK_ENABLED NOT_APPLICABLE 'explicit internal emergency lock enabled')" || :
-    printf 'ACTION_LOCK=ENABLED\nMODE=DRY_RUN\nAPPLY_OPERATIONS=DENIED\nDRY_RUN_AVAILABLE=YES\nROLLBACK_AVAILABLE=YES\n'
+    load_context; append_audit "$(audit_record emergency_lock LOCK VALID LOCK_ENABLED NOT_APPLICABLE NOT_APPLICABLE 'explicit action lock enabled')" || :
+    printf 'ACTION_LOCK=ENABLED\nMODE=DRY_RUN\nDEVICE_APPLY=DENIED\n'
 }
 
 unlock_actions() {
     [ "${1:-}" = --explicit-unlock ] || { printf 'ACTION_LOCK=ENABLED\nUNLOCK_DENIED=EXPLICIT_UNLOCK_INTENT_REQUIRED\n'; return 1; }
     load_context
     case "$EVIDENCE_QUALITY" in HEALTHY|VALID) : ;; *) printf 'ACTION_LOCK=ENABLED\nUNLOCK_DENIED=SAFETY_EVIDENCE_NOT_VALIDATED\n'; return 1 ;; esac
-    [ "$SAFETY_CLASSIFICATION" = READ_ONLY_ADVISORY ] || { printf 'ACTION_LOCK=ENABLED\nUNLOCK_DENIED=SAFETY_CLASSIFICATION_BLOCKED\n'; return 1; }
-    case "$POLICY_STATE" in INSUFFICIENT_EVIDENCE|SAFETY_BLOCKED|UNKNOWN) printf 'ACTION_LOCK=ENABLED\nUNLOCK_DENIED=POLICY_STATE_BLOCKED\n'; return 1 ;; esac
+    case "$SAFETY_CLASSIFICATION" in READ_ONLY_ADVISORY|READ_ONLY_CONSERVATIVE) : ;; *) printf 'ACTION_LOCK=ENABLED\nUNLOCK_DENIED=SAFETY_CLASSIFICATION_BLOCKED\n'; return 1 ;; esac
     write_file "$ACTION_LOCK_FILE" DISABLED || { printf 'ACTION_LOCK=ERROR\n'; return 1; }
-    append_audit "$(audit_record emergency_unlock UNLOCK VALID LOCK_DISABLED NOT_APPLICABLE 'explicit unlock passed evidence and policy safety checks')" || :
-    printf 'ACTION_LOCK=DISABLED\nMODE=DRY_RUN\nEXPLICIT_APPLY_REQUIRED=YES\n'
+    append_audit "$(audit_record emergency_unlock UNLOCK VALID LOCK_DISABLED NOT_APPLICABLE NOT_APPLICABLE 'explicit unlock affects dry-run planning only; device apply remains unavailable')" || :
+    printf 'ACTION_LOCK=DISABLED\nMODE=DRY_RUN\nREAL_DEVICE_APPLY=NOT_AVAILABLE\n'
 }
 
 COMMAND="${1:-status}"
 case "$COMMAND" in
     status) [ "$#" -eq 1 ] || { usage >&2; exit 2; }; status ;;
+    snapshot) [ "$#" -eq 1 ] || { usage >&2; exit 2; }; snapshot ;;
     capabilities) [ "$#" -eq 1 ] || { usage >&2; exit 2; }; capabilities ;;
-    plan) [ "$#" -eq 2 ] || { usage >&2; exit 2; }; plan_action "$2" ;;
-    validate) [ "$#" -eq 2 ] || { usage >&2; exit 2; }; validate_action "$2" ;;
-    dry-run) [ "$#" -eq 2 ] || { usage >&2; exit 2; }; dry_run_action "$2" ;;
-    apply) [ "$#" -eq 3 ] || { usage >&2; exit 2; }; apply_action "$2" "$3" ;;
-    rollback) [ "$#" -eq 2 ] || { usage >&2; exit 2; }; rollback_action "$2" ;;
     history) [ "$#" -eq 1 ] || { usage >&2; exit 2; }; history ;;
     lock) [ "$#" -eq 1 ] || { usage >&2; exit 2; }; lock_actions ;;
+    plan|validate|dry-run|verify|rollback) [ "$#" -eq 2 ] || { usage >&2; exit 2; }; case "$COMMAND" in plan) plan_action "$2" ;; validate) validate_action "$2" ;; dry-run) dry_run_action "$2" ;; verify) verify_action "$2" ;; rollback) rollback_action "$2" ;; esac ;;
+    apply) [ "$#" -eq 3 ] || { usage >&2; exit 2; }; apply_action "$2" "$3" ;;
     unlock) [ "$#" -eq 2 ] || { usage >&2; exit 2; }; unlock_actions "$2" ;;
     help|-h|--help) usage ;;
     *) usage >&2; exit 2 ;;

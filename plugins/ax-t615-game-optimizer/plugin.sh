@@ -16,7 +16,7 @@ CONTROL_PLANE="$APP_ROOT/bin/control-plane"
 
 usage() {
     cat <<'EOF'
-Usage: plugin.sh {status|capabilities|games|game-detection|profiles|fps-analysis|performance-analysis|memory-monitoring|thermal-monitoring|power-telemetry|orchestrator-status|evidence {status|capabilities|inspect|evaluate|snapshot|history}|analysis {status|analyze|snapshot|capabilities}|policy {status|evaluate|snapshot|capabilities}|action {status|evaluate|simulate|capabilities}|control {status|snapshot|evaluate|simulate|capabilities}|dashboard [path|snapshot|core-snapshot]|dry-run}
+Usage: plugin.sh {status|capabilities|games|game-detection|profiles|fps-analysis|performance-analysis|memory-monitoring|thermal-monitoring|power-telemetry|orchestrator-status|evidence {status|capabilities|inspect|evaluate|snapshot|history}|analysis {status|analyze|snapshot|capabilities}|policy {status|evaluate|snapshot|capabilities}|action {status|snapshot|capabilities|plan|validate|dry-run|apply|verify|rollback|history|lock|unlock|evaluate|simulate}|control {status|snapshot|evaluate|simulate|capabilities}|dashboard [path|snapshot|core-snapshot]|dry-run}
 
 This is a fixed read-only operation allowlist. No plugin metadata is executed.
 EOF
@@ -54,7 +54,10 @@ case "${1:-status}" in
         ;;
     action)
         case "${2:-status}" in
-            status|evaluate|simulate|capabilities) exec sh "$ACTION_GATE" "${2:-status}" ;;
+            status|evaluate|simulate) exec sh "$ACTION_GATE" "${2:-status}" ;;
+            snapshot|capabilities|history|lock) exec sh "$ACTION_ENGINE" "${2:-status}" ;;
+            plan|validate|dry-run|verify|rollback|unlock) [ "$#" -eq 3 ] || { usage >&2; exit 2; }; exec sh "$ACTION_ENGINE" "$2" "$3" ;;
+            apply) [ "$#" -eq 4 ] || { usage >&2; exit 2; }; exec sh "$ACTION_ENGINE" "$2" "$3" "$4" ;;
             *) usage >&2; exit 2 ;;
         esac
         ;;

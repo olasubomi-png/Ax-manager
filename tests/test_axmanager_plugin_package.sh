@@ -39,8 +39,8 @@ done
 
 PROP=$(cat "$EXTRACT/module.prop" 2>/dev/null || :)
 contains "$PROP" 'id=vegas-inject' 'module ID is fixed and valid'
-contains "$PROP" 'version=1.0.0-axmanager' 'module version is declared'
-contains "$PROP" 'versionCode=10000' 'module version code is declared'
+contains "$PROP" 'version=1.1.0-axmanager' 'module version is declared'
+contains "$PROP" 'versionCode=10100' 'module version code is declared'
 contains "$PROP" 'axeronPlugin=14800' 'module declares official AxManager v1.4.8 compatibility code'
 
 [ -x "$EXTRACT/action.sh" ] && [ -x "$EXTRACT/uninstall.sh" ] && [ -x "$EXTRACT/runtime/bin/vegas" ] && pass 'module action and runtime entrypoints are executable' || fail 'module action and runtime entrypoints are executable'
@@ -53,8 +53,8 @@ contains "$ACTION" '"real_action_execution":"NOT_AVAILABLE"' 'extracted module a
 contains "$ACTION" '"hardware_writes":"NO"' 'extracted module action exposes no hardware-write capability'
 
 WEBUI=$(cat "$EXTRACT/webroot/index.html" 2>/dev/null || :)
-contains "$WEBUI" 'READ-ONLY · SIMULATION-ONLY' 'static WebUI states read-only simulation-only boundary'
-contains "$WEBUI" 'no device action is available' 'static WebUI states no-control boundary'
+contains "$WEBUI" 'READ-ONLY · CAPABILITY-GATED · NO DEVICE APPLY' 'static WebUI states read-only capability-gated boundary'
+contains "$WEBUI" 'Real device apply is not available.' 'static WebUI states no-control boundary'
 if grep -nE 'fetch\(|XMLHttpRequest|WebSocket|addJavascriptInterface|innerHTML[[:space:]]*=|<form|<button' "$EXTRACT/webroot/index.html" >/dev/null 2>&1; then
     fail 'WebUI contains no interactive or browser-to-shell bridge surface'
 else

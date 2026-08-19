@@ -116,42 +116,18 @@ policy_json() {
 action_json() {
     APP_ROOT=$(CDPATH= cd -- "$AXGO_ROOT/.." 2>/dev/null && pwd || :)
     ENGINE="${VEGAS_ACTION_ENGINE:-$APP_ROOT/bin/action-engine}"
-    ACTION_DATA=''
+    ACTION_JSON=''
     if [ -n "$APP_ROOT" ] && [ -r "$ENGINE" ]; then
-        ACTION_DATA=$(ORCH_EVIDENCE_FILE="$TMP_EVIDENCE" AXGO_ROOT="$AXGO_ROOT" AXGO_DATA_ROOT="${AXGO_DATA_ROOT:-$AXGO_ROOT}" sh "$ENGINE" status 2>/dev/null || :)
+        ACTION_JSON=$(ORCH_EVIDENCE_FILE="$TMP_EVIDENCE" AXGO_ROOT="$AXGO_ROOT" AXGO_DATA_ROOT="${AXGO_DATA_ROOT:-$AXGO_ROOT}" sh "$ENGINE" snapshot 2>/dev/null || :)
     fi
-    [ -n "$ACTION_DATA" ] || ACTION_DATA='MODE=DRY_RUN
-ACTION_LOCK=ENABLED
-CURRENT_RECOMMENDATION=remain_conservative
-POLICY_STATE=INSUFFICIENT_EVIDENCE
-EVIDENCE_QUALITY=UNSAFE_UNKNOWN
-PLANNED_ACTION=refresh_telemetry
-VALIDATION_STATUS=REQUIRED
-AVAILABLE_ACTIONS=NONE
-BLOCKED_ACTIONS=hardware,cpu,gpu,thermal,battery,charging,process,memory,proc,sys,android_properties,root,shell,arbitrary_path,network,plugin_commands
-ROLLBACK_AVAILABLE=NONE
-AUDIT_HISTORY_COUNT=0
-AUDIT_HISTORY_MAX=16'
-    printf '{'
-    json_pair schema "1"; printf ','
-    json_pair source "vegas-inject-controlled-action-engine"; printf ','
-    printf '"read_only":true,'
-    json_pair mode "$(value MODE "$ACTION_DATA")"; printf ','
-    json_pair action_lock "$(value ACTION_LOCK "$ACTION_DATA")"; printf ','
-    json_pair current_recommendation "$(value CURRENT_RECOMMENDATION "$ACTION_DATA")"; printf ','
-    json_pair policy_state "$(value POLICY_STATE "$ACTION_DATA")"; printf ','
-    json_pair evidence_quality "$(value EVIDENCE_QUALITY "$ACTION_DATA")"; printf ','
-    json_pair planned_action "$(value PLANNED_ACTION "$ACTION_DATA")"; printf ','
-    json_pair validation_status "$(value VALIDATION_STATUS "$ACTION_DATA")"; printf ','
-    json_pair available_actions "$(value AVAILABLE_ACTIONS "$ACTION_DATA")"; printf ','
-    json_pair blocked_actions "$(value BLOCKED_ACTIONS "$ACTION_DATA")"; printf ','
-    json_pair rollback_available "$(value ROLLBACK_AVAILABLE "$ACTION_DATA")"; printf ','
-    printf '"audit_history":{'
-    json_pair count "$(value AUDIT_HISTORY_COUNT "$ACTION_DATA")"; printf ','
-    json_pair maximum "$(value AUDIT_HISTORY_MAX "$ACTION_DATA")"; printf ','
-    printf '"bounded":true},'
-    printf '"safety":{"dry_run_default":"YES","explicit_apply_required":"YES","action_lock_default":"ENABLED","hardware_writes":"NO","process_control":"NO","arbitrary_execution":"NO","network_execution":"NO","browser_execution":"NO"}'
-    printf '}'
+    [ -n "$ACTION_JSON" ] || ACTION_JSON='{"schema":"1","component":"vegas-capability-gated-action-engine","source":"unavailable","read_only":true,"mode":"DRY_RUN","action_lock":"ENABLED","real_device_apply":"NOT_AVAILABLE","device_capabilities":"UNVERIFIED","safety_gate":"ENFORCED","current_recommendation":"remain_conservative","policy_state":"INSUFFICIENT_EVIDENCE","evidence_quality":"UNSAFE_UNKNOWN","confidence":"LOW","planned_action":"refresh_telemetry","validation_status":"REQUIRED","available_actions":"NONE","unsupported_actions":"ALL_DEVICE_ACTIONS_UNSUPPORTED","blocked_actions":"hardware,process,network,arbitrary_execution","rollback_available":"NO_APPLIED_DEVICE_ACTIONS","audit_history":{"count":0,"maximum":16,"bounded":true,"repository_local":true},"safety":{"hardware_writes":false,"process_control":false,"network_execution":false,"arbitrary_execution":false,"device_action_execution":"NOT_AVAILABLE","browser_execution":false}}'
+    printf '%s' "$ACTION_JSON"
+}
+
+legacy_action_json() {
+    cat <<'EOF'
+{"schema":"1","source":"vegas-inject-controlled-action-engine","read_only":true,"mode":"DRY_RUN","dry_run_default":"YES","action_lock_default":"ENABLED","action_layer":"CAPABILITY_GATED_DRY_RUN_ONLY","real_device_apply":"NOT_AVAILABLE","rollback_available":"NO_APPLIED_DEVICE_ACTIONS","safety":{"hardware_writes":"NO","process_control":"NO","network_execution":"NO","arbitrary_execution":"NO"}}
+EOF
 }
 
 action_gate_json() {
@@ -200,6 +176,7 @@ snapshot() {
     SESSION=$(AXGO_ROOT="$AXGO_ROOT" sh "$AXGO_ROOT/bin/session" status 2>/dev/null || :)
     PROFILE=$(AXGO_ROOT="$AXGO_ROOT" sh "$AXGO_ROOT/bin/profile" get 2>/dev/null || :)
     PROFILE_LIST=$(AXGO_ROOT="$AXGO_ROOT" sh "$AXGO_ROOT/bin/game-profile" list 2>/dev/null || :)
+    CAPABILITY_ACTION=$(action_json)
 
     printf '{'
     json_pair schema "1"; printf ','
@@ -258,7 +235,9 @@ snapshot() {
     policy_json
     printf ','
     printf '"action":'
-    action_json
+    legacy_action_json
+    printf ','
+    printf '"capability_action":%s' "$CAPABILITY_ACTION"
     printf ','
     printf '"action_gate":'
     action_gate_json

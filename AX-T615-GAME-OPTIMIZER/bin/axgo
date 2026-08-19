@@ -52,7 +52,15 @@ validate_fixed_route() {
         dashboard) [ "$#" -eq 0 ] || usage_rejected ;;
         evidence) case "${1:-status}:$#" in status:0|status:1|snapshot:1|history:1|capabilities:1) ;; *) usage_rejected ;; esac ;;
         policy) case "${1:-status}:$#" in status:0|status:1|evaluate:1|snapshot:1|capabilities:1) ;; *) usage_rejected ;; esac ;;
-        action) case "${1:-status}:$#" in status:0|status:1|evaluate:1|simulate:1|capabilities:1) ;; *) usage_rejected ;; esac ;;
+        action)
+            case "${1:-status}:$#" in
+                status:0|status:1|snapshot:1|capabilities:1|history:1|lock:1|evaluate:1|simulate:1) ;;
+                plan:2|validate:2|dry-run:2|verify:2|rollback:2) safe_name "$2" || usage_rejected ;;
+                unlock:2) [ "$2" = --explicit-unlock ] || usage_rejected ;;
+                apply:3) safe_name "$2" && [ "$3" = --dry-run ] || usage_rejected ;;
+                *) usage_rejected ;;
+            esac
+            ;;
         control) case "${1:-status}:$#" in status:0|status:1|snapshot:1|evaluate:1|simulate:1|capabilities:1) ;; *) usage_rejected ;; esac ;;
         reset|*) usage_rejected ;;
     esac
@@ -132,7 +140,10 @@ case "$COMMAND" in
         ;;
     action)
         shift
-        exec sh "$REPOSITORY_DIR/bin/action-gate" "${1:-status}"
+        case "${1:-status}" in
+            status|evaluate|simulate) exec sh "$REPOSITORY_DIR/bin/action-gate" "${1:-status}" ;;
+            *) exec sh "$REPOSITORY_DIR/bin/action-engine" "$@" ;;
+        esac
         ;;
     control)
         shift
@@ -262,7 +273,7 @@ case "$COMMAND" in
         exec sh "$SCRIPT_DIR/cpu-reset"
         ;;
     *)
-        echo "Usage: axgo {status|dashboard|evidence [status|snapshot|history|capabilities]|policy [status|evaluate|snapshot|capabilities]|action [status|evaluate|simulate|capabilities]|control [status|snapshot|evaluate|simulate|capabilities]|detect|capabilities [--save]|cpu [status|inspect|dry-run|apply <profile>|restore|reset]|gpu [status|inspect|capabilities|dry-run [cool|balanced|performance]|apply <profile>|restore|reset|info]|display [status|inspect|refresh|modes]|fps [status|inspect|monitor|analyze|session-start|session-stop|report|recommend]|performance [analyze]|power [status|inspect|battery|charging|health|temperature|estimate|monitor [--interval seconds]|dry-run|guard [status|check|recommend]]|orchestrator [status|start [game]|sample|decision|inspect|stop|monitor|dry-run]|memory [status|inspect|pressure|zram|swap|monitor [--interval seconds]|dry-run|guard [status|check|recommend]|performance [status|check|recommend|game-start [game]|game-stop]]|games|game {status|detect|active|start|stop|current|profile [list|show <game>|recommend <game>|validate|auto|use <profile>|clear]}|profile [get|set <profile>]|session [start|stop|status|current]|recovery [status|reset]|thermal [status|inspect|monitor|dry-run|guard [status|check|recommend|game-start|game-stop]]|gaming|reset}"
+        echo "Usage: axgo {status|dashboard|evidence [status|snapshot|history|capabilities]|policy [status|evaluate|snapshot|capabilities]|action [status|snapshot|evaluate|simulate|capabilities|plan <fixed-action>|validate <fixed-action>|dry-run <fixed-action>|apply <fixed-action> --dry-run|verify <fixed-action>|rollback <fixed-action>]|control [status|snapshot|evaluate|simulate|capabilities]|detect|capabilities [--save]|cpu [status|inspect|dry-run|apply <profile>|restore|reset]|gpu [status|inspect|capabilities|dry-run [cool|balanced|performance]|apply <profile>|restore|reset|info]|display [status|inspect|refresh|modes]|fps [status|inspect|monitor|analyze|session-start|session-stop|report|recommend]|performance [analyze]|power [status|inspect|battery|charging|health|temperature|estimate|monitor [--interval seconds]|dry-run|guard [status|check|recommend]]|orchestrator [status|start [game]|sample|decision|inspect|stop|monitor|dry-run]|memory [status|inspect|pressure|zram|swap|monitor [--interval seconds]|dry-run|guard [status|check|recommend]|performance [status|check|recommend|game-start [game]|game-stop]]|games|game {status|detect|active|start|stop|current|profile [list|show <game>|recommend <game>|validate|auto|use <profile>|clear]}|profile [get|set <profile>]|session [start|stop|status|current]|recovery [status|reset]|thermal [status|inspect|monitor|dry-run|guard [status|check|recommend|game-start|game-stop]]|gaming|reset}"
         exit 2
         ;;
 esac

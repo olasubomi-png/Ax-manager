@@ -1,5 +1,5 @@
 #!/usr/bin/env sh
-# Phase 9 contract: fixed managed-state actions remain locked, validated, bounded, and non-device-controlling.
+# Phase 15 contract: fixed capability-gated actions are dry-run only and never control a device.
 set -u
 
 ROOT=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
@@ -30,6 +30,7 @@ contains() { NAME=$1; HAYSTACK=$2; NEEDLE=$3; printf '%s' "$HAYSTACK" | grep -F 
 not_contains() { NAME=$1; HAYSTACK=$2; NEEDLE=$3; printf '%s' "$HAYSTACK" | grep -F "$NEEDLE" >/dev/null 2>&1 && not_ok "$NAME" || ok "$NAME"; }
 fails() { NAME=$1; shift; "$@" >/dev/null 2>&1 && not_ok "$NAME" || ok "$NAME"; }
 run_engine() { FIXTURE=$1; shift; ORCH_EVIDENCE_FILE="$FIXTURE" VEGAS_EVIDENCE_RUNTIME_DIR="$HISTORY" VEGAS_ACTION_RUNTIME_DIR="$RUNTIME" sh "$ENGINE" "$@"; }
+run_vegas() { FIXTURE=$1; shift; ORCH_EVIDENCE_FILE="$FIXTURE" VEGAS_EVIDENCE_RUNTIME_DIR="$HISTORY" VEGAS_ACTION_RUNTIME_DIR="$RUNTIME" sh "$VEGAS" "$@"; }
 
 write_fixture() {
     FILE=$1 THERMAL=$2 MEMORY=$3 BATTERY=$4 POWER=$5 AGE=$6 PROFILE=$7
@@ -76,35 +77,54 @@ EVIDENCE_AGE_SECONDS=10
 EOF
 
 STATUS=$(run_engine "$GOOD" status)
-contains 'status identifies controlled actions' "$STATUS" 'VEGAS-INJECT CONTROLLED ACTIONS'
+contains 'status identifies capability-gated actions' "$STATUS" 'VEGAS-INJECT CAPABILITY-GATED ACTIONS'
 contains 'default mode is dry run' "$STATUS" 'MODE=DRY_RUN'
-contains 'default action lock is enabled' "$STATUS" 'ACTION_LOCK=ENABLED'
-contains 'explicit apply is required' "$STATUS" 'EXPLICIT_APPLY_REQUIRED=YES'
-contains 'status limits scope to managed state' "$STATUS" 'ACTION_LAYER_SCOPE=VEGAS_INJECT_MANAGED_STATE_ONLY'
+contains 'real device apply is unavailable' "$STATUS" 'REAL_DEVICE_APPLY=NOT_AVAILABLE'
+contains 'device capabilities remain unverified' "$STATUS" 'DEVICE_CAPABILITIES=UNVERIFIED'
+contains 'safety gate remains enforced' "$STATUS" 'SAFETY_GATE=ENFORCED'
+contains 'status scopes action layer to fixed dry runs' "$STATUS" 'ACTION_LAYER_SCOPE=FIXED_CAPABILITY_GATED_DRY_RUN_ONLY'
+
+SNAPSHOT=$(run_engine "$GOOD" snapshot)
+contains 'snapshot is read only' "$SNAPSHOT" '"read_only":true'
+contains 'snapshot has no device apply' "$SNAPSHOT" '"real_device_apply":"NOT_AVAILABLE"'
+contains 'snapshot separates supported actions' "$SNAPSHOT" '"available_actions":"refresh_telemetry,profile_balanced_advisory"'
+contains 'snapshot declares unsupported device actions' "$SNAPSHOT" '"unsupported_actions":"profile_performance_advisory,thermal_protection_advisory,memory_conservative_advisory,battery_conservative_advisory"'
+contains 'snapshot excludes hardware writes' "$SNAPSHOT" '"hardware_writes":false'
 
 CAPS=$(run_engine "$GOOD" capabilities)
-contains 'capabilities expose fixed allowlist' "$CAPS" 'ALLOWLIST=refresh_telemetry,reset_recommendation_state,clear_temporary_runtime_state'
+contains 'capabilities expose fixed operations' "$CAPS" 'OPERATIONS=status,capabilities,plan,validate,dry-run,apply--dry-run,verify,rollback,history,lock,unlock'
+contains 'capabilities expose fixed allowlist' "$CAPS" 'FIXED_ACTIONS=refresh_telemetry,profile_balanced_advisory,profile_performance_advisory,thermal_protection_advisory,memory_conservative_advisory,battery_conservative_advisory'
 contains 'capabilities block hardware writes' "$CAPS" 'HARDWARE_WRITES=BLOCKED'
 contains 'capabilities block arbitrary executable paths' "$CAPS" 'ARBITRARY_EXECUTABLE_PATHS=BLOCKED'
-contains 'capabilities constrain rollback to managed state' "$CAPS" 'ROLLBACK=FIXED_MANAGED_STATE_ONLY'
+contains 'capabilities limit rollback to no applied actions' "$CAPS" 'ROLLBACK=NO_APPLIED_DEVICE_ACTIONS'
 
 PLAN=$(run_engine "$GOOD" plan refresh_telemetry)
-contains 'valid plan retains a fixed action identifier' "$PLAN" 'ACTION_ID=refresh_telemetry'
+contains 'plan retains a fixed action identifier' "$PLAN" 'ACTION_ID=refresh_telemetry'
 contains 'plan remains dry run' "$PLAN" 'DRY_RUN=YES'
 contains 'plan validates bounded policy context' "$PLAN" 'VALIDATION_RESULT=VALID'
-[ ! -e "$RUNTIME/managed-state" ] && ok 'planning never changes managed state' || not_ok 'planning never changes managed state'
+contains 'plan denies device execution' "$PLAN" 'DEVICE_ACTION_EXECUTION=NOT_AVAILABLE'
+[ ! -e "$RUNTIME/managed-state" ] && ok 'planning never creates a managed-state marker' || not_ok 'planning never creates a managed-state marker'
+
+VALIDATE=$(run_engine "$GOOD" validate refresh_telemetry)
+contains 'validation reports a fixed validation-only result' "$VALIDATE" 'VALIDATION_RESULT=VALID'
+contains 'validation has no device effect' "$VALIDATE" 'HARDWARE_WRITES=NO'
 
 DRY=$(run_engine "$GOOD" dry-run refresh_telemetry)
 contains 'dry run returns a validated non-application result' "$DRY" 'RESULT=DRY_RUN_VALIDATED'
+[ -f "$RUNTIME/audit.log" ] && ok 'dry run records bounded local audit only' || not_ok 'dry run records bounded local audit only'
 [ ! -e "$RUNTIME/managed-state" ] && ok 'dry run never changes managed state' || not_ok 'dry run never changes managed state'
 
 fails 'unknown action identifiers are rejected' run_engine "$GOOD" plan ../../../outside
 fails 'blocked action categories are rejected' run_engine "$GOOD" plan gpu_governor
-NO_INTENT=$(run_engine "$GOOD" apply reset_recommendation_state no-intent 2>&1 || :)
-contains 'apply denies missing explicit intent' "$NO_INTENT" 'ACTION_DENIED=EXPLICIT_APPLY_INTENT_REQUIRED'
-LOCKED=$(run_engine "$GOOD" apply reset_recommendation_state --explicit-apply 2>&1 || :)
-contains 'enabled emergency lock denies explicit apply' "$LOCKED" 'ACTION_DENIED=ACTION_LOCK_ENABLED'
-[ ! -e "$RUNTIME/managed-state" ] && ok 'locked apply leaves managed state absent' || not_ok 'locked apply leaves managed state absent'
+UNSUPPORTED=$(run_engine "$GOOD" validate profile_performance_advisory 2>&1 || :)
+contains 'unverified performance capability is denied' "$UNSUPPORTED" 'UNSUPPORTED_DEVICE_CAPABILITY_UNVERIFIED'
+contains 'unverified performance capability stays dry run' "$UNSUPPORTED" 'DRY_RUN=YES'
+
+NO_INTENT=$(run_engine "$GOOD" apply refresh_telemetry no-intent 2>&1 || :)
+contains 'apply denies every real action spelling' "$NO_INTENT" 'ACTION_DENIED=REAL_DEVICE_APPLY_NOT_AVAILABLE'
+APPLY_DRY=$(run_engine "$GOOD" apply refresh_telemetry --dry-run)
+contains 'apply permits only explicit dry-run intent' "$APPLY_DRY" 'RESULT=DRY_RUN_VALIDATED'
+[ ! -e "$RUNTIME/managed-state" ] && ok 'apply dry-run leaves managed state absent' || not_ok 'apply dry-run leaves managed state absent'
 
 UNKNOWN_UNLOCK=$(run_engine "$UNKNOWN" unlock --explicit-unlock 2>&1 || :)
 contains 'unknown safety evidence cannot unlock actions' "$UNKNOWN_UNLOCK" 'UNLOCK_DENIED=SAFETY_EVIDENCE_NOT_VALIDATED'
@@ -113,54 +133,50 @@ contains 'stale evidence is denied even in dry-run validation' "$STALE_DRY" 'RES
 contains 'stale evidence exposes dry-run mode' "$STALE_DRY" 'MODE=DRY_RUN'
 
 UNLOCK=$(run_engine "$GOOD" unlock --explicit-unlock)
-contains 'validated safe evidence can explicitly unlock managed actions' "$UNLOCK" 'ACTION_LOCK=DISABLED'
-APPLIED=$(run_engine "$GOOD" apply reset_recommendation_state --explicit-apply)
-contains 'explicit unlocked apply changes only fixed managed state' "$APPLIED" 'RESULT=RESET_MANAGED_RECOMMENDATION_STATE'
-grep -F 'MANAGED_STATE=RECOMMENDATION_RESET' "$RUNTIME/managed-state" >/dev/null 2>&1 && ok 'apply writes only expected managed marker' || not_ok 'apply writes only expected managed marker'
-COOLDOWN=$(run_engine "$GOOD" apply reset_recommendation_state --explicit-apply 2>&1 || :)
-contains 'duplicate action respects fixed cooldown' "$COOLDOWN" 'action cooldown active'
-
-ROLLBACK=$(run_engine "$GOOD" rollback reset_recommendation_state)
-contains 'rollback reports fixed managed-state rollback' "$ROLLBACK" 'ROLLBACK_RESULT=MANAGED_STATE_ROLLED_BACK'
-[ ! -e "$RUNTIME/managed-state" ] && ok 'rollback removes only fixed managed marker' || not_ok 'rollback removes only fixed managed marker'
-mkdir -p "$RUNTIME/execution.lock"
-date '+%s' > "$RUNTIME/execution.lock/created_epoch"
-CONCURRENT=$(run_engine "$GOOD" rollback clear_temporary_runtime_state 2>&1 || :)
-contains 'active execution lock prevents concurrent rollback' "$CONCURRENT" 'ROLLBACK_DENIED=CONCURRENCY_LOCK_ACTIVE'
-rm -rf "$RUNTIME/execution.lock"
-mkdir -p "$RUNTIME/execution.lock"
-printf '%s\n' 0 > "$RUNTIME/execution.lock/created_epoch"
-STALE_LOCK=$(run_engine "$GOOD" rollback clear_temporary_runtime_state)
-contains 'stale execution lock is recovered for fixed rollback' "$STALE_LOCK" 'ROLLBACK_RESULT=MANAGED_STATE_ROLLED_BACK'
+contains 'validated safe evidence can unlock dry-run planning only' "$UNLOCK" 'ACTION_LOCK=DISABLED'
+contains 'unlock cannot enable device apply' "$UNLOCK" 'REAL_DEVICE_APPLY=NOT_AVAILABLE'
+VERIFY=$(run_engine "$GOOD" verify refresh_telemetry)
+contains 'verification reports no applied action' "$VERIFY" 'RESULT=NOT_APPLIED'
+ROLLBACK=$(run_engine "$GOOD" rollback refresh_telemetry)
+contains 'rollback reports no applied action' "$ROLLBACK" 'ROLLBACK_RESULT=NO_APPLIED_ACTION'
 
 I=1
 while [ "$I" -le 20 ]; do run_engine "$GOOD" dry-run refresh_telemetry >/dev/null || :; I=$((I + 1)); done
-HISTORY=$(run_engine "$GOOD" history)
-COUNT=$(printf '%s\n' "$HISTORY" | grep -c '^ACTION_AUDIT|')
+HISTORY_OUTPUT=$(run_engine "$GOOD" history)
+COUNT=$(printf '%s\n' "$HISTORY_OUTPUT" | grep -c '^ACTION_AUDIT|')
 [ "$COUNT" -le 16 ] && ok 'audit history remains bounded to sixteen records' || not_ok 'audit history remains bounded to sixteen records'
-contains 'audit records exclude personal data' "$HISTORY" 'personal_data=NO'
-contains 'audit records exclude network transmission' "$HISTORY" 'network_transmission=NO'
+contains 'audit records exclude personal data' "$HISTORY_OUTPUT" 'personal_data=NO'
+contains 'audit records exclude network transmission' "$HISTORY_OUTPUT" 'network_transmission=NO'
+contains 'audit records declare no hardware change' "$HISTORY_OUTPUT" 'hardware_changed=NO'
 
 run_engine "$GOOD" lock >/dev/null
 LOCK_AFTER=$(run_engine "$GOOD" status)
-contains 'explicit emergency lock restores default locked mode' "$LOCK_AFTER" 'ACTION_LOCK=ENABLED'
+contains 'explicit lock restores the default locked state' "$LOCK_AFTER" 'ACTION_LOCK=ENABLED'
 
-VEGAS_ACTION=$(ORCH_EVIDENCE_FILE="$GOOD" VEGAS_EVIDENCE_RUNTIME_DIR="$HISTORY" VEGAS_ACTION_RUNTIME_DIR="$RUNTIME" sh "$VEGAS" action evaluate)
-contains 'VEGAS public action route exposes the simulation-only gate schema' "$VEGAS_ACTION" '"source":"vegas-inject-action-safety-gate"'
-fails 'VEGAS rejects legacy and arbitrary action routes' sh "$VEGAS" action apply
-PLUGIN_ACTION=$(ORCH_EVIDENCE_FILE="$GOOD" VEGAS_EVIDENCE_RUNTIME_DIR="$HISTORY" VEGAS_ACTION_RUNTIME_DIR="$RUNTIME" sh "$MANAGER" invoke ax-t615-game-optimizer action status)
-contains 'AX-T615 plugin action route remains fixed and simulation only' "$PLUGIN_ACTION" 'VEGAS-INJECT ACTION SAFETY GATE'
+VEGAS_ACTION=$(run_vegas "$GOOD" action snapshot)
+contains 'VEGAS public action route exposes action-engine schema' "$VEGAS_ACTION" '"component":"vegas-capability-gated-action-engine"'
+contains 'VEGAS action snapshot has no device apply' "$VEGAS_ACTION" '"real_device_apply":"NOT_AVAILABLE"'
+VEGAS_GATE=$(run_vegas "$GOOD" action evaluate)
+contains 'VEGAS legacy action gate remains simulation only' "$VEGAS_GATE" '"source":"vegas-inject-action-safety-gate"'
+fails 'VEGAS rejects missing fixed action argument' sh "$VEGAS" action apply
+PLUGIN_ACTION=$(ORCH_EVIDENCE_FILE="$GOOD" VEGAS_EVIDENCE_RUNTIME_DIR="$HISTORY" VEGAS_ACTION_RUNTIME_DIR="$RUNTIME" sh "$MANAGER" invoke ax-t615-game-optimizer action snapshot)
+contains 'AX-T615 plugin action snapshot remains fixed' "$PLUGIN_ACTION" '"mode":"DRY_RUN"'
 fails 'plugin manager rejects arbitrary action route' sh "$MANAGER" invoke ax-t615-game-optimizer action ../../outside
-SYSTEM_BEFORE=$(sh "$MANAGER" status system-observer)
-ORCH_EVIDENCE_FILE="$GOOD" VEGAS_EVIDENCE_RUNTIME_DIR="$HISTORY" VEGAS_ACTION_RUNTIME_DIR="$RUNTIME" sh "$VEGAS" action snapshot >/dev/null
-SYSTEM_AFTER=$(sh "$MANAGER" status system-observer)
-[ "$SYSTEM_BEFORE" = "$SYSTEM_AFTER" ] && ok 'controlled actions preserve System Observer isolation' || not_ok 'controlled actions preserve System Observer isolation'
 
-UNIFIED=$(ORCH_EVIDENCE_FILE="$GOOD" VEGAS_EVIDENCE_RUNTIME_DIR="$HISTORY" VEGAS_ACTION_RUNTIME_DIR="$RUNTIME" sh "$VEGAS" snapshot)
-contains 'unified snapshot includes action-gate envelope' "$UNIFIED" '"action":{"schema":"1"'
+SYSTEM_BEFORE=$(sh "$MANAGER" status system-observer)
+run_vegas "$GOOD" action snapshot >/dev/null
+SYSTEM_AFTER=$(sh "$MANAGER" status system-observer)
+[ "$SYSTEM_BEFORE" = "$SYSTEM_AFTER" ] && ok 'capability-gated actions preserve System Observer isolation' || not_ok 'capability-gated actions preserve System Observer isolation'
+
+UNIFIED=$(run_vegas "$GOOD" snapshot)
+contains 'unified snapshot retains legacy controlled-action envelope' "$UNIFIED" '"action":{"schema":"1","source":"vegas-inject-controlled-action-engine"'
+contains 'unified snapshot includes capability-gated action envelope' "$UNIFIED" '"capability_action":{"schema":"1","component":"vegas-capability-gated-action-engine"'
+contains 'unified snapshot includes separate action-gate envelope' "$UNIFIED" '"action_gate":{"schema":"1"'
 DASH=$(ORCH_EVIDENCE_FILE="$GOOD" VEGAS_EVIDENCE_RUNTIME_DIR="$HISTORY" VEGAS_ACTION_RUNTIME_DIR="$RUNTIME" sh "$DASHBOARD" snapshot)
-contains 'dashboard snapshot includes action-gate envelope' "$DASH" '"action_gate":{"schema":"1"'
-for ID in actionMode actionLock actionValidation actionPlannedAction actionResult actionRecommendation actionPolicyState actionEvidenceQuality actionConcurrency actionRollback actionAvailableActions actionBlockedActions actionAuditHistory actionTimestamp; do
+contains 'dashboard snapshot retains legacy controlled-action envelope' "$DASH" '"action":{"schema":"1","source":"vegas-inject-controlled-action-engine"'
+contains 'dashboard snapshot includes capability-gated action envelope' "$DASH" '"capability_action":{"schema":"1","component":"vegas-capability-gated-action-engine"'
+contains 'dashboard snapshot retains action-gate envelope' "$DASH" '"action_gate":{"schema":"1"'
+for ID in actionDeviceCapabilities actionRealDeviceApply actionSafetyGate actionAvailableActions actionUnsupportedActions actionRollback actionAuditHistory; do
     grep -F "$ID" "$DASHBOARD_JS" >/dev/null 2>&1 && ok "dashboard renders $ID text-safely" || not_ok "dashboard renders $ID text-safely"
 done
 
@@ -177,5 +193,5 @@ done
 grep -E '(^|[[:space:]])(eval|setprop|kill|pkill|sysctl|su|curl|wget|nc)[[:space:]]' "$ENGINE" >/dev/null 2>&1 && not_ok 'action engine excludes unsafe control and network primitives' || ok 'action engine excludes unsafe control and network primitives'
 grep -E 'innerHTML|outerHTML|insertAdjacentHTML' "$DASHBOARD_JS" >/dev/null 2>&1 && not_ok 'dashboard excludes HTML injection sinks' || ok 'dashboard excludes HTML injection sinks'
 
-printf 'PHASE9_ACTION_ENGINE_TESTS: %s passed, %s failed\n' "$PASS" "$FAIL"
+printf 'PHASE15_ACTION_ENGINE_TESTS: %s passed, %s failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

@@ -132,3 +132,15 @@
 - [x] Document safe acquisition of AxManager, Android wireless-debugging pairing and connection, AxManager plugin installation, enable/disable, WebUI access, and the VEGAS simulation-only boundary.
 - [x] Validate all documentation links, commands, and safety language; review the diff and preserve the existing package contract.
 - [x] Commit the documentation update, push to `origin/main`, and verify clean synchronization.
+
+## Phase 15 — Capability-Gated Action Layer
+
+- [x] Inspect current action, policy, plugin, dashboard, package, and test contracts; preserve the existing read-only / simulation-only boundary until a device capability is independently detected and verified.
+- [x] Define fixed action schemas, IDs, capability records, validation gates, dry-run behavior, bounded audit records, verification rules, rollback rules, and immutable unsupported states without arbitrary command or path execution.
+- [x] Implement only fixed `action-engine` operations and safe `vegas action` routes; unsupported or unverified device controls must return explicit `UNSUPPORTED` or `BLOCKED` results with no hardware write.
+- [x] Integrate the fixed action surface with the AX-T615 plugin and static dashboard while preserving text-safe rendering and no browser-to-shell bridge.
+- [x] Update architecture, package, plugin, dashboard, AX-T615, compatibility, safety, and installation documentation; increment package metadata only after implementation and validation.
+- [x] Add dedicated action-engine tests for schema, allowlists, capability detection, validation, dry-run, history, routing, isolation, dashboard rendering, and all prohibited execution categories.
+- [x] Run syntax checks, security audit, package validation, dashboard coverage, full regression, artifact cleanup, source-diff checks, and AxManager compatibility validation.
+- [x] Document the absence of sandbox-accessible target-device capabilities and a safe on-device validation protocol; do not claim real device validation or a real applied action without observed evidence.
+- [x] Commit `feat: add safe game optimization action layer`, push to `origin/main`, verify clean synchronization, and report executed validation results and unsupported capabilities.
