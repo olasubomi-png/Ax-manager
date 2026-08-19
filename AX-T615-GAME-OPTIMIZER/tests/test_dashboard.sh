@@ -5,9 +5,13 @@ set -u
 TEST_DIR=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
 MODULE_ROOT=$(CDPATH= cd -- "$TEST_DIR/.." && pwd)
 FIXTURES="$MODULE_ROOT/tests/fixtures/orchestrator"
-TMP="${STEP12_DASHBOARD_TEST_TMP:-/tmp/axgo-dashboard-test-$$}"
-mkdir -p "$TMP"
-trap 'rm -rf "$TMP"' EXIT HUP INT TERM
+TMP="${STEP12_DASHBOARD_TEST_TMP:-$MODULE_ROOT/tests/.tmp/dashboard-$$}"
+mkdir -p "$TMP" || exit 1
+cleanup() {
+    rm -rf "$TMP" "$MODULE_ROOT/dashboard/data/current-snapshot.json"
+    rmdir "$(dirname "$TMP")" 2>/dev/null || :
+}
+trap cleanup EXIT HUP INT TERM
 
 PASS=0
 FAIL=0
@@ -37,14 +41,11 @@ SNAPSHOT=$(ORCH_EVIDENCE_FILE="$FIXTURES/healthy/evidence.env" AXGO_ROOT="$MODUL
 contains "$SNAPSHOT" '"schema":"1"' "snapshot schema"
 contains "$SNAPSHOT" '"source":"axmanager-read-only-cli"' "snapshot source"
 contains "$SNAPSHOT" '"read_only":true' "snapshot marks read-only"
-contains "$SNAPSHOT" '"state":"balanced"' "healthy snapshot preserves orchestrator decision"
+contains "$SNAPSHOT" '"decision":{"state":"balanced"' "healthy snapshot preserves orchestrator decision"
 contains "$SNAPSHOT" '"forbidden_actions_blocked":"YES"' "snapshot exposes safety guard"
 contains "$SNAPSHOT" '"blocked_actions":"write_proc,write_sys' "snapshot exposes blocked policy actions"
 
-EXPORT_ROOT="$TMP/export-root"
-mkdir -p "$EXPORT_ROOT/dashboard/data"
 cp "$FIXTURES/healthy/evidence.env" "$TMP/evidence.env"
-cp "$MODULE_ROOT/bin/dashboard" "$TMP/dashboard"
 EXPORT_OUTPUT=$(ORCH_EVIDENCE_FILE="$TMP/evidence.env" AXGO_ROOT="$MODULE_ROOT" DASHBOARD_RUNTIME_DIR="$TMP/export-runtime" ORCH_RUNTIME_DIR="$TMP/export-orchestrator" sh "$MODULE_ROOT/bin/dashboard" export)
 contains "$EXPORT_OUTPUT" 'DASHBOARD_SNAPSHOT=' "export reports destination"
 [ -f "$MODULE_ROOT/dashboard/data/current-snapshot.json" ] && { pass "export writes runtime snapshot"; rm -f "$MODULE_ROOT/dashboard/data/current-snapshot.json"; } || fail "export writes runtime snapshot"

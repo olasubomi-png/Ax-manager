@@ -40,19 +40,28 @@ line_value() {
     [ -n "$RESULT" ] && printf '%s' "$RESULT" || printf '%s' "UNKNOWN"
 }
 
+trim() {
+    printf '%s' "$1" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//'
+}
+
 profile_json() {
     DATA="$1"
+    FIRST=1
     printf '['
-    printf '%s\n' "$DATA" | awk -F ' \| ' '
-        NR > 2 && NF >= 4 {
-            for (i = 1; i <= 4; i++) {
-                gsub(/^[[:space:]]+|[[:space:]]+$/, "", $i)
-                gsub(/\\/, "\\\\", $i)
-                gsub(/\"/, "\\\"", $i)
-            }
-            printf "%s{\"id\":\"%s\",\"name\":\"%s\",\"mode\":\"%s\",\"packages\":\"%s\"}", (seen++ ? "," : ""), $1, $2, $3, $4
-        }
-    '
+    printf '%s\n' "$DATA" | sed '1,2d' | while IFS='|' read -r ID NAME MODE PACKAGES; do
+        ID=$(trim "$ID")
+        NAME=$(trim "$NAME")
+        MODE=$(trim "$MODE")
+        PACKAGES=$(trim "$PACKAGES")
+        [ -n "$ID" ] || continue
+        [ "$FIRST" -eq 1 ] || printf ','
+        FIRST=0
+        printf '{"id":"%s","name":"%s","mode":"%s","packages":"%s"}' \
+            "$(json_escape "$ID")" \
+            "$(json_escape "$NAME")" \
+            "$(json_escape "$MODE")" \
+            "$(json_escape "$PACKAGES")"
+    done
     printf ']'
 }
 

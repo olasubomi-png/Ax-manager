@@ -5,9 +5,13 @@ set -u
 TEST_DIR=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
 MODULE_ROOT=$(CDPATH= cd -- "$TEST_DIR/.." && pwd)
 FIXTURES="$MODULE_ROOT/tests/fixtures/orchestrator"
-TMP="${STEP12_E2E_TEST_TMP:-/tmp/axgo-e2e-test-$$}"
-mkdir -p "$TMP"
-trap 'rm -rf "$TMP"' EXIT HUP INT TERM
+TMP="${STEP12_E2E_TEST_TMP:-$MODULE_ROOT/tests/.tmp/e2e-$$}"
+mkdir -p "$TMP" || exit 1
+cleanup() {
+    rm -rf "$TMP"
+    rmdir "$(dirname "$TMP")" 2>/dev/null || :
+}
+trap cleanup EXIT HUP INT TERM
 
 PASS=0
 FAIL=0
