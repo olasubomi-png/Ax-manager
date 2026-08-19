@@ -16,3 +16,13 @@
 - [x] Add unified CLI, schema, safety, plugin isolation, dashboard, malformed-metadata, arbitrary-path, and Termux portability tests.
 - [x] Run focused validation, complete regression, static forbidden-operation scans, and source-diff review.
 - [x] Commit the exact requested release message, push to `origin/main`, and verify synchronization.
+
+## Phase 5 — VEGAS-inject Dashboard/UI v2
+
+- [x] Inspect the complete Dashboard/UI v2 specification, remaining requirements, legacy dashboard files, data snapshots, CLI routes, and tests.
+- [x] Define a professional responsive information hierarchy using only unified read-only snapshot data and explicit unavailable-data semantics.
+- [x] Implement text-safe unified snapshot normalization, conservative local snapshot refresh, plugin health rendering, and a visible immutable safety boundary.
+- [x] Upgrade semantic dashboard markup and responsive styles for mobile, tablet, and desktop without adding control affordances.
+- [x] Add or expand tests for structure, mobile layout, snapshot load/fallback, UNKNOWN/UNAVAILABLE values, plugins, safety, security, refresh, and Termux paths.
+- [x] Run focused dashboard validation, full regressions, JavaScript/CSS/HTML checks, static frontend safety scans, and review the intended diff.
+- [x] Commit the exact requested release message, push to `origin/main`, and verify synchronization.

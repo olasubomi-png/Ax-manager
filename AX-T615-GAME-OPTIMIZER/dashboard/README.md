@@ -1,6 +1,6 @@
-# Axmanager Dashboard
+# VEGAS-inject Dashboard/UI v2
 
-The Step 12 dashboard is a **static, read-only observability interface** for existing Axmanager outputs. It is deliberately separate from the optimizer engines: it does not contain decision logic, execute arbitrary commands, or provide a hardware-control path.
+Dashboard/UI v2 is a **static, read-only observability interface** for unified VEGAS-inject outputs. It presents the AX-T615 Game Optimizer, System Observer, and Performance Observer without changing their contracts. The dashboard is deliberately separate from optimizer engines: it does not contain decision logic, execute arbitrary commands, or provide a hardware-control path.
 
 ## Safe data flow
 
@@ -24,13 +24,13 @@ Open `dashboard/index.html` in any modern browser. Before opening it, generate a
 sh bin/dashboard export
 ```
 
-This writes only `dashboard/data/current-snapshot.json`. Load that file via **Load safe snapshot**. To stream JSON to another trusted local UI integration without writing a snapshot file, use:
+This writes only `dashboard/data/current-snapshot.json`. Load that file via **Load safe snapshot**, or use **Refresh exported snapshot** to make one same-origin, static-file request for that exported JSON. Refresh has no shell bridge, no URL input, no remote request, and no device command path. To stream JSON to another trusted local UI integration without writing a snapshot file, use:
 
 ```sh
 sh bin/dashboard snapshot
 ```
 
-No HTTP server, credentials, tokens, polling loop, or browser-to-shell bridge is included. A local host may serve the static files if desired, but it must preserve the same manual snapshot boundary.
+No HTTP server, credentials, tokens, periodic polling loop, or browser-to-shell bridge is included. A local host may serve the static files if desired, but it must preserve the same static snapshot boundary.
 
 ## Safe controls and limitations
 

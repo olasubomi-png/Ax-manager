@@ -92,8 +92,50 @@ performance_snapshot() {
     [ -n "$OUTPUT" ] && printf '%s' "$OUTPUT" || printf '%s' '{"schema":"1","source":"unavailable","read_only":true,"plugin":{"id":"performance-observer","status":"UNAVAILABLE","lifecycle":"UNKNOWN"},"evidence":{},"provenance":{"observed_telemetry":"UNAVAILABLE","unavailable_telemetry":"UNAVAILABLE","derived_values":"NONE"},"safety":{"read_only":"YES","hardware_writes":"NO","forbidden_actions_blocked":"YES","network_access":"NOT_AVAILABLE","process_control":"NOT_AVAILABLE"}}'
 }
 
+json_escape() {
+    printf '%s' "$1" | tr -d '\r\n' | sed 's/\\/\\\\/g; s/"/\\"/g'
+}
+
+plugin_display_name() {
+    case "$1" in
+        ax-t615-game-optimizer) printf '%s' 'AX-T615 Game Optimizer' ;;
+        system-observer) printf '%s' 'System Observer' ;;
+        performance-observer) printf '%s' 'Performance Observer' ;;
+        *) printf '%s' 'Unknown plugin' ;;
+    esac
+}
+
+plugin_source() {
+    case "$1" in
+        ax-t615-game-optimizer) printf '%s' 'ax-t615-authoritative-gaming-adapter' ;;
+        system-observer) printf '%s' 'system-observer-read-only' ;;
+        performance-observer) printf '%s' 'performance-observer-read-only' ;;
+        *) printf '%s' 'unavailable' ;;
+    esac
+}
+
 plugin_provenance_json() {
-    printf '%s' '{"ax-t615-game-optimizer":{"id":"ax-t615-game-optimizer","source":"ax-t615-authoritative-gaming-adapter","read_only":true,"hardware_writes":false},"system-observer":{"id":"system-observer","source":"system-observer-read-only","read_only":true,"hardware_writes":false},"performance-observer":{"id":"performance-observer","source":"performance-observer-read-only","read_only":true,"hardware_writes":false}}'
+    FIRST=1
+    printf '{'
+    for ID in $PLUGIN_IDS; do
+        STATUS=$(plugin_status_data "$ID")
+        CAPABILITY_DATA=$(sh "$MANAGER" capabilities "$ID" 2>/dev/null || :)
+        VALIDATION=$(sh "$MANAGER" validate "$ID" 2>/dev/null || :)
+        [ "$FIRST" -eq 1 ] || printf ','
+        FIRST=0
+        printf '"%s":{' "$(json_escape "$ID")"
+        printf '"id":"%s",' "$(json_escape "$ID")"
+        printf '"name":"%s",' "$(json_escape "$(plugin_display_name "$ID")")"
+        printf '"source":"%s",' "$(json_escape "$(plugin_source "$ID")")"
+        printf '"lifecycle":"%s",' "$(json_escape "$(key_value LIFECYCLE "$STATUS")")"
+        printf '"availability":"%s",' "$(json_escape "$(key_value AVAILABILITY "$STATUS")")"
+        printf '"metadata_valid":"%s",' "$(json_escape "$(key_value PLUGIN_VALID "$VALIDATION")")"
+        printf '"read_only":"%s",' "$(json_escape "$(key_value READ_ONLY "$STATUS")")"
+        printf '"hardware_writes":"%s",' "$(json_escape "$(key_value HARDWARE_WRITES "$STATUS")")"
+        printf '"supported_operations":"%s"' "$(json_escape "$(key_value CAPABILITIES "$CAPABILITY_DATA")")"
+        printf '}'
+    done
+    printf '}'
 }
 
 safety_json() {
@@ -109,6 +151,8 @@ unified_snapshot() {
     printf '{'
     printf '"schema":"1",'
     printf '"product":"VEGAS-inject",'
+    printf '"version":"%s",' "$(product_version)"
+    printf '"source":"vegas-inject-unified-read-only",'
     printf '"generated_at":"%s",' "$GENERATED_AT"
     printf '"read_only":true,'
     printf '"plugins":%s,' "$(plugin_provenance_json)"

@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- Step 12 design contract: Calibrated Instrument Panel — a safety-first, evidence-led workspace; no display element claims a hardware change. -->
+<!-- Dashboard/UI v2 design contract: a safety-first, evidence-led monitoring workspace; no display element claims a hardware change or exposes a device-control path. -->
 <html lang="en">
   <head>
     <meta charset="utf-8" />
@@ -18,7 +18,7 @@
       <aside class="rail" aria-label="Dashboard navigation">
         <a class="brand" href="#overview" aria-label="VEGAS-inject overview">
           <img src="/manus-storage/axmanager-logo_31db0166.png" width="42" height="42" alt="" onerror="this.hidden=true" />
-          <span><b>VEGAS</b>-INJECT<small>AX-T615 read-only console</small></span>
+          <span><b>VEGAS</b>-INJECT<small>Unified Gaming &amp; System Observer</small><small>AX-T615 read-only console</small></span>
         </a>
         <nav class="nav-list" aria-label="Sections">
           <a class="nav-item active" href="#overview"><span class="nav-mark"></span>Overview</a>
@@ -37,26 +37,27 @@
       <main id="main" tabindex="-1">
         <header class="status-bar">
           <div class="live-indicator"><span class="pulse" aria-hidden="true"></span><span id="sourceLabel">No snapshot loaded</span></div>
-          <div class="status-summary"><span>Mode</span><strong id="modeLabel">READ-ONLY</strong><i></i><span>Last update</span><strong id="updatedAt">Unavailable</strong></div>
+          <div class="status-summary"><span>Version</span><strong id="versionLabel">—</strong><i></i><span>Mode</span><strong id="modeLabel">READ-ONLY</strong><i></i><span>Last update</span><strong id="updatedAt">Unavailable</strong></div>
         </header>
 
         <section id="overview" class="hero" aria-labelledby="overview-title">
           <div class="hero-copy">
-            <p class="eyebrow">System observability / policy console</p>
-            <h1 id="overview-title">Measure first.<br /><em>Protect always.</em></h1>
-            <p class="hero-text">VEGAS-inject translates existing, read-only device evidence into a clear gaming-performance recommendation. It does not write hardware settings or claim changes it did not make.</p>
+            <p class="eyebrow">Unified observability / policy console</p>
+            <h1 id="overview-title">Observe the system.<br /><em>Protect the device.</em></h1>
+            <p class="hero-text">A safety-first monitoring workspace for normalized VEGAS-inject evidence. This interface presents what the read-only platform observed; it does not tune hardware, issue commands, or infer missing telemetry.</p>
             <div class="operational-strip" aria-label="Unified VEGAS-inject operating boundary summary">
               <div><span>Platform</span><strong id="unifiedProduct">VEGAS-INJECT</strong></div>
               <div><span>Plugins</span><strong id="unifiedPluginCount">3 REGISTERED</strong></div>
               <div><span>Evidence</span><strong id="evidenceHeader">NO DATA</strong></div>
-              <div><span>Hardware control</span><strong id="unifiedControl">NONE</strong></div>
+              <div><span>Safety control</span><strong id="unifiedControl">NONE</strong></div>
             </div>
             <div class="hero-actions">
               <label class="button button-primary" for="snapshotInput">Load safe snapshot</label>
+              <button class="button button-secondary" id="refreshButton" type="button">Refresh exported snapshot</button>
               <button class="button button-quiet" id="resetButton" type="button">Clear view</button>
               <input id="snapshotInput" type="file" accept="application/json" hidden />
             </div>
-            <p class="file-hint" id="fileStatus" role="status">Export a snapshot with <code>sh bin/dashboard export</code>, then load it here.</p>
+            <p class="file-hint" id="fileStatus" role="status">Load a snapshot manually, or export with <code>sh bin/dashboard export</code> and refresh this local dashboard file.</p>
           </div>
           <div class="hero-dial" aria-label="Current safety posture">
             <div class="dial-caption"><span>Safety dossier</span><strong id="postureValue">Awaiting evidence</strong></div>
@@ -84,19 +85,19 @@
           <aside class="session-card" aria-labelledby="session-title">
             <div class="session-top"><p class="eyebrow" id="session-title">Gaming session</p><span class="chip neutral" id="sessionStatus">NOT DETECTED</span></div>
             <div class="session-game"><span class="game-glyph">A</span><div><strong id="gameName">No active game</strong><small id="packageName">Package unavailable</small></div></div>
-            <dl class="session-meta"><div><dt>Selected profile</dt><dd id="profileValue">Unavailable</dd></div><div><dt>Orchestrator</dt><dd id="orchestratorValue">Unavailable</dd></div><div><dt>Recovery samples</dt><dd id="stableSamplesValue">Unavailable</dd></div><div><dt>Session duration</dt><dd id="sessionDurationValue">Unavailable</dd></div></dl>
+            <dl class="session-meta"><div><dt>Selected profile</dt><dd id="profileValue">UNKNOWN</dd></div><div><dt>Orchestrator</dt><dd id="orchestratorValue">UNKNOWN</dd></div><div><dt>Frame rate</dt><dd id="sessionFpsValue">UNKNOWN</dd></div><div><dt>Frame time</dt><dd id="sessionFrameTimeValue">UNKNOWN</dd></div><div><dt>Frame pacing</dt><dd id="sessionFramePacingValue">UNKNOWN</dd></div><div><dt>FPS trend</dt><dd id="sessionFpsTrendValue">UNKNOWN</dd></div><div><dt>Recovery samples</dt><dd id="stableSamplesValue">UNKNOWN</dd></div><div><dt>Session duration</dt><dd id="sessionDurationValue">UNKNOWN</dd></div></dl>
           </aside>
         </section>
 
         <section id="telemetry" class="section-block" aria-labelledby="telemetry-title">
           <div class="section-heading"><div><p class="eyebrow">Live evidence, when exported</p><h2 id="telemetry-title">System telemetry</h2></div><p class="section-note">Unavailable sensors remain unavailable. Values are never estimated by this interface.</p></div>
           <div class="metric-grid">
-            <article class="metric-card"><p>CPU</p><strong id="cpuValue">—</strong><span id="cpuState">Unavailable</span><i></i></article>
-            <article class="metric-card"><p>GPU</p><strong id="gpuValue">—</strong><span id="gpuState">Unavailable</span><i></i></article>
-            <article class="metric-card"><p>Memory</p><strong id="memoryValue">—</strong><span id="memoryState">Unavailable</span><i></i></article>
-            <article class="metric-card thermal"><p>Thermal</p><strong id="thermalValue">—</strong><span id="thermalState">Unavailable</span><i></i></article>
-            <article class="metric-card"><p>Battery</p><strong id="batteryValue">—</strong><span id="batteryState">Unavailable</span><i></i></article>
-            <article class="metric-card"><p>Frame rate</p><strong id="fpsValue">—</strong><span id="fpsState">Unavailable</span><i></i></article>
+            <article class="metric-card"><p>CPU</p><strong id="cpuValue">UNKNOWN</strong><span id="cpuState">UNKNOWN</span><i></i></article>
+            <article class="metric-card"><p>GPU</p><strong id="gpuValue">UNKNOWN</strong><span id="gpuState">UNKNOWN</span><i></i></article>
+            <article class="metric-card"><p>Memory</p><strong id="memoryValue">UNKNOWN</strong><span id="memoryState">UNKNOWN</span><i></i></article>
+            <article class="metric-card thermal"><p>Thermal</p><strong id="thermalValue">UNKNOWN</strong><span id="thermalState">UNKNOWN</span><i></i></article>
+            <article class="metric-card"><p>Battery</p><strong id="batteryValue">UNKNOWN</strong><span id="batteryState">UNKNOWN</span><i></i></article>
+            <article class="metric-card"><p>Power</p><strong id="powerMetricValue">UNKNOWN</strong><span id="powerMetricState">UNKNOWN</span><i></i></article>
           </div>
           <div class="telemetry-ledger" aria-label="Detailed available evidence">
             <div><span>Thermal peak</span><strong id="thermalPeakValue">Unavailable</strong><small id="thermalTrendValue">No thermal trend</small></div>
@@ -125,7 +126,9 @@
         </section>
 
         <section id="plugins" class="section-block plugin-observer" aria-labelledby="plugins-title">
-          <div class="section-heading"><div><p class="eyebrow">Independent plugin / bounded data</p><h2 id="plugins-title">System Observer</h2></div><p class="section-note">Application and host evidence is optional, non-sensitive, and remains unavailable when a safe source cannot be read.</p></div>
+          <div class="section-heading"><div><p class="eyebrow">Fixed adapters / source-derived state</p><h2 id="plugins-title">Plugin health</h2></div><p class="section-note">Each card is generated only from a validated unified snapshot. The browser neither runs plugin code nor treats metadata as executable.</p></div>
+          <div id="pluginHealthGrid" class="plugin-health-grid" aria-live="polite"><p class="plugin-health-empty">Load a unified snapshot to view plugin health.</p></div>
+          <div class="plugin-detail-heading"><span class="eyebrow">Plugin evidence details</span><p>Observer envelopes remain bounded to their fixed schemas and preserve explicit unavailable values.</p></div>
           <div class="observer-panel">
             <div class="observer-intro"><span class="paper-tab">READ-ONLY PLUGIN</span><h3 id="observerName">System Observer</h3><p id="observerStatus">No observer snapshot loaded.</p><p class="microcopy">This plugin reports fixed application and host fields only. It does not inspect user files, credentials, messages, accounts, or identifiers beyond a safe hostname where available.</p></div>
             <dl class="observer-ledger"><div><dt>Lifecycle</dt><dd id="observerLifecycle">Unavailable</dd></div><div><dt>Application version</dt><dd id="observerVersion">Unavailable</dd></div><div><dt>Operating system</dt><dd id="observerOs">Unavailable</dd></div><div><dt>Architecture</dt><dd id="observerArchitecture">Unavailable</dd></div><div><dt>Hostname</dt><dd id="observerHostname">Unavailable</dd></div><div><dt>Kernel</dt><dd id="observerKernel">Unavailable</dd></div><div><dt>Uptime</dt><dd id="observerUptime">Unavailable</dd></div><div><dt>Memory available</dt><dd id="observerMemory">Unavailable</dd></div></dl>
@@ -141,7 +144,8 @@
         </section>
 
         <section id="safety" class="safety-panel" aria-labelledby="safety-title">
-          <div class="safety-copy"><p class="eyebrow">Safety boundary</p><h2 id="safety-title">The protective layer has the final word.</h2><p>VEGAS-inject blocks unsafe operations before a performance recommendation can be considered. This dashboard makes the boundary visible rather than offering a bypass.</p><div class="safety-status"><span class="shield-mark">✓</span><div><strong id="guardStatus">Safety guard active</strong><small id="guardDetail">Read-only policy is enforced.</small></div></div></div>
+          <div class="safety-copy"><p class="eyebrow">Safety boundary / immutable in this UI</p><h2 id="safety-title">The protective layer has the final word.</h2><p>VEGAS-inject blocks unsafe operations before a performance recommendation can be considered. This dashboard makes the boundary visible rather than offering a bypass.</p><div class="safety-status"><span class="shield-mark">✓</span><div><strong id="guardStatus">Safety guard active</strong><small id="guardDetail">Read-only policy is enforced.</small></div></div></div>
+          <dl class="safety-ledger" aria-label="Unified immutable safety states"><div><dt>Read-only mode</dt><dd id="safetyReadOnly">ENABLED</dd></div><div><dt>Hardware writes</dt><dd id="safetyHardwareWrites">BLOCKED</dd></div><div><dt>Process control</dt><dd id="safetyProcessControl">BLOCKED</dd></div><div><dt>/proc writes</dt><dd id="safetyProcWrites">BLOCKED</dd></div><div><dt>/sys writes</dt><dd id="safetySysWrites">BLOCKED</dd></div><div><dt>Android properties</dt><dd id="safetyAndroidProperties">BLOCKED</dd></div><div><dt>Network operations</dt><dd id="safetyNetworkOperations">BLOCKED</dd></div><div><dt>Game modification</dt><dd id="safetyGameModification">BLOCKED</dd></div><div><dt>Code execution</dt><dd id="safetyCodeExecution">BLOCKED</dd></div></dl>
           <div class="blocked-list"><p class="eyebrow">Blocked action classes</p><ul id="blockedActions"><li>Unavailable until evidence is loaded</li></ul><p class="safety-footnote">Hardware control capabilities: <strong>NONE</strong>. CPU/GPU governor, frequency, Power HAL, charging, kernel, process, ZRAM/swap, LMKD/OOM, thermal, and battery modifications are not exposed.</p></div>
         </section>
 
