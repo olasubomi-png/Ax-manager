@@ -90,6 +90,14 @@ VEGAS-inject v1.0 finalizes the product as a portable POSIX-shell platform for o
 
 The fixed AX-T615 compatibility route includes `sh bin/axgo dashboard`, `evidence`, `policy`, `action`, and `control` aliases in addition to its established status surface. These are direct aliases to existing fixed read-only or simulation-only components; they do not restore unrestricted forwarding or action-oriented arguments. See [`RELEASE.md`](RELEASE.md) for the v1.0 scope, [`SAFETY-MODEL.md`](SAFETY-MODEL.md) for the security boundary, [`plugins/README.md`](plugins/README.md) for the declarative plugin model, and [`release/capabilities.json`](release/capabilities.json) for machine-readable public capabilities.
 
+## AxManager app, wireless debugging, and VEGAS plugin installation
+
+VEGAS-inject is distributed as an AxManager plugin, not as an Android application. Download **AxManager v1.4.8** from its upstream GitHub release: [release page](https://github.com/fahrez182/AxManager/releases/tag/v1.4.8) or [official APK asset](https://github.com/fahrez182/AxManager/releases/download/v1.4.8/AxManager_v1.4.8.r349_14800-release_2605242016.apk). The APK remains hosted by the upstream project rather than being mirrored in this repository, so users receive the publisher’s release asset and can verify its provenance there. Download the matching VEGAS archive from [`dist/vegas-inject.zip`](https://github.com/olasubomi-png/Ax-manager/raw/main/dist/vegas-inject.zip) without extracting or modifying it.
+
+On Android 11 or later, AxManager’s documented no-computer startup path uses **Wireless debugging**. Enable Developer options, turn on USB debugging and Wireless debugging, open AxManager and select its wireless-debugging start path, then use Android’s **Pair device with pairing code** option. Enter that code in the AxManager notification, return to AxManager, and wait for the connection; on some devices, tap **Start** again. The connection must be established again after a reboot. See the detailed, safety-scoped instructions in [`docs/AXMANAGER-PLUGIN.md`](docs/AXMANAGER-PLUGIN.md). [1] [2]
+
+After AxManager is connected, use its plugin installer to select the untouched `vegas-inject.zip` archive and confirm **Install Plugin?**. Verify the resulting plugin card shows **VEGAS-inject (Read-only)** with ID `vegas-inject`. AxManager’s normal plugin controls manage enablement, disablement, and removal; **Web UI** is a static safety notice, while **Action** runs only the `vegas action simulate` route. Neither surface applies a system, game, or hardware change. [2]
+
 ## Safety guarantees
 
 VEGAS-inject evidence, analysis, policy, the public Action Safety Gate, and all bundled plugins are **read-only and recommendation-only**. The gate may append a bounded repository-local audit record after a simulation, but it never writes a managed action marker, `/proc`, `/sys`, Android properties, Power HAL state, display mode, charging, battery controls, thermal policy, ZRAM, swap, LMKD/OOM settings, or process state. It does not kill or force-stop applications, execute profile/telemetry/metadata content, inject into games, or expose raw hardware-control commands. **Hardware control capabilities are `BLOCKED`.** System Observer does not collect personal files, credentials, account data, messages, persistent identifiers, or arbitrary environment variables. Performance Observer does not access the network, run arbitrary commands, or infer missing performance values.
@@ -106,3 +114,8 @@ Unknown telemetry remains unavailable. Safety policy prioritizes thermal and bat
 | `tests/` | VEGAS-inject registry, compatibility, safety, and integration tests. |
 
 For engine-level commands, dashboard use, policies, and hardware limitations, see [`AX-T615-GAME-OPTIMIZER/README.md`](AX-T615-GAME-OPTIMIZER/README.md).
+
+## References
+
+[1]: https://github.com/fahrez182/AxManager/releases/tag/v1.4.8 "AxManager v1.4.8 official release"
+[2]: https://fahrez182.github.io/AxManager/guide/user-manual.html "AxManager official user manual"

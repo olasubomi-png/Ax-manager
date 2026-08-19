@@ -125,3 +125,10 @@
 - [x] Build `dist/vegas-inject.zip`, extract it into a clean repository-local directory, validate all package fields and contents, and execute or inspect the relevant official AxManager v1.4.8 validation/install path to verify actual recognition.
 - [x] Run VEGAS regression, security audit, plugin, Action Gate, Control Plane, dashboard, package, AxManager compatibility, clean-extraction, syntax, static safety, and source-diff checks; remove generated artifacts and complete release preflight.
 - [x] Commit `release: package vegas-inject for axmanager v1.4.8`, push to `origin/main`, verify clean synchronization, and report only executed AxManager compatibility and package validation results.
+
+## Phase 14 — AxManager Connection & Installation Guide
+
+- [x] Verify the official AxManager v1.4.8 app download location, supported installation flow, plugin-manager behavior, and current repository documentation.
+- [x] Document safe acquisition of AxManager, Android wireless-debugging pairing and connection, AxManager plugin installation, enable/disable, WebUI access, and the VEGAS simulation-only boundary.
+- [x] Validate all documentation links, commands, and safety language; review the diff and preserve the existing package contract.
+- [x] Commit the documentation update, push to `origin/main`, and verify clean synchronization.
