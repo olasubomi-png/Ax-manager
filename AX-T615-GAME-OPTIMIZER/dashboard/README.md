@@ -1,4 +1,4 @@
-# VEGAS-inject Dashboard/UI v2 + Evidence Engine + Intelligent Analysis
+# VEGAS-inject Dashboard/UI v2 + Evidence Engine + Intelligent Analysis + Policy
 
 Dashboard/UI v2 is a **static, read-only observability interface** for unified VEGAS-inject outputs. It presents the AX-T615 Game Optimizer, System Observer, and Performance Observer without changing their contracts. The dashboard is deliberately separate from optimizer engines: it does not contain decision logic, execute arbitrary commands, or provide a hardware-control path.
 
@@ -14,7 +14,7 @@ validated JSON snapshot
 dashboard/index.html
 ```
 
-The exporter invokes the existing `orchestrator-evidence`, `orchestrator-decision`, `orchestrator`, `session`, `profile`, fixed `evidence-engine`, and fixed `bottleneck-engine` outputs. It does not reinterpret their policy. The browser renders the exported fields as text and rejects snapshots that are not explicitly marked `read_only: true`.
+The exporter invokes the existing `orchestrator-evidence`, `orchestrator-decision`, `orchestrator`, `session`, `profile`, fixed `evidence-engine`, fixed `bottleneck-engine`, and fixed `policy-engine` outputs. It does not reinterpret their policy. The browser renders the exported fields as text and rejects snapshots that are not explicitly marked `read_only: true`.
 
 ## Open the dashboard
 
@@ -60,3 +60,11 @@ Local history is bounded and available only to the fixed evidence engine. The UI
 Phase 7 adds an optional, backward-compatible `analysis` envelope alongside `evidence_engine`. It contains only deterministic advisory fields: `classification`, `confidence`, `reason`, `supporting_evidence`, `conflicting_evidence`, `evidence_quality`, `provenance`, `recommended_observation`, `safety_classification`, and bounded `history` correlation. The browser validates that this envelope is an object before reading it and uses text-node rendering for every field.
 
 The **Intelligent Analysis** panel presents the current bottleneck, confidence, explanation, supporting/conflicting evidence, quality, bounded history/trends, recommendation, and safety classification. It preserves `UNKNOWN` or `Unavailable` where data is absent; no telemetry is inferred. The pipeline is **Evidence → Analysis → Recommendation → Action**, and this dashboard stops at **Recommendation**. Neither analysis nor its presentation can apply CPU/GPU, display, charging, thermal, memory, process, or game modifications.
+
+## Policy & Recommendations visibility
+
+Phase 8 adds an optional, backward-compatible `policy` envelope alongside `evidence_engine` and `analysis`. It contains deterministic advisory fields only: `policy_state`, `recommendation`, `confidence`, `priority`, `reason`, `evidence_quality`, `bottleneck`, `bottleneck_confidence`, `supporting_evidence`, `rejected_options`, `safety_classification`, `provenance`, `generated_at`, and bounded `history`. The browser validates that this envelope is an object before reading it and renders every value through text nodes.
+
+The **Policy & Recommendations** panel shows the selected policy state, recommendation, confidence, priority, rationale, evidence quality, bottleneck context, safety classification, rejected options, provenance, timestamp, and bounded sample count. The fixed policy hierarchy prioritizes unknown/invalid safety evidence, thermal protection, memory safety, and battery/power protection ahead of performance and profile preferences. The panel preserves `UNKNOWN` or `Unavailable` values and cannot infer a policy or execute a recommendation.
+
+The complete data path is **Evidence → Analysis → Policy → Recommendation → [Future Action Layer]**. This dashboard ends at **Recommendation**: it does not implement the bracketed future action layer, profile application, hardware control, charging control, display changes, thermal changes, memory changes, process control, or game modification.

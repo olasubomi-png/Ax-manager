@@ -10,6 +10,7 @@ PERFORMANCE_META="$ROOT/plugins/performance-observer/plugin.json"
 DASHBOARD="$ROOT/AX-T615-GAME-OPTIMIZER/bin/dashboard"
 DASHBOARD_APP="$ROOT/AX-T615-GAME-OPTIMIZER/dashboard/assets/app.js"
 BOTTLENECK="$ROOT/bin/bottleneck-engine"
+POLICY="$ROOT/bin/policy-engine"
 HEALTHY="$ROOT/AX-T615-GAME-OPTIMIZER/tests/fixtures/orchestrator/healthy/evidence.env"
 UNKNOWN="$ROOT/AX-T615-GAME-OPTIMIZER/tests/fixtures/orchestrator/unknown/evidence.env"
 TMP="${VEGAS_UNIFIED_TEST_TMP:-$ROOT/tests/.tmp/vegas-unified-$$}"
@@ -37,6 +38,7 @@ contains "$STATUS" 'Platform: READY' 'unified status reports platform readiness'
 contains "$STATUS" 'Plugins: 3' 'unified status reports all registered plugins'
 contains "$STATUS" 'CPU:       35' 'unified status relays observed CPU evidence'
 contains "$STATUS" 'Bottleneck analysis:' 'unified status reports advisory bottleneck analysis'
+contains "$STATUS" 'Recommendation policy:' 'unified status reports advisory recommendation policy'
 contains "$STATUS" 'VEGAS_INJECT=READY' 'unified status preserves machine-readable compatibility'
 
 SNAPSHOT=$(ORCH_EVIDENCE_FILE="$HEALTHY" sh "$VEGAS" snapshot)
@@ -52,6 +54,8 @@ contains "$SNAPSHOT" '"network_operations":false' 'unified snapshot aggregates n
 contains "$SNAPSHOT" '"code_execution":false' 'unified snapshot aggregates no code execution'
 contains "$SNAPSHOT" '"analysis":{"schema":"1"' 'unified snapshot includes read-only bottleneck analysis envelope'
 contains "$SNAPSHOT" '"advisory_only":"YES"' 'unified snapshot marks bottleneck analysis advisory only'
+contains "$SNAPSHOT" '"policy":{"schema":"1"' 'unified snapshot includes read-only policy envelope'
+contains "$SNAPSHOT" '"action_layer":"NOT_IMPLEMENTED"' 'unified policy envelope excludes action layer'
 
 INSPECT=$(sh "$VEGAS" inspect)
 contains "$INSPECT" 'Plugin count: 3' 'unified inspect reports plugin count'
@@ -90,6 +94,11 @@ ANALYSIS_STATUS=$(ORCH_EVIDENCE_FILE="$HEALTHY" sh "$VEGAS" analysis status)
 contains "$ANALYSIS_STATUS" 'VEGAS-INJECT INTELLIGENT ANALYSIS' 'fixed analysis route exposes the bottleneck engine'
 ANALYSIS_SNAPSHOT=$(ORCH_EVIDENCE_FILE="$HEALTHY" sh "$VEGAS" analysis snapshot)
 contains "$ANALYSIS_SNAPSHOT" '"read_only":true' 'fixed analysis snapshot remains read-only'
+POLICY_STATUS=$(ORCH_EVIDENCE_FILE="$HEALTHY" sh "$VEGAS" policy status)
+contains "$POLICY_STATUS" 'VEGAS-INJECT POLICY & RECOMMENDATIONS' 'fixed policy route exposes the policy engine'
+POLICY_SNAPSHOT=$(ORCH_EVIDENCE_FILE="$HEALTHY" sh "$VEGAS" policy snapshot)
+contains "$POLICY_SNAPSHOT" '"read_only":true' 'fixed policy snapshot remains read-only'
+expect_failure 'arbitrary policy route is rejected' sh "$VEGAS" policy ../../outside
 
 AX_BEFORE=$(sh "$MANAGER" status ax-t615-game-optimizer)
 SYSTEM_BEFORE=$(sh "$MANAGER" status system-observer)
@@ -126,7 +135,7 @@ cp "$TMP/original-performance-plugin.json" "$PERFORMANCE_META"
 contains "$(printf '%s' "$TMP")" "$ROOT/tests/.tmp/" 'unified test uses a repository-local temporary directory'
 not_contains "$(grep -nE 'eval[[:space:]]*\(|innerHTML|outerHTML|setprop|force-stop|/[[:space:]]*(proc|sys)/' "$DASHBOARD_APP" "$ROOT/AX-T615-GAME-OPTIMIZER/dashboard/index.html" 2>/dev/null || :)" 'innerHTML' 'dashboard source contains no arbitrary HTML injection'
 
-STATIC_FILES="$ROOT/bin/vegas $ROOT/bin/plugin-manager $BOTTLENECK $ROOT/plugins/ax-t615-game-optimizer/plugin.sh $DASHBOARD $DASHBOARD_APP"
+STATIC_FILES="$ROOT/bin/vegas $ROOT/bin/plugin-manager $BOTTLENECK $POLICY $ROOT/plugins/ax-t615-game-optimizer/plugin.sh $DASHBOARD $DASHBOARD_APP"
 if grep -nE '(^|[[:space:];])eval([[:space:];]|$)|setprop[[:space:]]|[[:space:]]kill([[:space:];]|$)|[[:space:]]pkill([[:space:];]|$)|>[[:space:]]*/(proc|sys)/|sysctl[[:space:]]|curl[[:space:]]|wget[[:space:]]|nc[[:space:]]' $STATIC_FILES >/dev/null 2>&1; then
     fail 'unified source contains no forbidden execution, network, process, or hardware writes'
 else

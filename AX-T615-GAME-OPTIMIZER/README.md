@@ -744,6 +744,9 @@ sh ../bin/vegas performance snapshot
 sh ../bin/vegas analysis status
 sh ../bin/vegas analysis snapshot
 sh ../bin/vegas analysis capabilities
+sh ../bin/vegas policy status
+sh ../bin/vegas policy snapshot
+sh ../bin/vegas policy capabilities
 sh ../bin/axgo status
 ```
 
@@ -806,6 +809,14 @@ The engine reports transparent quality classifications and names thermal escalat
 Its retained trend context is capped by the Phase 6 evidence-engine history; the analysis component does not create unbounded logs or access any personal data. Missing, stale, invalid, or unsafe safety evidence produces `INSUFFICIENT_EVIDENCE`, `LOW` confidence, and the advisory `remain_conservative` recommendation. Valid degraded evidence can still be explained as an advisory bottleneck, but never authorizes a change.
 
 The model is explicitly ordered as **Evidence → Analysis → Recommendation → Action**. Evidence is normalized observation; analysis is a deterministic interpretation; recommendation is an inspect/monitor/collect-more-evidence statement. **Action** would modify device or game state, and AX-T615/VEGAS-inject intentionally stops before that stage. `bin/orchestrator-decision` retains its existing safety-first policy behavior and exports analysis fields only as advisory decision context.
+
+## Phase 8 — Policy & Recommendation Engine
+
+`../bin/policy-engine` is a fixed POSIX, read-only recommendation component, available through `sh ../bin/vegas policy {status|evaluate|snapshot|capabilities}` and the AX-T615 plugin’s fixed `policy` operation. It consumes only the Phase 6 evidence snapshot, Phase 7 bottleneck analysis, and explicitly available AX-T615 profile/session context. It emits the deterministic states `SAFE`, `CONSERVATIVE`, `BALANCED`, `PERFORMANCE_ADVISORY`, `COOL_ADVISORY`, `BATTERY_ADVISORY`, `INSUFFICIENT_EVIDENCE`, `SAFETY_BLOCKED`, or `UNKNOWN` together with a recommendation, confidence, priority, reason, evidence quality, bottleneck context, rejected options, safety classification, provenance, timestamp, and bounded-history summary.
+
+The policy order is fixed: **safety evidence**, **thermal**, **memory**, **battery/power**, **performance**, then **user profile**. Unknown, stale, invalid, or unsafe safety evidence always returns `INSUFFICIENT_EVIDENCE` with low confidence and `remain_conservative`. Valid thermal, memory, and power pressure outrank every performance or profile preference. A GPU or CPU performance advisory requires bounded supporting history and inherits the bottleneck confidence conservatively; frame-pacing and display findings retain investigation-oriented recommendations. The user profile is a preference only and can never override protection.
+
+Bounded evidence history prevents the policy from escalating toward performance advice on a single sample, while a validated safety degradation can immediately produce a protective downgrade. The policy engine stores no unbounded history, accesses no personal data, and exposes no action layer. The required product boundary is **Evidence → Analysis → Policy → Recommendation → [Future Action Layer]**; this release stops at **Recommendation**. Its `policy` envelope is advisory context for `bin/orchestrator-decision`, unified VEGAS snapshots, and `bin/dashboard snapshot`; none of those outputs can apply profile, CPU/GPU, display, charging, thermal, memory, process, or game changes.
 
 Unified snapshots and `bin/dashboard snapshot` include a separate `analysis` envelope. The dashboard’s **Intelligent Analysis** panel text-safely presents the current bottleneck, confidence, explanation, supporting and conflicting evidence, evidence quality, bounded history/trends, recommended observation, and safety classification. No dashboard field is executable, and no analysis result changes CPU/GPU controls, display refresh, charging, thermal policy, memory policy, processes, or game data.
 

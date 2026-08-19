@@ -7,6 +7,7 @@ EVIDENCE_FILE="${ORCH_EVIDENCE_FILE:-}"
 [ -n "$EVIDENCE_FILE" ] || EVIDENCE_FILE="${1:-}"
 EVIDENCE_ENGINE="$AXGO_ROOT/../bin/evidence-engine"
 BOTTLENECK_ENGINE="$AXGO_ROOT/../bin/bottleneck-engine"
+POLICY_ENGINE="$AXGO_ROOT/../bin/policy-engine"
 
 value() {
     KEY="$1"
@@ -84,6 +85,16 @@ ANALYSIS_CLASSIFICATION=$(json_value classification "$ANALYSIS")
 ANALYSIS_CONFIDENCE=$(json_value confidence "$ANALYSIS")
 ANALYSIS_RECOMMENDATION=$(json_value recommended_observation "$ANALYSIS")
 ANALYSIS_SAFETY=$(json_value safety_classification "$ANALYSIS")
+
+POLICY='{"policy_state":"INSUFFICIENT_EVIDENCE","recommendation":"remain_conservative","confidence":"LOW","priority":"SAFETY","reason":"policy engine unavailable","safety_classification":"READ_ONLY_CONSERVATIVE_FALLBACK"}'
+if [ -r "$POLICY_ENGINE" ]; then
+    POLICY=$(ORCH_EVIDENCE_FILE="$EVIDENCE_FILE" AXGO_ROOT="$AXGO_ROOT" sh "$POLICY_ENGINE" snapshot 2>/dev/null || printf '%s' "$POLICY")
+fi
+POLICY_ENGINE_STATE=$(json_value policy_state "$POLICY")
+POLICY_ENGINE_RECOMMENDATION=$(json_value recommendation "$POLICY")
+POLICY_ENGINE_CONFIDENCE=$(json_value confidence "$POLICY")
+POLICY_ENGINE_PRIORITY=$(json_value priority "$POLICY")
+POLICY_ENGINE_SAFETY=$(json_value safety_classification "$POLICY")
 
 STATE=balanced
 PRIORITY=PERFORMANCE
@@ -171,6 +182,11 @@ printf '%s\n' \
     "ANALYSIS_CONFIDENCE=$ANALYSIS_CONFIDENCE" \
     "ANALYSIS_RECOMMENDATION=$ANALYSIS_RECOMMENDATION" \
     "ANALYSIS_SAFETY_CLASSIFICATION=$ANALYSIS_SAFETY" \
+    "POLICY_STATE=$POLICY_ENGINE_STATE" \
+    "POLICY_RECOMMENDATION=$POLICY_ENGINE_RECOMMENDATION" \
+    "POLICY_CONFIDENCE=$POLICY_ENGINE_CONFIDENCE" \
+    "POLICY_PRIORITY=$POLICY_ENGINE_PRIORITY" \
+    "POLICY_SAFETY_CLASSIFICATION=$POLICY_ENGINE_SAFETY" \
     "TIMESTAMP=$TIMESTAMP" \
     "SESSION_ID=$SESSION_ID" \
     "GAME=$GAME" \

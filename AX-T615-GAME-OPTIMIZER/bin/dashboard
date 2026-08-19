@@ -102,6 +102,17 @@ analysis_json() {
     printf '%s' "$ENGINE_JSON"
 }
 
+policy_json() {
+    APP_ROOT=$(CDPATH= cd -- "$AXGO_ROOT/.." 2>/dev/null && pwd || :)
+    ENGINE="${VEGAS_POLICY_ENGINE:-$APP_ROOT/bin/policy-engine}"
+    ENGINE_JSON=''
+    if [ -n "$APP_ROOT" ] && [ -r "$ENGINE" ]; then
+        ENGINE_JSON=$(ORCH_EVIDENCE_FILE="$TMP_EVIDENCE" AXGO_ROOT="$AXGO_ROOT" sh "$ENGINE" snapshot 2>/dev/null || :)
+    fi
+    [ -n "$ENGINE_JSON" ] || ENGINE_JSON='{"schema":"1","source":"unavailable","read_only":true,"policy_state":"INSUFFICIENT_EVIDENCE","recommendation":"remain_conservative","confidence":"LOW","priority":"SAFETY","reason":"policy engine unavailable","evidence_quality":"UNSAFE_UNKNOWN","bottleneck":"INSUFFICIENT_EVIDENCE","bottleneck_confidence":"LOW","supporting_evidence":"NONE","rejected_options":"performance_advisory,automatic_action","safety_classification":"READ_ONLY_CONSERVATIVE_FALLBACK","provenance":"unavailable","history":{"retained_samples":0,"bounded":true},"safety":{"read_only":"YES","hardware_writes":"NO","forbidden_actions_blocked":"YES","advisory_only":"YES","action_layer":"NOT_IMPLEMENTED"}}'
+    printf '%s' "$ENGINE_JSON"
+}
+
 json_pair() {
     KEY="$1"
     RAW="$2"
@@ -179,6 +190,9 @@ snapshot() {
     printf '},'
     printf '"analysis":'
     analysis_json
+    printf ','
+    printf '"policy":'
+    policy_json
     printf ','
     printf '"orchestrator":{'
     json_pair lifecycle "$(value ORCHESTRATOR_LIFECYCLE "$ORCHESTRATOR")"; printf ','

@@ -1,4 +1,13 @@
-/* Dashboard/UI v2 design contract: a readable responsive observability workspace with graphite framing, evidence-led teal, amber caution, and red immutable safety boundaries. */
+/* Dashboard/UI v2 + Phase 8 contract: a readable responsive observability workspace with graphite framing, evidence-led teal, amber caution, red immutable safety boundaries, and recommendation-only policy context. */
+
+/* Phase 8 policy presentation: structured audit cards preserve the existing evidence/analysis language and never resemble actionable device controls. */
+.policy-grid { display:grid; grid-template-columns:1.08fr 1fr .92fr; gap:14px; }
+.policy-summary,.policy-evidence,.policy-provenance { min-height:246px; padding:25px; background:var(--paper); border-top:3px solid var(--teal); box-shadow:none; }
+.policy-evidence { border-color:var(--amber); }.policy-provenance { border-color:var(--ink); }
+.policy-summary>strong { display:block; margin:3px 0 13px; font:600 clamp(24px,3vw,39px) var(--display); letter-spacing:-.05em; overflow-wrap:anywhere; }.policy-summary>p:not(.eyebrow),.policy-evidence>p:not(.eyebrow),.policy-provenance>p:not(.eyebrow) { color:var(--ink-soft); font-size:13px; }
+.policy-summary dl,.policy-evidence dl,.policy-provenance dl { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:15px; margin:20px 0 0; }.policy-evidence h3,.policy-provenance h3 { margin:0 0 15px; font-size:20px; letter-spacing:-.035em; }.policy-provenance dl { grid-template-columns:1fr; }
+@media (max-width:900px) { .policy-grid { grid-template-columns:1fr; }.policy-summary,.policy-evidence,.policy-provenance { min-height:0; } }
+@media (max-width:560px) { .policy-summary dl,.policy-evidence dl { grid-template-columns:1fr; } }
 :root { --ink:#182225; --ink-soft:#3d4a4d; --bone:#f4f1ea; --paper:#fbfaf6; --fog:#e2dfd7; --line:#d6d2c9; --teal:#0b7a75; --teal-dark:#075c58; --amber:#b97820; --red:#a54135; --muted:#7a807f; --shadow:0 20px 50px rgba(24,34,37,.09); --display:"Space Grotesk",sans-serif; --body:"IBM Plex Sans",sans-serif; }
 * { box-sizing:border-box; }
 html { scroll-behavior:smooth; background:var(--bone); }

@@ -1,0 +1,298 @@
+#!/usr/bin/env sh
+# VEGAS-inject Phase 8: deterministic read-only policy and explainable recommendation engine.
+set -u
+
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
+APP_ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
+EVIDENCE_ENGINE="$APP_ROOT/bin/evidence-engine"
+BOTTLENECK_ENGINE="$APP_ROOT/bin/bottleneck-engine"
+AXGO_ROOT="${AXGO_ROOT:-$APP_ROOT/AX-T615-GAME-OPTIMIZER}"
+EVIDENCE_FILE="${ORCH_EVIDENCE_FILE:-}"
+
+usage() {
+    cat <<'EOF'
+Usage: policy-engine {status|evaluate|snapshot|capabilities}
+
+Fixed read-only policy evaluation only. Recommendations are advisory and no device action is performed.
+EOF
+}
+
+escape() {
+    printf '%s' "$1" | tr -d '\r\n' | sed 's/\\/\\\\/g; s/"/\\"/g'
+}
+
+json_string() {
+    KEY="$1"
+    DATA="$2"
+    VALUE=$(printf '%s' "$DATA" | sed -n "s/.*\"$KEY\":\"\([^\"]*\)\".*/\1/p" | head -n 1)
+    [ -n "$VALUE" ] && printf '%s' "$VALUE" || printf '%s' 'UNKNOWN'
+}
+
+metric_field() {
+    METRIC="$1"
+    FIELD="$2"
+    DATA="$3"
+    VALUE=$(printf '%s' "$DATA" | sed -n "s/.*\"$METRIC\":{[^}]*\"$FIELD\":\"\([^\"]*\)\".*/\1/p" | head -n 1)
+    [ -n "$VALUE" ] && printf '%s' "$VALUE" || printf '%s' 'UNKNOWN'
+}
+
+evidence_value() {
+    KEY="$1"
+    [ -r "$EVIDENCE_FILE" ] || { printf '%s' 'UNKNOWN'; return; }
+    VALUE=$(awk -F= -v key="$KEY" '$1 == key { value=$0; sub(/^[^=]*=/, "", value); print value }' "$EVIDENCE_FILE" 2>/dev/null | tail -n 1)
+    [ -n "$VALUE" ] && printf '%s' "$VALUE" || printf '%s' 'UNKNOWN'
+}
+
+number_at_least() {
+    case "$1" in ''|UNKNOWN|UNAVAILABLE|STALE|INVALID) return 1 ;; esac
+    awk -v value="$1" -v threshold="$2" 'BEGIN { exit !(value + 0 >= threshold + 0) }'
+}
+
+number_at_most() {
+    case "$1" in ''|UNKNOWN|UNAVAILABLE|STALE|INVALID) return 1 ;; esac
+    awk -v value="$1" -v threshold="$2" 'BEGIN { exit !(value + 0 <= threshold + 0) }'
+}
+
+in_list() {
+    LIST="$1"
+    NEEDLE="$2"
+    printf '%s\n' ",$LIST," | grep -Fq ",$NEEDLE,"
+}
+
+evidence_snapshot() {
+    OUTPUT=$(ORCH_EVIDENCE_FILE="$EVIDENCE_FILE" AXGO_ROOT="$AXGO_ROOT" AXGO_DATA_ROOT="${AXGO_DATA_ROOT:-$AXGO_ROOT}" sh "$EVIDENCE_ENGINE" snapshot 2>/dev/null || :)
+    [ -n "$OUTPUT" ] && printf '%s' "$OUTPUT" || printf '%s' '{"source":"unavailable","generated_at":"UNKNOWN","quality":{"classification":"UNSAFE_UNKNOWN","fallback_required":"YES","fallback_reason":"evidence engine unavailable"},"metrics":{},"history":{"retained_samples":0}}'
+}
+
+analysis_snapshot() {
+    OUTPUT=$(ORCH_EVIDENCE_FILE="$EVIDENCE_FILE" AXGO_ROOT="$AXGO_ROOT" AXGO_DATA_ROOT="${AXGO_DATA_ROOT:-$AXGO_ROOT}" sh "$BOTTLENECK_ENGINE" snapshot 2>/dev/null || :)
+    [ -n "$OUTPUT" ] && printf '%s' "$OUTPUT" || printf '%s' '{"source":"unavailable","classification":"INSUFFICIENT_EVIDENCE","confidence":"LOW","reason":"bottleneck engine unavailable","recommended_observation":"remain_conservative","safety_classification":"READ_ONLY_CONSERVATIVE_FALLBACK"}'
+}
+
+evaluate_policy() {
+    EVIDENCE=$(evidence_snapshot)
+    ANALYSIS=$(analysis_snapshot)
+
+    GENERATED_AT=$(json_string generated_at "$EVIDENCE")
+    EVIDENCE_SOURCE=$(json_string source "$EVIDENCE")
+    EVIDENCE_QUALITY=$(printf '%s' "$EVIDENCE" | sed -n 's/.*"quality":{"classification":"\([^"]*\)".*/\1/p' | head -n 1)
+    EVIDENCE_FALLBACK=$(printf '%s' "$EVIDENCE" | sed -n 's/.*"fallback_required":"\([^"]*\)".*/\1/p' | head -n 1)
+    EVIDENCE_FALLBACK_REASON=$(printf '%s' "$EVIDENCE" | sed -n 's/.*"fallback_reason":"\([^"]*\)".*/\1/p' | head -n 1)
+    [ -n "$EVIDENCE_QUALITY" ] || EVIDENCE_QUALITY=UNSAFE_UNKNOWN
+    [ -n "$EVIDENCE_FALLBACK" ] || EVIDENCE_FALLBACK=YES
+    [ -n "$EVIDENCE_FALLBACK_REASON" ] || EVIDENCE_FALLBACK_REASON='validated safety evidence unavailable'
+
+    CPU=$(metric_field cpu_utilization value "$EVIDENCE"); CPU_STATE=$(metric_field cpu_utilization state "$EVIDENCE")
+    GPU=$(metric_field gpu_utilization value "$EVIDENCE"); GPU_STATE=$(metric_field gpu_utilization state "$EVIDENCE")
+    MEMORY=$(metric_field memory_usage_percent value "$EVIDENCE"); MEMORY_STATE=$(metric_field memory_usage_percent state "$EVIDENCE")
+    THERMAL=$(metric_field thermal_state value "$EVIDENCE"); THERMAL_STATE=$(metric_field thermal_state state "$EVIDENCE")
+    BATTERY=$(metric_field battery_percent value "$EVIDENCE"); BATTERY_STATE=$(metric_field battery_percent state "$EVIDENCE")
+    CHARGING=$(metric_field charging_state value "$EVIDENCE"); CHARGING_STATE=$(metric_field charging_state state "$EVIDENCE")
+    POWER=$(metric_field power_state value "$EVIDENCE"); POWER_STATE=$(metric_field power_state state "$EVIDENCE")
+    FPS=$(metric_field fps value "$EVIDENCE"); FPS_STATE=$(metric_field fps state "$EVIDENCE")
+    FRAME_PACING=$(metric_field frame_pacing value "$EVIDENCE"); FRAME_PACING_STATE=$(metric_field frame_pacing state "$EVIDENCE")
+    HISTORY=$(printf '%s' "$EVIDENCE" | sed -n 's/.*"retained_samples":\([0-9][0-9]*\).*/\1/p' | head -n 1)
+    [ -n "$HISTORY" ] || HISTORY=0
+
+    BOTTLENECK=$(json_string classification "$ANALYSIS")
+    BOTTLENECK_CONFIDENCE=$(json_string confidence "$ANALYSIS")
+    ANALYSIS_REASON=$(json_string reason "$ANALYSIS")
+    ANALYSIS_RECOMMENDATION=$(json_string recommended_observation "$ANALYSIS")
+    ANALYSIS_SOURCE=$(json_string source "$ANALYSIS")
+
+    PROFILE=$(evidence_value PROFILE)
+    SESSION_ID=$(evidence_value SESSION_ID)
+    SESSION_STATE=$(evidence_value SESSION_STATUS)
+    [ "$SESSION_STATE" = UNKNOWN ] && [ "$SESSION_ID" != UNKNOWN ] && SESSION_STATE=ACTIVE
+
+    POLICY_STATE=UNKNOWN
+    RECOMMENDATION=collect_more_evidence
+    CONFIDENCE=LOW
+    PRIORITY=SAFETY
+    REASON='validated policy inputs are unavailable'
+    SUPPORTING='NONE'
+    REJECTED='performance_advisory,user_profile_override'
+    SAFETY_CLASSIFICATION=READ_ONLY_CONSERVATIVE_FALLBACK
+
+    for SAFETY_STATE in "$THERMAL_STATE" "$MEMORY_STATE" "$BATTERY_STATE" "$POWER_STATE" "$FPS_STATE" "$FRAME_PACING_STATE"; do
+        if [ "$SAFETY_STATE" = INVALID ]; then
+            EVIDENCE_QUALITY=INVALID
+            EVIDENCE_FALLBACK=YES
+        fi
+    done
+
+    if in_list 'UNSAFE_UNKNOWN,STALE,INVALID,UNKNOWN' "$EVIDENCE_QUALITY"; then
+        POLICY_STATE=INSUFFICIENT_EVIDENCE
+        RECOMMENDATION=remain_conservative
+        CONFIDENCE=LOW
+        PRIORITY=SAFETY
+        REASON="$EVIDENCE_FALLBACK_REASON"
+        SUPPORTING="evidence_quality=$EVIDENCE_QUALITY fallback_required=$EVIDENCE_FALLBACK"
+        REJECTED='performance_advisory,profile_preference,automatic_action'
+        SAFETY_CLASSIFICATION=READ_ONLY_CONSERVATIVE_FALLBACK
+    elif [ "$THERMAL_STATE" = VALID ] && in_list 'CRITICAL,HOT,THROTTLED' "$THERMAL"; then
+        POLICY_STATE=SAFETY_BLOCKED
+        RECOMMENDATION=consider_cool_profile
+        CONFIDENCE=HIGH
+        PRIORITY=THERMAL
+        REASON='validated thermal protection evidence overrides performance and profile preferences'
+        SUPPORTING="thermal_state=$THERMAL bottleneck=$BOTTLENECK"
+        REJECTED='consider_performance_profile,retain_performance_profile,automatic_action'
+        SAFETY_CLASSIFICATION=READ_ONLY_THERMAL_PROTECTION
+    elif [ "$MEMORY_STATE" = VALID ] && { number_at_least "$MEMORY" 90 || in_list 'HIGH_PRESSURE,CRITICAL' "$MEMORY"; }; then
+        POLICY_STATE=SAFETY_BLOCKED
+        RECOMMENDATION=inspect_memory_pressure
+        CONFIDENCE=HIGH
+        PRIORITY=MEMORY
+        REASON='validated memory pressure overrides performance and profile preferences'
+        SUPPORTING="memory_usage_percent=$MEMORY bottleneck=$BOTTLENECK"
+        REJECTED='consider_performance_profile,retain_performance_profile,automatic_action'
+        SAFETY_CLASSIFICATION=READ_ONLY_MEMORY_PROTECTION
+    elif { [ "$POWER_STATE" = VALID ] && in_list 'LOW_POWER,POWER_SAVE,CHARGING_RESTRICTED,BATTERY_PROTECTION,CRITICAL' "$POWER"; } || { [ "$BATTERY_STATE" = VALID ] && number_at_most "$BATTERY" 15; }; then
+        POLICY_STATE=BATTERY_ADVISORY
+        RECOMMENDATION=consider_battery_profile
+        CONFIDENCE=HIGH
+        PRIORITY=POWER
+        REASON='validated battery or power protection evidence takes priority over performance preference'
+        SUPPORTING="battery_percent=$BATTERY power_state=$POWER charging_state=$CHARGING"
+        REJECTED='consider_performance_profile,automatic_action'
+        SAFETY_CLASSIFICATION=READ_ONLY_POWER_PROTECTION
+    elif [ "$FRAME_PACING_STATE" = VALID ] && in_list 'UNSTABLE,JANKY,HIGH_JANK,SEVERE_JANK,DEGRADED' "$FRAME_PACING"; then
+        POLICY_STATE=BALANCED
+        RECOMMENDATION=inspect_frame_pacing
+        CONFIDENCE=MEDIUM
+        PRIORITY=PERFORMANCE
+        REASON='frame-pacing degradation requires investigation rather than an unbounded performance recommendation'
+        SUPPORTING="frame_pacing=$FRAME_PACING bottleneck=$BOTTLENECK"
+        REJECTED='automatic_action,blind_performance_escalation'
+        SAFETY_CLASSIFICATION=READ_ONLY_ADVISORY
+    elif [ "$BOTTLENECK" = GPU_LIMITED ] && in_list 'HIGH,MEDIUM' "$BOTTLENECK_CONFIDENCE" && [ "$HISTORY" -ge 3 ]; then
+        POLICY_STATE=PERFORMANCE_ADVISORY
+        RECOMMENDATION=consider_performance_profile
+        CONFIDENCE="$BOTTLENECK_CONFIDENCE"
+        PRIORITY=PERFORMANCE
+        REASON='validated bounded evidence supports a GPU bottleneck advisory; the recommendation remains non-executable'
+        SUPPORTING="bottleneck=$BOTTLENECK bottleneck_confidence=$BOTTLENECK_CONFIDENCE retained_samples=$HISTORY fps=$FPS gpu=$GPU"
+        REJECTED='automatic_action,thermal_override,battery_override'
+        SAFETY_CLASSIFICATION=READ_ONLY_ADVISORY
+    elif [ "$BOTTLENECK" = CPU_LIMITED ] && in_list 'HIGH,MEDIUM' "$BOTTLENECK_CONFIDENCE" && [ "$HISTORY" -ge 3 ]; then
+        if in_list 'PERFORMANCE,COMPETITIVE' "$PROFILE"; then
+            POLICY_STATE=PERFORMANCE_ADVISORY
+            RECOMMENDATION=consider_performance_profile
+            CONFIDENCE="$BOTTLENECK_CONFIDENCE"
+            REASON='validated stable CPU pressure aligns with the current performance preference without overriding safety'
+        else
+            POLICY_STATE=BALANCED
+            RECOMMENDATION=inspect_cpu_pressure
+            CONFIDENCE=MEDIUM
+            REASON='validated CPU pressure is present; profile preference does not independently authorize escalation'
+        fi
+        PRIORITY=PERFORMANCE
+        SUPPORTING="bottleneck=$BOTTLENECK bottleneck_confidence=$BOTTLENECK_CONFIDENCE retained_samples=$HISTORY profile=$PROFILE"
+        REJECTED='automatic_action,thermal_override,battery_override'
+        SAFETY_CLASSIFICATION=READ_ONLY_ADVISORY
+    elif [ "$EVIDENCE_QUALITY" = DEGRADED ]; then
+        POLICY_STATE=CONSERVATIVE
+        RECOMMENDATION=continue_monitoring
+        CONFIDENCE=LOW
+        PRIORITY=SAFETY
+        REASON='evidence is degraded; policy does not escalate beyond observation'
+        SUPPORTING="evidence_quality=$EVIDENCE_QUALITY bottleneck=$BOTTLENECK"
+        REJECTED='consider_performance_profile,automatic_action'
+        SAFETY_CLASSIFICATION=READ_ONLY_CONSERVATIVE
+    elif in_list 'THERMAL_LIMITED,MEMORY_LIMITED,POWER_LIMITED' "$BOTTLENECK"; then
+        POLICY_STATE=CONSERVATIVE
+        CONFIDENCE="$BOTTLENECK_CONFIDENCE"
+        PRIORITY=SAFETY
+        case "$BOTTLENECK" in
+            THERMAL_LIMITED) RECOMMENDATION=inspect_thermal_conditions ;;
+            MEMORY_LIMITED) RECOMMENDATION=inspect_memory_pressure ;;
+            POWER_LIMITED) RECOMMENDATION=inspect_power_conditions ;;
+        esac
+        REASON="bottleneck analysis reports $BOTTLENECK; policy remains advisory and non-escalating"
+        SUPPORTING="bottleneck=$BOTTLENECK bottleneck_confidence=$BOTTLENECK_CONFIDENCE"
+        REJECTED='consider_performance_profile,automatic_action'
+        SAFETY_CLASSIFICATION=READ_ONLY_CONSERVATIVE
+    elif in_list 'COOL,THERMAL_SAVER' "$PROFILE"; then
+        POLICY_STATE=COOL_ADVISORY
+        RECOMMENDATION=retain_current_profile
+        CONFIDENCE=MEDIUM
+        PRIORITY=USER_PROFILE
+        REASON='the configured cool profile is respected after all safety checks pass'
+        SUPPORTING="profile=$PROFILE session_state=$SESSION_STATE"
+        REJECTED='automatic_action,profile_override'
+        SAFETY_CLASSIFICATION=READ_ONLY_ADVISORY
+    elif in_list 'BATTERY,POWER_SAVER' "$PROFILE"; then
+        POLICY_STATE=BATTERY_ADVISORY
+        RECOMMENDATION=retain_current_profile
+        CONFIDENCE=MEDIUM
+        PRIORITY=USER_PROFILE
+        REASON='the configured battery profile is respected after all safety checks pass'
+        SUPPORTING="profile=$PROFILE session_state=$SESSION_STATE"
+        REJECTED='automatic_action,profile_override'
+        SAFETY_CLASSIFICATION=READ_ONLY_ADVISORY
+    elif [ "$BOTTLENECK" = NO_CLEAR_BOTTLENECK ]; then
+        POLICY_STATE=SAFE
+        RECOMMENDATION=continue_monitoring
+        CONFIDENCE=LOW
+        PRIORITY=STABILITY
+        REASON='validated evidence contains no clear bottleneck and does not justify escalation'
+        SUPPORTING="bottleneck=$BOTTLENECK profile=$PROFILE session_state=$SESSION_STATE"
+        REJECTED='automatic_action,unnecessary_profile_change'
+        SAFETY_CLASSIFICATION=READ_ONLY_ADVISORY
+    else
+        POLICY_STATE=BALANCED
+        RECOMMENDATION=retain_current_profile
+        CONFIDENCE=MEDIUM
+        PRIORITY=STABILITY
+        REASON='validated evidence is not safety-blocked and does not require a stronger recommendation'
+        SUPPORTING="bottleneck=$BOTTLENECK analysis_recommendation=$ANALYSIS_RECOMMENDATION profile=$PROFILE"
+        REJECTED='automatic_action,unjustified_performance_escalation'
+        SAFETY_CLASSIFICATION=READ_ONLY_ADVISORY
+    fi
+
+    PROVENANCE="evidence:$EVIDENCE_SOURCE;analysis:$ANALYSIS_SOURCE;ax_t615:orchestrator_evidence"
+}
+
+emit_snapshot() {
+    evaluate_policy
+    printf '{'
+    printf '"schema":"1",'
+    printf '"source":"vegas-inject-policy-engine-read-only",'
+    printf '"read_only":true,'
+    printf '"generated_at":"%s",' "$(escape "$GENERATED_AT")"
+    printf '"policy_state":"%s",' "$(escape "$POLICY_STATE")"
+    printf '"recommendation":"%s",' "$(escape "$RECOMMENDATION")"
+    printf '"confidence":"%s",' "$(escape "$CONFIDENCE")"
+    printf '"priority":"%s",' "$(escape "$PRIORITY")"
+    printf '"reason":"%s",' "$(escape "$REASON")"
+    printf '"evidence_quality":"%s",' "$(escape "$EVIDENCE_QUALITY")"
+    printf '"bottleneck":"%s",' "$(escape "$BOTTLENECK")"
+    printf '"bottleneck_confidence":"%s",' "$(escape "$BOTTLENECK_CONFIDENCE")"
+    printf '"supporting_evidence":"%s",' "$(escape "$SUPPORTING")"
+    printf '"rejected_options":"%s",' "$(escape "$REJECTED")"
+    printf '"safety_classification":"%s",' "$(escape "$SAFETY_CLASSIFICATION")"
+    printf '"provenance":"%s",' "$(escape "$PROVENANCE")"
+    printf '"profile":"%s",' "$(escape "$PROFILE")"
+    printf '"session_state":"%s",' "$(escape "$SESSION_STATE")"
+    printf '"history":{"retained_samples":%s,"bounded":true,"stable_samples_required":3},' "$HISTORY"
+    printf '"safety":{"read_only":"YES","hardware_writes":"NO","network_operations":"NO","process_control":"NO","forbidden_actions_blocked":"YES","advisory_only":"YES","action_layer":"NOT_IMPLEMENTED"}'
+    printf '}\n'
+}
+
+status() {
+    evaluate_policy
+    printf 'VEGAS-INJECT POLICY & RECOMMENDATIONS\nPolicy state: %s\nRecommendation: %s\nConfidence: %s\nPriority: %s\nEvidence quality: %s\nBottleneck: %s (%s)\nSafety: %s\nRead-only: YES\nHardware writes: NO\nAction layer: NOT_IMPLEMENTED\n' "$POLICY_STATE" "$RECOMMENDATION" "$CONFIDENCE" "$PRIORITY" "$EVIDENCE_QUALITY" "$BOTTLENECK" "$BOTTLENECK_CONFIDENCE" "$SAFETY_CLASSIFICATION"
+}
+
+capabilities() {
+    printf 'POLICY_ENGINE_CAPABILITIES=status,evaluate,snapshot,capabilities\nREAD_ONLY=YES\nHARDWARE_WRITES=NO\nNETWORK_OPERATIONS=NO\nPROCESS_CONTROL=NO\nADVISORY_ONLY=YES\nACTION_LAYER=NOT_IMPLEMENTED\n'
+}
+
+case "${1:-status}" in
+    status) [ "$#" -eq 1 ] || { usage >&2; exit 2; }; status ;;
+    evaluate|snapshot) [ "$#" -eq 1 ] || { usage >&2; exit 2; }; emit_snapshot ;;
+    capabilities) [ "$#" -eq 1 ] || { usage >&2; exit 2; }; capabilities ;;
+    help|-h|--help) usage ;;
+    *) usage >&2; exit 2 ;;
+esac

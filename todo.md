@@ -48,3 +48,15 @@
 - [x] Add classification, evidence-state, confidence, trend, bounded-history, determinism, fallback, isolation, metadata, path, dashboard, safety, and Termux tests.
 - [x] Run focused validations, complete regressions, static forbidden-operation scans, and source-diff review.
 - [x] Commit `feat: add intelligent bottleneck analysis`, push to `origin/main`, and verify clean synchronization.
+
+## Phase 8 — Policy & Recommendation Engine
+
+- [x] Inspect Phase 8 requirements and current evidence, bottleneck, profile, session, plugin, unified snapshot, dashboard, documentation, and test contracts.
+- [x] Define deterministic policy states, safety-priority order, confidence propagation, bounded hysteresis, rejected options, and recommendation-only semantics.
+- [x] Implement the fixed read-only policy engine with only allowlisted operations and no dynamic paths, metadata execution, network access, hardware controls, or action layer.
+- [x] Integrate advisory policy routing with AX-T615, plugin manager, unified VEGAS snapshots, decision context, profile/session inputs, and backward-compatible dashboards.
+- [x] Extend the dashboard with a text-safe Policy & Recommendations section for policy state, recommendation, confidence, priority, rationale, evidence quality, bottleneck, safety, rejected options, provenance, and timestamp.
+- [x] Add policy-state, safety-priority, evidence-state, confidence, hysteresis, recovery, profile, rejection, determinism, bounded-history, isolation, metadata, path, dashboard, safety, and Termux contract tests.
+- [x] Update product, module, plugin, and dashboard documentation with the Evidence → Analysis → Policy → Recommendation → [Future Action Layer] boundary.
+- [x] Run focused validations, complete regressions, static forbidden-operation scans, and source-diff review.
+- [x] Commit `feat: add policy and recommendation engine`, push to `origin/main`, and verify clean synchronization.

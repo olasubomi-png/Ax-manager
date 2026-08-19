@@ -9,10 +9,11 @@ AXGO="$MODULE_ROOT/bin/axgo"
 DASHBOARD="$MODULE_ROOT/bin/dashboard"
 EVIDENCE_ENGINE="$APP_ROOT/bin/evidence-engine"
 BOTTLENECK_ENGINE="$APP_ROOT/bin/bottleneck-engine"
+POLICY_ENGINE="$APP_ROOT/bin/policy-engine"
 
 usage() {
     cat <<'EOF'
-Usage: plugin.sh {status|capabilities|games|game-detection|profiles|fps-analysis|performance-analysis|memory-monitoring|thermal-monitoring|power-telemetry|orchestrator-status|evidence {status|capabilities|inspect|evaluate|snapshot|history}|analysis {status|analyze|snapshot|capabilities}|dashboard [path|snapshot|core-snapshot]|dry-run}
+Usage: plugin.sh {status|capabilities|games|game-detection|profiles|fps-analysis|performance-analysis|memory-monitoring|thermal-monitoring|power-telemetry|orchestrator-status|evidence {status|capabilities|inspect|evaluate|snapshot|history}|analysis {status|analyze|snapshot|capabilities}|policy {status|evaluate|snapshot|capabilities}|dashboard [path|snapshot|core-snapshot]|dry-run}
 
 This is a fixed read-only operation allowlist. No plugin metadata is executed.
 EOF
@@ -39,6 +40,12 @@ case "${1:-status}" in
     analysis)
         case "${2:-status}" in
             status|analyze|snapshot|capabilities) exec sh "$BOTTLENECK_ENGINE" "${2:-status}" ;;
+            *) usage >&2; exit 2 ;;
+        esac
+        ;;
+    policy)
+        case "${2:-status}" in
+            status|evaluate|snapshot|capabilities) exec sh "$POLICY_ENGINE" "${2:-status}" ;;
             *) usage >&2; exit 2 ;;
         esac
         ;;

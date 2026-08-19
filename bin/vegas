@@ -22,6 +22,7 @@ Usage:
   vegas plugin {list|info <plugin>|inspect <plugin>|status <plugin>|capabilities <plugin>|validate [plugin]}
   vegas evidence {status|capabilities|inspect|evaluate|snapshot|history}
   vegas analysis {status|analyze|snapshot|capabilities}
+  vegas policy {status|evaluate|snapshot|capabilities}
   vegas gaming {status|snapshot|dashboard [path|snapshot]|capabilities|games|detect|profiles|fps|performance|memory|thermal|power|orchestrator|dry-run}
   vegas system {status|capabilities|inspect|snapshot}
   vegas performance {status|capabilities|inspect|snapshot}
@@ -104,6 +105,11 @@ analysis_snapshot() {
     [ -n "$OUTPUT" ] && printf '%s' "$OUTPUT" || printf '%s' '{"schema":"1","source":"unavailable","read_only":true,"classification":"INSUFFICIENT_EVIDENCE","confidence":"LOW","reason":"bottleneck engine unavailable","supporting_evidence":"NONE","conflicting_evidence":"NONE","evidence_quality":"UNSAFE_UNKNOWN","provenance":"unavailable","recommended_observation":"remain_conservative","safety_classification":"READ_ONLY_CONSERVATIVE_FALLBACK","history":{"retained_samples":0,"bounded":true},"safety":{"read_only":"YES","hardware_writes":"NO","forbidden_actions_blocked":"YES","advisory_only":"YES"}}'
 }
 
+policy_snapshot() {
+    OUTPUT=$(sh "$MANAGER" invoke "$PLUGIN" policy snapshot 2>/dev/null || :)
+    [ -n "$OUTPUT" ] && printf '%s' "$OUTPUT" || printf '%s' '{"schema":"1","source":"unavailable","read_only":true,"policy_state":"INSUFFICIENT_EVIDENCE","recommendation":"remain_conservative","confidence":"LOW","priority":"SAFETY","reason":"policy engine unavailable","evidence_quality":"UNSAFE_UNKNOWN","bottleneck":"INSUFFICIENT_EVIDENCE","bottleneck_confidence":"LOW","supporting_evidence":"NONE","rejected_options":"performance_advisory,automatic_action","safety_classification":"READ_ONLY_CONSERVATIVE_FALLBACK","provenance":"unavailable","history":{"retained_samples":0,"bounded":true},"safety":{"read_only":"YES","hardware_writes":"NO","forbidden_actions_blocked":"YES","advisory_only":"YES","action_layer":"NOT_IMPLEMENTED"}}'
+}
+
 json_escape() {
     printf '%s' "$1" | tr -d '\r\n' | sed 's/\\/\\\\/g; s/"/\\"/g'
 }
@@ -160,6 +166,7 @@ unified_snapshot() {
     PERFORMANCE=$(performance_snapshot)
     EVIDENCE_ENGINE=$(evidence_engine_snapshot)
     ANALYSIS=$(analysis_snapshot)
+    POLICY=$(policy_snapshot)
     GENERATED_AT=$(json_value generated_at "$GAMING")
     DECISION=$(json_object decision "$GAMING")
     printf '{'
@@ -174,6 +181,7 @@ unified_snapshot() {
     printf '"performance":%s,' "$PERFORMANCE"
     printf '"evidence_engine":%s,' "$EVIDENCE_ENGINE"
     printf '"analysis":%s,' "$ANALYSIS"
+    printf '"policy":%s,' "$POLICY"
     printf '"gaming":%s,' "$GAMING"
     printf '"decision":%s,' "$DECISION"
     printf '"safety":%s' "$(safety_json)"
@@ -213,6 +221,8 @@ unified_status() {
     printf '  Conservative fallback: %s\n' "$(json_value fallback_required "$QUALITY")"
     ANALYSIS=$(analysis_snapshot)
     printf '  Bottleneck analysis: %s (%s)\n' "$(json_value classification "$ANALYSIS")" "$(json_value confidence "$ANALYSIS")"
+    POLICY_ENGINE=$(policy_snapshot)
+    printf '  Recommendation policy: %s — %s\n' "$(json_value policy_state "$POLICY_ENGINE")" "$(json_value recommendation "$POLICY_ENGINE")"
     printf '\nPolicy:\n'
     DECISION=$(json_object decision "$GAMING")
     printf '  State: %s\n' "$(json_value state "$DECISION")"
@@ -263,7 +273,7 @@ unified_inspect() {
     printf 'Read-only: YES\n'
     printf 'Safety classification: READ_ONLY_OBSERVABILITY\n'
     printf 'Registered plugins: ax-t615-game-optimizer, system-observer, performance-observer\n'
-    printf 'Supported operations: status, snapshot, inspect, capabilities, plugin health, evidence, analysis, gaming, system, performance\n'
+    printf 'Supported operations: status, snapshot, inspect, capabilities, plugin health, evidence, analysis, policy, gaming, system, performance\n'
     printf 'Evidence categories: cpu, gpu, memory, thermal, fps, battery, power, system, gaming\n'
     printf 'Control capabilities: NONE\n'
 }
@@ -350,6 +360,13 @@ case "${1:-help}" in
         shift
         case "${1:-status}" in
             status|analyze|snapshot|capabilities) [ "$#" -le 1 ] || { usage >&2; exit 2; }; exec sh "$MANAGER" invoke "$PLUGIN" analysis "${1:-status}" ;;
+            *) usage >&2; exit 2 ;;
+        esac
+        ;;
+    policy)
+        shift
+        case "${1:-status}" in
+            status|evaluate|snapshot|capabilities) [ "$#" -le 1 ] || { usage >&2; exit 2; }; exec sh "$MANAGER" invoke "$PLUGIN" policy "${1:-status}" ;;
             *) usage >&2; exit 2 ;;
         esac
         ;;

@@ -35,6 +35,10 @@ contains "$HTML" 'Intelligent Analysis' "dashboard includes the Phase 7 advisory
 for field in analysisClassification analysisConfidence analysisExplanation analysisSupportingEvidence analysisConflictingEvidence analysisEvidenceQuality analysisRecommendation analysisSafetyClassification analysisHistoryCount analysisTrendList; do contains "$HTML" "id=\"${field}\"" "analysis section exposes ${field}"; done
 contains "$APP" 'Invalid analysis section.' "malformed analysis envelope is rejected"
 contains "$APP" 'renderAnalysisTrends' "analysis trends render through a text-safe helper"
+contains "$HTML" 'Policy &amp; Recommendations' "dashboard includes the Phase 8 policy section"
+for field in policyState policyRecommendation policyConfidence policyPriority policyReason policyEvidenceQuality policyBottleneck policySafetyClassification policyRejectedOptions policyProvenance policyTimestamp policyHistoryCount; do contains "$HTML" "id=\"${field}\"" "policy section exposes ${field}"; done
+contains "$APP" 'Invalid policy section.' "malformed policy envelope is rejected"
+contains "$APP" 'snapshot.policy' "policy rendering reads the validated policy envelope"
 
 contains "$HTML" 'id="pluginHealthGrid"' "plugin health grid exists"
 contains "$APP" 'snapshot.plugin_health' "plugin health reads unified snapshot source"
@@ -63,6 +67,7 @@ contains "$CSS" '@media (max-width:780px)' "mobile responsive breakpoint exists"
 contains "$CSS" '.plugin-health-grid { grid-template-columns:1fr;' "mobile plugin cards use a single column"
 contains "$CSS" '.safety-ledger { grid-template-columns:1fr;' "mobile safety ledger uses a single column"
 contains "$CSS" '.analysis-grid { grid-template-columns:1fr;' "mobile analysis panel uses a single column"
+contains "$CSS" '.policy-grid { grid-template-columns:1fr;' "mobile policy panel uses a single column"
 contains "$CSS" 'prefers-reduced-motion' "reduced motion support exists"
 
 not_contains "$SOURCES" 'eval(' "no eval in Dashboard/UI v2"
