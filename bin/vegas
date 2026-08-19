@@ -23,7 +23,7 @@ Usage:
   vegas evidence {status|capabilities|inspect|evaluate|snapshot|history}
   vegas analysis {status|analyze|snapshot|capabilities}
   vegas policy {status|evaluate|snapshot|capabilities}
-  vegas action {status|snapshot|capabilities|plan|validate|dry-run|apply|rollback|history|lock|unlock}
+  vegas action {status|evaluate|simulate|capabilities}
   vegas gaming {status|snapshot|dashboard [path|snapshot]|capabilities|games|detect|profiles|fps|performance|memory|thermal|power|orchestrator|dry-run}
   vegas system {status|capabilities|inspect|snapshot}
   vegas performance {status|capabilities|inspect|snapshot}
@@ -111,41 +111,9 @@ policy_snapshot() {
     [ -n "$OUTPUT" ] && printf '%s' "$OUTPUT" || printf '%s' '{"schema":"1","source":"unavailable","read_only":true,"policy_state":"INSUFFICIENT_EVIDENCE","recommendation":"remain_conservative","confidence":"LOW","priority":"SAFETY","reason":"policy engine unavailable","evidence_quality":"UNSAFE_UNKNOWN","bottleneck":"INSUFFICIENT_EVIDENCE","bottleneck_confidence":"LOW","supporting_evidence":"NONE","rejected_options":"performance_advisory,automatic_action","safety_classification":"READ_ONLY_CONSERVATIVE_FALLBACK","provenance":"unavailable","history":{"retained_samples":0,"bounded":true},"safety":{"read_only":"YES","hardware_writes":"NO","forbidden_actions_blocked":"YES","advisory_only":"YES","action_layer":"NOT_IMPLEMENTED"}}'
 }
 
-action_status_data() {
-    OUTPUT=$(sh "$MANAGER" invoke "$PLUGIN" action status 2>/dev/null || :)
-    [ -n "$OUTPUT" ] && printf '%s' "$OUTPUT" || printf '%s' 'MODE=DRY_RUN
-ACTION_LOCK=ENABLED
-CURRENT_RECOMMENDATION=remain_conservative
-POLICY_STATE=INSUFFICIENT_EVIDENCE
-EVIDENCE_QUALITY=UNSAFE_UNKNOWN
-PLANNED_ACTION=refresh_telemetry
-VALIDATION_STATUS=REQUIRED
-AVAILABLE_ACTIONS=NONE
-BLOCKED_ACTIONS=hardware,cpu,gpu,thermal,battery,charging,process,memory,proc,sys,android_properties,root,shell,arbitrary_path,network,plugin_commands
-ROLLBACK_AVAILABLE=NONE
-AUDIT_HISTORY_COUNT=0
-AUDIT_HISTORY_MAX=16'
-}
-
 action_snapshot() {
-    DATA=$(action_status_data)
-    printf '{'
-    printf '"schema":"1",'
-    printf '"source":"vegas-inject-controlled-action-engine",'
-    printf '"read_only":true,'
-    printf '"mode":"%s",' "$(json_escape "$(key_value MODE "$DATA")")"
-    printf '"action_lock":"%s",' "$(json_escape "$(key_value ACTION_LOCK "$DATA")")"
-    printf '"current_recommendation":"%s",' "$(json_escape "$(key_value CURRENT_RECOMMENDATION "$DATA")")"
-    printf '"policy_state":"%s",' "$(json_escape "$(key_value POLICY_STATE "$DATA")")"
-    printf '"evidence_quality":"%s",' "$(json_escape "$(key_value EVIDENCE_QUALITY "$DATA")")"
-    printf '"planned_action":"%s",' "$(json_escape "$(key_value PLANNED_ACTION "$DATA")")"
-    printf '"validation_status":"%s",' "$(json_escape "$(key_value VALIDATION_STATUS "$DATA")")"
-    printf '"available_actions":"%s",' "$(json_escape "$(key_value AVAILABLE_ACTIONS "$DATA")")"
-    printf '"blocked_actions":"%s",' "$(json_escape "$(key_value BLOCKED_ACTIONS "$DATA")")"
-    printf '"rollback_available":"%s",' "$(json_escape "$(key_value ROLLBACK_AVAILABLE "$DATA")")"
-    printf '"audit_history":{"count":"%s","maximum":"%s","bounded":true},' "$(json_escape "$(key_value AUDIT_HISTORY_COUNT "$DATA")")" "$(json_escape "$(key_value AUDIT_HISTORY_MAX "$DATA")")"
-    printf '"safety":{"dry_run_default":"YES","explicit_apply_required":"YES","action_lock_default":"ENABLED","hardware_writes":"NO","process_control":"NO","arbitrary_execution":"NO","network_execution":"NO","browser_execution":"NO"}'
-    printf '}\n'
+    OUTPUT=$(sh "$MANAGER" invoke "$PLUGIN" action evaluate 2>/dev/null || :)
+    [ -n "$OUTPUT" ] && printf '%s' "$OUTPUT" || printf '%s' '{"schema":"1","source":"unavailable","read_only":true,"action_gate":"ENABLED","execution_mode":"SIMULATION_ONLY","real_action_execution":"NOT_AVAILABLE","gate_state":"BLOCKED","simulation_status":"SIMULATION_BLOCKED","simulated_recommendation":"remain_conservative","reason":"action gate unavailable","evidence_quality":"UNSAFE_UNKNOWN","confidence":"LOW","audit":{"count":0,"maximum":16,"bounded":true,"immutable":true},"safety":{"hardware_writes":"NO","process_control":"NO","network_operations":"NO","arbitrary_execution":"NO","filesystem_control":"NO"}}'
 }
 
 json_escape() {
@@ -263,8 +231,8 @@ unified_status() {
     printf '  Bottleneck analysis: %s (%s)\n' "$(json_value classification "$ANALYSIS")" "$(json_value confidence "$ANALYSIS")"
     POLICY_ENGINE=$(policy_snapshot)
     printf '  Recommendation policy: %s — %s\n' "$(json_value policy_state "$POLICY_ENGINE")" "$(json_value recommendation "$POLICY_ENGINE")"
-    ACTION_ENGINE=$(action_status_data)
-    printf '  Controlled actions: %s; lock: %s\n' "$(key_value MODE "$ACTION_ENGINE")" "$(key_value ACTION_LOCK "$ACTION_ENGINE")"
+    ACTION_GATE=$(action_snapshot)
+    printf '  Action safety gate: %s; simulation: %s\n' "$(json_value gate_state "$ACTION_GATE")" "$(json_value simulation_status "$ACTION_GATE")"
     printf '\nPolicy:\n'
     DECISION=$(json_object decision "$GAMING")
     printf '  State: %s\n' "$(json_value state "$DECISION")"
@@ -298,13 +266,12 @@ POLICY
   Thermal safety recommendation
   Memory safety recommendation
 
-CONTROLLED ACTION ARCHITECTURE
-  Dry-run by default
-  Explicit apply intent required
-  Internal action lock enabled by default
-  Fixed VEGAS-inject managed-state actions only
-  Hardware control capabilities: BLOCKED
-  Browser execution: BLOCKED
+ACTION SAFETY GATE
+  Enabled by default
+  Internally derived policy requests only
+  Simulation only; real action execution not available
+  Hardware, process, network, filesystem-control, and arbitrary-execution capabilities: BLOCKED
+  Bounded immutable simulation audit
 EOF
 }
 
@@ -319,7 +286,7 @@ unified_inspect() {
     printf 'Registered plugins: ax-t615-game-optimizer, system-observer, performance-observer\n'
     printf 'Supported operations: status, snapshot, inspect, capabilities, plugin health, evidence, analysis, policy, action, gaming, system, performance\n'
     printf 'Evidence categories: cpu, gpu, memory, thermal, fps, battery, power, system, gaming\n'
-    printf 'Control capabilities: controlled VEGAS-inject managed-state actions only; hardware controls blocked\n'
+    printf 'Control capabilities: Action Safety Gate simulation only; real action execution not available\n'
 }
 
 plugin_health() {
@@ -417,8 +384,7 @@ case "${1:-help}" in
     action)
         shift
         case "${1:-status}" in
-            snapshot) [ "$#" -eq 1 ] || { usage >&2; exit 2; }; action_snapshot ;;
-            status|capabilities|plan|validate|dry-run|apply|rollback|history|lock|unlock) [ "$#" -le 1 ] || { usage >&2; exit 2; }; exec sh "$MANAGER" invoke "$PLUGIN" action "${1:-status}" ;;
+            status|evaluate|simulate|capabilities) [ "$#" -le 1 ] || { usage >&2; exit 2; }; exec sh "$MANAGER" invoke "$PLUGIN" action "${1:-status}" ;;
             *) usage >&2; exit 2 ;;
         esac
         ;;

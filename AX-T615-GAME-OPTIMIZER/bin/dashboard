@@ -154,6 +154,17 @@ AUDIT_HISTORY_MAX=16'
     printf '}'
 }
 
+action_gate_json() {
+    APP_ROOT=$(CDPATH= cd -- "$AXGO_ROOT/.." 2>/dev/null && pwd || :)
+    ENGINE="${VEGAS_ACTION_GATE:-$APP_ROOT/bin/action-gate}"
+    GATE_JSON=''
+    if [ -n "$APP_ROOT" ] && [ -r "$ENGINE" ]; then
+        GATE_JSON=$(ORCH_EVIDENCE_FILE="$TMP_EVIDENCE" AXGO_ROOT="$AXGO_ROOT" AXGO_DATA_ROOT="${AXGO_DATA_ROOT:-$AXGO_ROOT}" sh "$ENGINE" evaluate 2>/dev/null || :)
+    fi
+    [ -n "$GATE_JSON" ] || GATE_JSON='{"schema":"1","source":"unavailable","read_only":true,"action_gate":"ENABLED","execution_mode":"SIMULATION_ONLY","real_action_execution":"NOT_AVAILABLE","gate_state":"BLOCKED","simulation_status":"SIMULATION_BLOCKED","simulated_recommendation":"remain_conservative","reason":"action gate unavailable","evidence_quality":"UNSAFE_UNKNOWN","confidence":"LOW","audit":{"count":0,"maximum":16,"bounded":true,"immutable":true},"safety":{"read_only":"YES","simulation_only":"YES","hardware_writes":"NO","process_control":"NO","network_operations":"NO","arbitrary_execution":"NO","filesystem_control":"NO"}}'
+    printf '%s' "$GATE_JSON"
+}
+
 json_pair() {
     KEY="$1"
     RAW="$2"
@@ -237,6 +248,9 @@ snapshot() {
     printf ','
     printf '"action":'
     action_json
+    printf ','
+    printf '"action_gate":'
+    action_gate_json
     printf ','
     printf '"orchestrator":{'
     json_pair lifecycle "$(value ORCHESTRATOR_LIFECYCLE "$ORCHESTRATOR")"; printf ','

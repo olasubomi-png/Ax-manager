@@ -12,6 +12,7 @@ DASHBOARD_APP="$ROOT/AX-T615-GAME-OPTIMIZER/dashboard/assets/app.js"
 BOTTLENECK="$ROOT/bin/bottleneck-engine"
 POLICY="$ROOT/bin/policy-engine"
 ACTION="$ROOT/bin/action-engine"
+ACTION_GATE="$ROOT/bin/action-gate"
 HEALTHY="$ROOT/AX-T615-GAME-OPTIMIZER/tests/fixtures/orchestrator/healthy/evidence.env"
 UNKNOWN="$ROOT/AX-T615-GAME-OPTIMIZER/tests/fixtures/orchestrator/unknown/evidence.env"
 TMP="${VEGAS_UNIFIED_TEST_TMP:-$ROOT/tests/.tmp/vegas-unified-$$}"
@@ -40,7 +41,7 @@ contains "$STATUS" 'Plugins: 3' 'unified status reports all registered plugins'
 contains "$STATUS" 'CPU:       35' 'unified status relays observed CPU evidence'
 contains "$STATUS" 'Bottleneck analysis:' 'unified status reports advisory bottleneck analysis'
 contains "$STATUS" 'Recommendation policy:' 'unified status reports advisory recommendation policy'
-contains "$STATUS" 'Controlled actions: DRY_RUN; lock: ENABLED' 'unified status reports locked dry-run controlled actions'
+contains "$STATUS" 'Action safety gate:' 'unified status reports simulation-only action safety gate'
 contains "$STATUS" 'VEGAS_INJECT=READY' 'unified status preserves machine-readable compatibility'
 
 SNAPSHOT=$(ORCH_EVIDENCE_FILE="$HEALTHY" sh "$VEGAS" snapshot)
@@ -57,20 +58,20 @@ contains "$SNAPSHOT" '"code_execution":false' 'unified snapshot aggregates no co
 contains "$SNAPSHOT" '"analysis":{"schema":"1"' 'unified snapshot includes read-only bottleneck analysis envelope'
 contains "$SNAPSHOT" '"advisory_only":"YES"' 'unified snapshot marks bottleneck analysis advisory only'
 contains "$SNAPSHOT" '"policy":{"schema":"1"' 'unified snapshot includes read-only policy envelope'
-contains "$SNAPSHOT" '"action":{"schema":"1"' 'unified snapshot includes controlled-action envelope'
-contains "$SNAPSHOT" '"dry_run_default":"YES"' 'unified action envelope retains dry-run default'
-contains "$SNAPSHOT" '"action_lock_default":"ENABLED"' 'unified action envelope retains emergency lock default'
+contains "$SNAPSHOT" '"action":{"schema":"1"' 'unified snapshot includes Action Safety Gate envelope'
+contains "$SNAPSHOT" '"execution_mode":"SIMULATION_ONLY"' 'unified action envelope remains simulation only'
+contains "$SNAPSHOT" '"real_action_execution":"NOT_AVAILABLE"' 'unified action envelope blocks real execution'
 
 INSPECT=$(sh "$VEGAS" inspect)
 contains "$INSPECT" 'Plugin count: 3' 'unified inspect reports plugin count'
 contains "$INSPECT" 'Safety classification: READ_ONLY_OBSERVABILITY' 'unified inspect reports safety classification'
-contains "$INSPECT" 'Control capabilities: controlled VEGAS-inject managed-state actions only; hardware controls blocked' 'unified inspect limits control scope to managed state'
+contains "$INSPECT" 'Control capabilities: Action Safety Gate simulation only; real action execution not available' 'unified inspect limits control scope to simulation only'
 
 CAPABILITIES=$(sh "$VEGAS" capabilities)
 contains "$CAPABILITIES" 'OBSERVATION' 'unified capabilities group observations'
 contains "$CAPABILITIES" 'POLICY' 'unified capabilities group policy outputs'
-contains "$CAPABILITIES" 'CONTROLLED ACTION ARCHITECTURE' 'unified capabilities describe controlled action architecture'
-contains "$CAPABILITIES" 'Hardware control capabilities: BLOCKED' 'unified capabilities explicitly deny hardware control'
+contains "$CAPABILITIES" 'ACTION SAFETY GATE' 'unified capabilities describe the Action Safety Gate'
+contains "$CAPABILITIES" 'Hardware, process, network, filesystem-control, and arbitrary-execution capabilities: BLOCKED' 'unified capabilities explicitly deny hardware control'
 
 HEALTH=$(sh "$VEGAS" plugin health)
 contains "$HEALTH" 'VEGAS PLUGIN HEALTH' 'plugin health has a unified heading'
@@ -105,11 +106,12 @@ POLICY_SNAPSHOT=$(ORCH_EVIDENCE_FILE="$HEALTHY" sh "$VEGAS" policy snapshot)
 contains "$POLICY_SNAPSHOT" '"read_only":true' 'fixed policy snapshot remains read-only'
 expect_failure 'arbitrary policy route is rejected' sh "$VEGAS" policy ../../outside
 ACTION_STATUS=$(ORCH_EVIDENCE_FILE="$HEALTHY" sh "$VEGAS" action status)
-contains "$ACTION_STATUS" 'VEGAS-INJECT CONTROLLED ACTIONS' 'fixed action route exposes controlled action status'
-contains "$ACTION_STATUS" 'ACTION_LOCK=ENABLED' 'fixed action route remains locked by default'
-ACTION_SNAPSHOT=$(ORCH_EVIDENCE_FILE="$HEALTHY" sh "$VEGAS" action snapshot)
+contains "$ACTION_STATUS" 'VEGAS-INJECT ACTION SAFETY GATE' 'fixed action route exposes simulation-only gate status'
+contains "$ACTION_STATUS" 'Execution mode: SIMULATION_ONLY' 'fixed action route remains simulation only'
+ACTION_SNAPSHOT=$(ORCH_EVIDENCE_FILE="$HEALTHY" sh "$VEGAS" action evaluate)
 contains "$ACTION_SNAPSHOT" '"read_only":true' 'fixed action snapshot remains read-only'
-contains "$ACTION_SNAPSHOT" '"mode":"DRY_RUN"' 'fixed action snapshot remains a dry-run facade'
+contains "$ACTION_SNAPSHOT" '"real_action_execution":"NOT_AVAILABLE"' 'fixed action snapshot blocks real execution'
+expect_failure 'legacy action apply route is rejected' sh "$VEGAS" action apply
 expect_failure 'arbitrary action route is rejected' sh "$VEGAS" action ../../outside
 
 AX_BEFORE=$(sh "$MANAGER" status ax-t615-game-optimizer)
@@ -147,7 +149,7 @@ cp "$TMP/original-performance-plugin.json" "$PERFORMANCE_META"
 contains "$(printf '%s' "$TMP")" "$ROOT/tests/.tmp/" 'unified test uses a repository-local temporary directory'
 not_contains "$(grep -nE 'eval[[:space:]]*\(|innerHTML|outerHTML|setprop|force-stop|/[[:space:]]*(proc|sys)/' "$DASHBOARD_APP" "$ROOT/AX-T615-GAME-OPTIMIZER/dashboard/index.html" 2>/dev/null || :)" 'innerHTML' 'dashboard source contains no arbitrary HTML injection'
 
-STATIC_FILES="$ROOT/bin/vegas $ROOT/bin/plugin-manager $BOTTLENECK $POLICY $ACTION $ROOT/plugins/ax-t615-game-optimizer/plugin.sh $DASHBOARD $DASHBOARD_APP"
+STATIC_FILES="$ROOT/bin/vegas $ROOT/bin/plugin-manager $BOTTLENECK $POLICY $ACTION $ACTION_GATE $ROOT/plugins/ax-t615-game-optimizer/plugin.sh $DASHBOARD $DASHBOARD_APP"
 if grep -nE '(^|[[:space:];])eval([[:space:];]|$)|setprop[[:space:]]|[[:space:]]kill([[:space:];]|$)|[[:space:]]pkill([[:space:];]|$)|>[[:space:]]*/(proc|sys)/|sysctl[[:space:]]|curl[[:space:]]|wget[[:space:]]|nc[[:space:]]' $STATIC_FILES >/dev/null 2>&1; then
     fail 'unified source contains no forbidden execution, network, process, or hardware writes'
 else

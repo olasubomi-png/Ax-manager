@@ -72,3 +72,14 @@
 - [x] Update product, module, action-engine, plugin, dashboard, and safety documentation with the Recommendation → Action Plan → Validation → Dry Run → Explicit Apply → Verification → Rollback boundary.
 - [x] Run focused validation, complete regression, forbidden-operation scans, source-diff review, and generated-artifact cleanup.
 - [x] Commit `feat: add controlled action layer architecture`, push to `origin/main`, and verify clean synchronization.
+
+## Action Safety Gate — Simulation-Only Boundary
+
+- [x] Inspect the requested action-gate contract alongside the existing action-engine, policy, plugin, unified CLI, dashboard, documentation, and test interfaces.
+- [x] Implement fixed `bin/action-gate` status, evaluate, simulate, and capabilities operations with deterministic safety gates, internally generated requests only, immutable bounded audit records, and no real action execution.
+- [x] Integrate action-gate routing through the AX-T615 plugin, plugin manager, unified VEGAS CLI, snapshot envelope, and advisory decision context without modifying existing action-engine compatibility routes.
+- [x] Extend the dashboard with a text-safe Action Safety Gate panel for gate state, simulation status, simulated recommendation, reason, evidence quality, confidence, audit count, and explicit no-real-action status.
+- [x] Add action-gate safety, malformed-input, audit-bound, plugin-isolation, CLI-routing, unified-snapshot, dashboard-rendering, static-safety, and Termux contract tests.
+- [x] Update root, VEGAS-inject, AX-T615 module, dashboard, and architecture documentation with the Evidence → Analysis → Policy → Recommendation → Action Gate → [Future Real Action Layer] boundary.
+- [x] Run focused checks, complete regression, safety scans, source-diff review, and generated-artifact cleanup.
+- [x] Commit `feat: add controlled action safety gate`, push to `origin/main`, and verify clean synchronization.

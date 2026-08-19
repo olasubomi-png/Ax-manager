@@ -207,7 +207,7 @@ invoke() {
             ;;
         ax-t615-game-optimizer:action)
             case "$ARGUMENT" in
-                ''|status|capabilities|plan|validate|dry-run|apply|rollback|history|lock|unlock) exec sh "$PLUGIN_ENTRYPOINT" action "${ARGUMENT:-status}" ;;
+                ''|status|evaluate|simulate|capabilities) exec sh "$PLUGIN_ENTRYPOINT" action "${ARGUMENT:-status}" ;;
                 *) printf 'PLUGIN_ERROR=OPERATION_REJECTED\n' >&2; return 2 ;;
             esac
             ;;

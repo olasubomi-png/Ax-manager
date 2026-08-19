@@ -45,6 +45,11 @@ contains "$APP" 'Invalid action section.' "malformed action envelope is rejected
 contains "$APP" 'snapshot.action' "action rendering reads the validated action envelope"
 contains "$HTML" 'LOCKED BY DEFAULT' "dashboard labels the controlled-action emergency lock"
 contains "$HTML" 'DRY-RUN ONLY' "dashboard labels controlled actions as dry run"
+contains "$HTML" 'Action Safety Gate' "dashboard includes the simulation-only Action Safety Gate section"
+for field in actionGateState actionGateReason actionGateMode actionGateSimulation actionGateRecommendation actionGateConfidence actionGateEvidenceQuality actionGatePolicyState actionGateRequestSource actionGateRealAction actionGateAuditCount actionGateAuditBound actionGateTimestamp; do contains "$HTML" "id=\"${field}\"" "action-gate section exposes ${field}"; done
+contains "$APP" 'Invalid action gate section.' "malformed Action Safety Gate envelope is rejected"
+contains "$APP" 'snapshot.action_gate' "Action Safety Gate rendering reads the validated gate envelope"
+contains "$HTML" 'SIMULATION ONLY' "dashboard labels the Action Safety Gate simulation-only boundary"
 
 contains "$HTML" 'id="pluginHealthGrid"' "plugin health grid exists"
 contains "$APP" 'snapshot.plugin_health' "plugin health reads unified snapshot source"
@@ -75,6 +80,7 @@ contains "$CSS" '.safety-ledger { grid-template-columns:1fr;' "mobile safety led
 contains "$CSS" '.analysis-grid { grid-template-columns:1fr;' "mobile analysis panel uses a single column"
 contains "$CSS" '.policy-grid { grid-template-columns:1fr;' "mobile policy panel uses a single column"
 contains "$CSS" '.action-grid { grid-template-columns:1fr;' "mobile controlled-action panel uses a single column"
+contains "$CSS" '.action-gate-grid { grid-template-columns:1fr;' "mobile Action Safety Gate panel uses a single column"
 contains "$CSS" 'prefers-reduced-motion' "reduced motion support exists"
 
 not_contains "$SOURCES" 'eval(' "no eval in Dashboard/UI v2"
@@ -87,6 +93,7 @@ not_contains "$APP" 'window.open(' "no arbitrary URL execution"
 not_contains "$APP" 'loadScript' "no dynamic script loading"
 not_contains "$HTML" '<form' "dashboard exposes no control form"
 not_contains "$HTML" 'id="actionApply"' "dashboard exposes no controlled-action button"
+not_contains "$HTML" 'id="actionGateApply"' "dashboard exposes no Action Safety Gate execution button"
 not_contains "$HTML" 'type="range"' "dashboard exposes no hardware-control slider"
 not_contains "$HTML" 'CPU boost' "dashboard exposes no CPU boost control"
 not_contains "$HTML" 'GPU boost' "dashboard exposes no GPU boost control"

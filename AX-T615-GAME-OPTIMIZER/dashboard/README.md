@@ -14,7 +14,7 @@ validated JSON snapshot
 dashboard/index.html
 ```
 
-The exporter invokes the existing `orchestrator-evidence`, `orchestrator-decision`, `orchestrator`, `session`, `profile`, fixed `evidence-engine`, fixed `bottleneck-engine`, fixed `policy-engine`, and fixed `action-engine` outputs. It does not reinterpret their policy. The browser renders the exported fields as text and rejects snapshots that are not explicitly marked `read_only: true`.
+The exporter invokes the existing `orchestrator-evidence`, `orchestrator-decision`, `orchestrator`, `session`, `profile`, fixed `evidence-engine`, fixed `bottleneck-engine`, fixed `policy-engine`, legacy internal `action-engine`, and public fixed `action-gate` outputs. It does not reinterpret their policy. The browser renders the exported fields as text and rejects snapshots that are not explicitly marked `read_only: true`.
 
 ## Open the dashboard
 
@@ -73,4 +73,10 @@ Phase 9 adds an optional, backward-compatible `action` envelope alongside `evide
 
 The **Controlled Actions** panel begins in **DRY RUN** and presents the lock, plan, validation, result, managed-state-only rollback, immutable allowed and blocked action registries, timestamp, and bounded audit count. It contains no action button, form, endpoint, browser-to-shell bridge, or hardware-control affordance. Snapshot refresh remains a static-file read only and cannot unlock, apply, or roll back an action.
 
-The complete data path is **Evidence → Analysis → Policy → Recommendation → Action Plan → Validation → Dry Run → Explicit Apply → Verification → Rollback**. This dashboard stops at observability: it does not implement action application, profile application, hardware control, charging control, display changes, thermal changes, memory changes, process control, or game modification.
+## Action Safety Gate visibility
+
+The public simulation-only Action Safety Gate adds an optional, backward-compatible `action_gate` envelope. It exposes only `gate_state`, `simulation_status`, `simulated_recommendation`, `reason`, `evidence_quality`, `confidence`, `audit_count`, `safety_classification`, `provenance`, `generated_at`, and the explicit `real_action: NONE` state. The browser validates this envelope as an object and writes each field through text nodes.
+
+The **Action Safety Gate** panel presents the gate state, simulation result, simulated recommendation, reason, evidence quality, confidence, audit count, and clear no-real-action statement. It contains no action button, form, endpoint, browser-to-shell bridge, profile target, or hardware-control affordance. Loading or refreshing a static snapshot cannot evaluate or simulate an action.
+
+The public data path is **Evidence → Analysis → Policy → Recommendation → Action Gate → [Future Real Action Layer]**. This dashboard ends at the gate: it does not implement action application, profile application, hardware control, charging control, display changes, thermal changes, memory changes, process control, or game modification.

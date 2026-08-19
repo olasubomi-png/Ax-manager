@@ -747,6 +747,10 @@ sh ../bin/vegas analysis capabilities
 sh ../bin/vegas policy status
 sh ../bin/vegas policy snapshot
 sh ../bin/vegas policy capabilities
+sh ../bin/vegas action status
+sh ../bin/vegas action evaluate
+sh ../bin/vegas action simulate
+sh ../bin/vegas action capabilities
 sh ../bin/axgo status
 ```
 
@@ -829,6 +833,14 @@ The validation sequence is fixed: a plan must use an allowed identifier; safety 
 `apply` records only a VEGAS-inject managed marker, an execution status, and a bounded local audit record. It does not modify device state. `rollback` is fixed and removes only that managed marker; it does not restore or change CPU/GPU controls, charging, display, thermal policy, memory policy, kernel settings, processes, games, apps, Android properties, or system files. Bounded audit history is limited to sixteen non-sensitive local entries, and a stale engine-owned execution lock is deterministically recoverable.
 
 The required boundary is **Evidence → Analysis → Policy → Recommendation → Action Plan → Validation → Dry Run → Explicit Apply → Verification → Rollback**. The dashboard reports this architecture without exposing browser controls. Unified, AX-T615, and dashboard snapshots contain a backward-compatible `action` envelope with plan, validation, lock, allowed/blocked action categories, result, rollback, and bounded audit context.
+
+## Action Safety Gate — Simulation-Only Boundary
+
+The public action interface is now `../bin/action-gate`, available through `sh ../bin/vegas action {status|evaluate|simulate|capabilities}` and the AX-T615 plugin’s fixed `action` operation. It is not a continuation of the earlier public controlled-action route. It accepts no caller-selected action ID, shell command, path, setting, process, package, game, profile, or hardware target. Instead, it derives exactly one internal request from the existing policy snapshot and returns either `SIMULATED_RECOMMENDATION` or `BLOCKED`.
+
+The fixed priority order is **policy availability and safety classification**, **evidence quality/freshness**, **confidence**, then the derived recommendation. `UNKNOWN`, `UNAVAILABLE`, `STALE`, `INVALID`, empty, malformed, or insufficient safety evidence fails closed; an `unsafe` policy classification, low confidence, unknown recommendation, or conservative policy state also returns `BLOCKED`. `simulate` may append a non-sensitive bounded local audit record but never creates a device, profile, process, or managed-state action. The retained audit window has at most sixteen records and cannot be set by an input argument.
+
+The architecture boundary is **Evidence → Analysis → Policy → Recommendation → Action Gate → [Future Real Action Layer]**. The bracketed future layer is deliberately absent. Existing `bin/action-engine` files remain repository-internal compatibility components but are not exposed by `vegas action` or the AX-T615 plugin. `bin/orchestrator-decision`, unified snapshots, and dashboard snapshots surface Action Safety Gate context only as advisory, simulation-only evidence.
 
 ### Final validation
 

@@ -145,11 +145,11 @@ run_engine "$GOOD" lock >/dev/null
 LOCK_AFTER=$(run_engine "$GOOD" status)
 contains 'explicit emergency lock restores default locked mode' "$LOCK_AFTER" 'ACTION_LOCK=ENABLED'
 
-VEGAS_ACTION=$(ORCH_EVIDENCE_FILE="$GOOD" VEGAS_EVIDENCE_RUNTIME_DIR="$HISTORY" VEGAS_ACTION_RUNTIME_DIR="$RUNTIME" sh "$VEGAS" action snapshot)
-contains 'VEGAS fixed action route returns action schema' "$VEGAS_ACTION" '"schema":"1"'
-fails 'VEGAS rejects arbitrary action routes' sh "$VEGAS" action ../../outside
+VEGAS_ACTION=$(ORCH_EVIDENCE_FILE="$GOOD" VEGAS_EVIDENCE_RUNTIME_DIR="$HISTORY" VEGAS_ACTION_RUNTIME_DIR="$RUNTIME" sh "$VEGAS" action evaluate)
+contains 'VEGAS public action route exposes the simulation-only gate schema' "$VEGAS_ACTION" '"source":"vegas-inject-action-safety-gate"'
+fails 'VEGAS rejects legacy and arbitrary action routes' sh "$VEGAS" action apply
 PLUGIN_ACTION=$(ORCH_EVIDENCE_FILE="$GOOD" VEGAS_EVIDENCE_RUNTIME_DIR="$HISTORY" VEGAS_ACTION_RUNTIME_DIR="$RUNTIME" sh "$MANAGER" invoke ax-t615-game-optimizer action status)
-contains 'AX-T615 plugin action route remains fixed and isolated' "$PLUGIN_ACTION" 'VEGAS-INJECT CONTROLLED ACTIONS'
+contains 'AX-T615 plugin action route remains fixed and simulation only' "$PLUGIN_ACTION" 'VEGAS-INJECT ACTION SAFETY GATE'
 fails 'plugin manager rejects arbitrary action route' sh "$MANAGER" invoke ax-t615-game-optimizer action ../../outside
 SYSTEM_BEFORE=$(sh "$MANAGER" status system-observer)
 ORCH_EVIDENCE_FILE="$GOOD" VEGAS_EVIDENCE_RUNTIME_DIR="$HISTORY" VEGAS_ACTION_RUNTIME_DIR="$RUNTIME" sh "$VEGAS" action snapshot >/dev/null
@@ -157,9 +157,9 @@ SYSTEM_AFTER=$(sh "$MANAGER" status system-observer)
 [ "$SYSTEM_BEFORE" = "$SYSTEM_AFTER" ] && ok 'controlled actions preserve System Observer isolation' || not_ok 'controlled actions preserve System Observer isolation'
 
 UNIFIED=$(ORCH_EVIDENCE_FILE="$GOOD" VEGAS_EVIDENCE_RUNTIME_DIR="$HISTORY" VEGAS_ACTION_RUNTIME_DIR="$RUNTIME" sh "$VEGAS" snapshot)
-contains 'unified snapshot includes action envelope' "$UNIFIED" '"action":{"schema":"1"'
+contains 'unified snapshot includes action-gate envelope' "$UNIFIED" '"action":{"schema":"1"'
 DASH=$(ORCH_EVIDENCE_FILE="$GOOD" VEGAS_EVIDENCE_RUNTIME_DIR="$HISTORY" VEGAS_ACTION_RUNTIME_DIR="$RUNTIME" sh "$DASHBOARD" snapshot)
-contains 'dashboard snapshot includes action envelope' "$DASH" '"action":{"schema":"1"'
+contains 'dashboard snapshot includes action-gate envelope' "$DASH" '"action_gate":{"schema":"1"'
 for ID in actionMode actionLock actionValidation actionPlannedAction actionResult actionRecommendation actionPolicyState actionEvidenceQuality actionConcurrency actionRollback actionAvailableActions actionBlockedActions actionAuditHistory actionTimestamp; do
     grep -F "$ID" "$DASHBOARD_JS" >/dev/null 2>&1 && ok "dashboard renders $ID text-safely" || not_ok "dashboard renders $ID text-safely"
 done
