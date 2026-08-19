@@ -1,0 +1,7 @@
+{
+  "id": "fixture-missing-fields",
+  "name": "Fixture Missing Fields",
+  "packages": [],
+  "enabled": true,
+  "performance": { "mode": "BALANCED" }
+}

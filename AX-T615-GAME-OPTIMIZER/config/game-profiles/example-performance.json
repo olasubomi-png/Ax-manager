@@ -1,0 +1,14 @@
+{
+  "id": "example-performance",
+  "name": "Example Performance",
+  "packages": [],
+  "enabled": true,
+  "example": true,
+  "description": "Example policy only; prioritizes sustained performance without claiming game optimization.",
+  "display": { "targetFps": "AUTO", "preferredRefreshRate": "AUTO" },
+  "performance": { "mode": "PERFORMANCE" },
+  "thermal": { "maxPolicy": "CONSERVATIVE" },
+  "memory": { "policy": "BALANCED" },
+  "gpu": { "policy": "BOOST_ALLOWED" },
+  "cpu": { "policy": "BOOST_ALLOWED" }
+}

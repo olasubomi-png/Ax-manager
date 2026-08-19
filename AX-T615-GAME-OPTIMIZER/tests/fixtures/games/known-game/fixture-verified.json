@@ -1,0 +1,12 @@
+{
+  "id": "fixture-verified",
+  "name": "Verified Fixture Game",
+  "packages": ["com.example.verified"],
+  "enabled": true,
+  "display": { "targetFps": 60, "preferredRefreshRate": "AUTO" },
+  "performance": { "mode": "PERFORMANCE" },
+  "thermal": { "maxPolicy": "CONSERVATIVE" },
+  "memory": { "policy": "BALANCED" },
+  "gpu": { "policy": "BOOST_ALLOWED" },
+  "cpu": { "policy": "BOOST_ALLOWED" }
+}

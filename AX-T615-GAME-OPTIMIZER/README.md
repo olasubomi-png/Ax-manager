@@ -596,3 +596,42 @@ The existing `bin/session` coordinator starts, samples, and stops the FPS sessio
 Step 8 measures and analyzes performance. It does not force display or hardware settings. The implementation contains no writes to `/proc` or `/sys`, no refresh-rate or resolution changes, no display-mode or SurfaceFlinger changes, no CPU or GPU frequency changes, no thermal-setting changes, no ZRAM or swap changes, no LMKD/OOM changes, and no process kills. TEST DATA fixtures are clearly labeled and remain immutable during all scenarios.
 
 The Step 8 test suites cover display detection, refresh-rate detection, multiple modes, malformed and missing display data, measured and derived FPS, frame-time percentiles, jank classes and bursts, frame-time spikes, pacing, target validation, recommendations, thermal/memory/GPU/CPU coordination, bottleneck classification and confidence, package-specific unavailable FPS, monitor behavior, game-session start and stop, fixture immutability, axgo routing, and the complete prior Steps 1–7B suite.
+
+
+## Step 9 — Game-Specific Performance Profiles
+
+Step 9 adds a data-only game profile policy engine. It separates verified game identity from policy data and produces bounded recommendations without applying hardware settings. `bin/game-detector` reads Android foreground-package evidence, fixture sources, or an explicitly supplied package; `bin/game-profile` validates, lists, displays, selects, exports, imports, and recommends JSON profiles under `config/game-profiles/`.
+
+```sh
+./bin/game-detector identify
+./bin/game-detector active
+./bin/game-detector package <package>
+./bin/game-detector list
+./bin/game-profile list
+./bin/game-profile show <game>
+./bin/game-profile detect <package>
+./bin/game-profile validate
+./bin/game-profile recommend <game>
+./bin/game-profile auto
+./bin/game-profile create "Game Name"
+./bin/game-profile export
+./bin/game-profile import <file>
+./bin/game-profile use <profile>
+./bin/game-profile clear
+./bin/axgo game detect
+./bin/axgo game active
+./bin/axgo game profile list
+./bin/axgo game profile recommend <game>
+```
+
+Profiles are JSON data only. The supported logical modes are `BATTERY`, `COOL`, `BALANCED`, `PERFORMANCE`, and `COMPETITIVE`; each profile may describe a target FPS, preferred refresh-rate policy, CPU/GPU policy, memory policy, thermal ceiling, and package list. `default-safe.json` is used for unknown games, malformed foreground data, missing verified mappings, and unavailable profile data. It selects `BALANCED`, `AUTO` FPS, `AUTO` display behavior, balanced CPU/GPU/memory policy, and conservative thermal handling. The example battery, cool, balanced, performance, and competitive profiles are intentionally labeled examples and do not claim support for any real game package.
+
+`config/game-profiles/index.json` is the only production package-to-profile mapping. It remains empty until a package has been explicitly verified; the engine does not invent package identifiers. Profile validation checks JSON-like structure, required identifiers and fields, unique profile IDs, Android package syntax, supported FPS targets, supported modes and policy values, and rejects command-like fields such as `command`, `script`, `exec`, `shell`, or `action` when they would turn profile data into executable configuration.
+
+Recommendations combine the selected profile with available Step 5–8 evidence. Critical thermal, memory, or hardware-safety states have highest priority; throttled or high-pressure conditions constrain the result next; caution or pressure states constrain it further; only normal, known telemetry permits the profile's normal policy. Unknown game, thermal, memory, CPU, GPU, FPS, frame-time, or display data fails safe rather than being fabricated. The output includes the selected profile, package identity, display/FPS target, thermal and memory states, CPU/GPU evidence, final recommendation, reason, and an explicit statement that no hardware settings were changed.
+
+A bounded hysteresis policy in `config/game-profile-policy.json` prevents rapid oscillation. Escalation toward a more restrictive recommendation is immediate. Recovery requires the configured number of stable samples, moves one mode at a time, and observes minimum mode-duration and thermal/memory recovery delays where evidence is available. `game-profile use <profile>` creates a session-only override, while `game-profile clear` removes it; neither command changes the persistent profile catalog or hardware.
+
+The existing `bin/session` coordinator invokes the Step 9 profile engine at game start, samples it while the session is active, and emits a `GAME PERFORMANCE REPORT` at game stop. The report includes game and package identity, profile, duration, target FPS, available FPS/frame-pacing evidence, thermal and memory evidence, CPU/GPU state, performance mode, mode transitions, intervention counts, bottleneck/confidence fields when available, and the Step 9 read-only safety statement. Step 9 does not restore values that it never changed.
+
+Step 9 remains strictly read-only. It does not write `/proc` or `/sys`, change display settings, set Android properties, change CPU/GPU frequencies or governors, modify ZRAM/swap/LMKD/OOM behavior, alter thermal protection, kill or force-stop processes, or invoke shell evaluation. The Step 9 test suites cover detector behavior, profile commands, schema validation, malicious-profile rejection, safety scanning, recommendation priority, hysteresis and stable recovery, session integration, runtime cleanup, and fixture immutability.

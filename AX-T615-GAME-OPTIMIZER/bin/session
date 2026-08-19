@@ -63,6 +63,8 @@ session_start() {
     else
         echo "CPU changes: no CPU changes were applied"
     fi
+    GAME_PROFILE_OUTPUT="$(AXGO_ROOT="$AXGO_ROOT" GAME_PROFILE_DATA_ROOT="$AXGO_DATA_ROOT" GAME_PROFILE_DIR="${GAME_PROFILE_DIR:-$AXGO_ROOT/config/game-profiles}" sh "$AXGO_ROOT/bin/game-profile" session-start "$PACKAGE" 2>&1 || :)"
+    printf '%s\n' "$GAME_PROFILE_OUTPUT"
     echo "Gaming session started"
     echo "Game: ${NAME:-unnamed game}"
     echo "Package: $PACKAGE"
@@ -92,7 +94,9 @@ session_stop() {
     printf '%s\n' "$MEMORY_PERFORMANCE_REPORT"
     FPS_REPORT="$(AXGO_ROOT="$AXGO_ROOT" FPS_DATA_ROOT="$AXGO_DATA_ROOT" DISPLAY_DATA_ROOT="$AXGO_DATA_ROOT" FPS_PACKAGE="$PACKAGE" sh "$AXGO_ROOT/bin/fps-controller" session-stop 2>&1)"
     printf '%s\n' "$FPS_REPORT"
-    axgo_log INFO "memory and FPS performance reports generated at game stop"
+    GAME_PROFILE_REPORT="$(AXGO_ROOT="$AXGO_ROOT" GAME_PROFILE_DATA_ROOT="$AXGO_DATA_ROOT" GAME_PROFILE_DIR="${GAME_PROFILE_DIR:-$AXGO_ROOT/config/game-profiles}" sh "$AXGO_ROOT/bin/game-profile" session-stop 2>&1 || :)"
+    printf '%s\n' "$GAME_PROFILE_REPORT"
+    axgo_log INFO "memory, FPS, and game profile performance reports generated at game stop"
     axgo_remove_state gaming.state
     axgo_remove_state current_game
     axgo_remove_state current_package
@@ -111,6 +115,7 @@ session_status() {
         sh "$AXGO_ROOT/bin/thermal-controller" session-sample >/dev/null 2>&1 || :
         AXGO_ROOT="$AXGO_ROOT" MEMORY_PERFORMANCE_DATA_ROOT="$AXGO_DATA_ROOT" sh "$AXGO_ROOT/bin/memory-performance" sample >/dev/null 2>&1 || :
         AXGO_ROOT="$AXGO_ROOT" FPS_DATA_ROOT="$AXGO_DATA_ROOT" DISPLAY_DATA_ROOT="$AXGO_DATA_ROOT" FPS_PACKAGE="$(axgo_read_state "$AXGO_RUNTIME_DIR/current_package")" sh "$AXGO_ROOT/bin/fps-controller" session-sample >/dev/null 2>&1 || :
+        AXGO_ROOT="$AXGO_ROOT" GAME_PROFILE_DATA_ROOT="$AXGO_DATA_ROOT" GAME_PROFILE_DIR="${GAME_PROFILE_DIR:-$AXGO_ROOT/config/game-profiles}" sh "$AXGO_ROOT/bin/game-profile" session-sample >/dev/null 2>&1 || :
         echo "Gaming session: ACTIVE"
         echo "Current game: $(axgo_read_state "$AXGO_RUNTIME_DIR/current_game")"
         echo "Package: $(axgo_read_state "$AXGO_RUNTIME_DIR/current_package")"

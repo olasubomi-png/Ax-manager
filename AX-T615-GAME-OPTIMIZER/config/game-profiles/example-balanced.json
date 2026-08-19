@@ -1,0 +1,14 @@
+{
+  "id": "example-balanced",
+  "name": "Example Balanced",
+  "packages": [],
+  "enabled": true,
+  "example": true,
+  "description": "Example policy only; balances performance and temperature without claiming game optimization.",
+  "display": { "targetFps": "AUTO", "preferredRefreshRate": "AUTO" },
+  "performance": { "mode": "BALANCED" },
+  "thermal": { "maxPolicy": "CONSERVATIVE" },
+  "memory": { "policy": "BALANCED" },
+  "gpu": { "policy": "BALANCED" },
+  "cpu": { "policy": "BALANCED" }
+}

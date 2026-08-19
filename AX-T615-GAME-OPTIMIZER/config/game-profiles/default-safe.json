@@ -1,0 +1,13 @@
+{
+  "id": "default-safe",
+  "name": "DEFAULT_SAFE",
+  "packages": [],
+  "enabled": true,
+  "example": false,
+  "display": { "targetFps": "AUTO", "preferredRefreshRate": "AUTO" },
+  "performance": { "mode": "BALANCED" },
+  "thermal": { "maxPolicy": "CONSERVATIVE" },
+  "memory": { "policy": "BALANCED" },
+  "gpu": { "policy": "BALANCED" },
+  "cpu": { "policy": "BALANCED" }
+}

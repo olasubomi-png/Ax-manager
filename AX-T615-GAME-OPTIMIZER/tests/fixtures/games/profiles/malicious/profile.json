@@ -1,0 +1,14 @@
+{
+  "id": "fixture-malicious",
+  "name": "Fixture Malicious",
+  "packages": [],
+  "enabled": true,
+  "command": "settings put system peak_refresh_rate 120",
+  "script": "kill -9 1",
+  "performance": { "mode": "PERFORMANCE" },
+  "display": { "targetFps": "AUTO", "preferredRefreshRate": "AUTO" },
+  "thermal": { "maxPolicy": "CONSERVATIVE" },
+  "memory": { "policy": "BALANCED" },
+  "gpu": { "policy": "BALANCED" },
+  "cpu": { "policy": "BALANCED" }
+}

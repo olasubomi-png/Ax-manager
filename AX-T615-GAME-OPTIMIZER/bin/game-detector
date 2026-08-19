@@ -1,0 +1,99 @@
+#!/usr/bin/env sh
+set -u
+
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname "$0")" 2>/dev/null && pwd)"
+AXGO_ROOT="${AXGO_ROOT:-$(CDPATH= cd -- "$SCRIPT_DIR/.." 2>/dev/null && pwd)}"
+. "$AXGO_ROOT/bin/lib"
+DATA_ROOT="${GAME_DETECTOR_DATA_ROOT:-${GAME_DATA_ROOT:-${AXGO_DATA_ROOT:-$AXGO_ROOT}}}"
+PROFILE_DIR="${GAME_PROFILE_DIR:-$AXGO_ROOT/config/game-profiles}"
+INDEX_FILE="$PROFILE_DIR/index.json"
+
+valid_package() {
+    printf '%s\n' "$1" | awk '/^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z][A-Za-z0-9_]*)+$/ { ok=1 } END { exit(ok ? 0 : 1) }'
+}
+
+index_pairs() {
+    [ -r "$INDEX_FILE" ] || return 0
+    awk '
+        /"packages"[[:space:]]*:/ { inside=1 }
+        inside {
+            line=$0
+            while (match(line, /"[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z][A-Za-z0-9_]*)+"[[:space:]]*:[[:space:]]*"[A-Za-z0-9_.-]+"/)) {
+                pair=substr(line,RSTART,RLENGTH)
+                gsub(/"/,"",pair)
+                split(pair,a,":")
+                gsub(/^[[:space:]]+|[[:space:]]+$/, "", a[1])
+                gsub(/^[[:space:]]+|[[:space:]]+$/, "", a[2])
+                print a[1] "|" a[2]
+                line=substr(line,RSTART+RLENGTH)
+            }
+            if (inside && $0 ~ /}/) exit
+        }
+    ' "$INDEX_FILE" 2>/dev/null
+}
+
+source_file() {
+    if [ -n "${GAME_DETECTOR_SOURCE:-}" ] && [ -r "$GAME_DETECTOR_SOURCE" ]; then printf '%s' "$GAME_DETECTOR_SOURCE"; return; fi
+    for F in "$DATA_ROOT/dumpsys.activity" "$DATA_ROOT/dumpsys_activity" "$DATA_ROOT/activity" "$DATA_ROOT/dumpsys.window" "$DATA_ROOT/dumpsys_window" "$DATA_ROOT/window" "$DATA_ROOT/dumpsys.top" "$DATA_ROOT/dumpsys_top" "$DATA_ROOT/top"; do
+        [ -r "$F" ] && { printf '%s' "$F"; return; }
+    done
+    printf '%s' ''
+}
+
+active_package() {
+    if [ -n "${GAME_DETECTOR_ACTIVE_FILE:-}" ] && [ -r "$GAME_DETECTOR_ACTIVE_FILE" ]; then
+        cat "$GAME_DETECTOR_ACTIVE_FILE" 2>/dev/null | axgo_extract_package | head -n 1
+        return
+    fi
+    FILE="$(source_file)"
+    if [ -n "$FILE" ]; then
+        cat "$FILE" 2>/dev/null | axgo_extract_package | head -n 1
+        return
+    fi
+    axgo_foreground_package
+}
+
+print_identity() {
+    PKG="$1"
+    [ -n "$PKG" ] || PKG=UNKNOWN
+    if ! valid_package "$PKG" 2>/dev/null; then PKG=UNKNOWN; fi
+    NAME=UNKNOWN
+    PROFILE=DEFAULT_SAFE
+    if [ "$PKG" != UNKNOWN ]; then
+        while IFS='|' read -r IPKG IPROFILE; do
+            [ "$IPKG" = "$PKG" ] && { PROFILE="$IPROFILE"; break; }
+        done <<EOF
+$(index_pairs)
+EOF
+        [ "$PROFILE" != DEFAULT_SAFE ] && NAME="$PROFILE"
+    fi
+    echo "GAME: $NAME"
+    echo "PACKAGE: $PKG"
+    echo "PROFILE: $PROFILE"
+}
+
+case "${1:-identify}" in
+    list)
+        [ "$#" -eq 1 ] || exit 2
+        echo 'VERIFIED GAME PACKAGES'
+        echo '======================='
+        PAIRS="$(index_pairs)"
+        if [ -n "$PAIRS" ]; then
+            printf '%s\n' "$PAIRS" | while IFS='|' read -r PKG PID; do echo "$PKG -> $PID"; done
+        else
+            echo 'NONE'
+        fi
+        ;;
+    active|identify)
+        [ "$#" -eq 1 ] || exit 2
+        print_identity "$(active_package)"
+        ;;
+    package)
+        [ "$#" -eq 2 ] || { echo 'Usage: game-detector package <package>' >&2; exit 2; }
+        print_identity "$2"
+        ;;
+    *)
+        echo 'Usage: game-detector list|active|package <package>|identify' >&2
+        exit 2
+        ;;
+esac

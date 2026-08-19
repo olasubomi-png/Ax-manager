@@ -1,0 +1,14 @@
+{
+  "id": "example-cool",
+  "name": "Example Cool",
+  "packages": [],
+  "enabled": true,
+  "example": true,
+  "description": "Example policy only; prioritizes temperature without claiming game optimization.",
+  "display": { "targetFps": "AUTO", "preferredRefreshRate": "AUTO" },
+  "performance": { "mode": "COOL" },
+  "thermal": { "maxPolicy": "CONSERVATIVE" },
+  "memory": { "policy": "BALANCED" },
+  "gpu": { "policy": "CONSERVATIVE" },
+  "cpu": { "policy": "CONSERVATIVE" }
+}

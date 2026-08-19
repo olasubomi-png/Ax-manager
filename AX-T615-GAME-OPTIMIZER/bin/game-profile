@@ -1,0 +1,187 @@
+#!/usr/bin/env sh
+set -u
+
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname "$0")" 2>/dev/null && pwd)"
+AXGO_ROOT="${AXGO_ROOT:-$(CDPATH= cd -- "$SCRIPT_DIR/.." 2>/dev/null && pwd)}"
+. "$AXGO_ROOT/bin/lib"
+DATA_ROOT="${GAME_PROFILE_DATA_ROOT:-${GAME_DATA_ROOT:-${AXGO_DATA_ROOT:-$AXGO_ROOT}}}"
+PROFILE_DIR="${GAME_PROFILE_DIR:-$AXGO_ROOT/config/game-profiles}"
+INDEX_FILE="$PROFILE_DIR/index.json"
+POLICY_FILE="${GAME_PROFILE_POLICY_FILE:-$AXGO_ROOT/config/game-profile-policy.json}"
+RUNTIME_DIR="${GAME_PROFILE_RUNTIME_DIR:-$DATA_ROOT/runtime/game-profile}"
+OVERRIDE_FILE="$RUNTIME_DIR/override"
+mkdir -p "$RUNTIME_DIR" 2>/dev/null || :
+
+upper() { printf '%s' "$1" | tr '[:lower:]' '[:upper:]'; }
+lower() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]'; }
+json_value() { KEY="$1"; FILE="$2"; sed -n "s/.*\"$KEY\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p; s/.*\"$KEY\"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p" "$FILE" 2>/dev/null | head -n 1; }
+json_bool() { KEY="$1"; FILE="$2"; sed -n "s/.*\"$KEY\"[[:space:]]*:[[:space:]]*\(true\|false\).*/\1/p" "$FILE" 2>/dev/null | head -n 1; }
+valid_package() { printf '%s\n' "$1" | awk '/^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z][A-Za-z0-9_]*)+$/ { ok=1 } END { exit(ok ? 0 : 1) }'; }
+valid_id() { printf '%s\n' "$1" | grep -Eq '^[a-z0-9][a-z0-9-]*$'; }
+valid_target() { case "$(upper "$1")" in AUTO|UNKNOWN) return 0 ;; 30|40|45|60|90|120) return 0 ;; *) return 1 ;; esac; }
+valid_mode() { case "$(upper "$1")" in BATTERY|COOL|BALANCED|PERFORMANCE|COMPETITIVE) return 0 ;; *) return 1 ;; esac; }
+valid_thermal() { case "$(upper "$1")" in CONSERVATIVE|BALANCED|COOL|UNKNOWN) return 0 ;; *) return 1 ;; esac; }
+valid_policy() { case "$(upper "$1")" in BALANCED|CONSERVATIVE|BOOST_ALLOWED|UNKNOWN) return 0 ;; *) return 1 ;; esac; }
+profile_files() { find "$PROFILE_DIR" -maxdepth 1 -type f -name '*.json' ! -name 'index.json' 2>/dev/null | sort; }
+
+packages_from_file() {
+    FILE="$1"
+    awk '
+      /"packages"[[:space:]]*:/ { inside=1; line=$0; sub(/^.*\[[[:space:]]*/,"",line) }
+      inside {
+        while (match(line,/"[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z][A-Za-z0-9_]*)+"/)) {
+          v=substr(line,RSTART+1,RLENGTH-2); print v; line=substr(line,RSTART+RLENGTH)
+        }
+        if (index($0,"]")) exit
+      }
+    ' "$FILE" 2>/dev/null
+}
+
+validate_profile_file() {
+    FILE="$1"; ERR=0
+    [ -r "$FILE" ] || { echo "INVALID: $FILE (unreadable)"; return 1; }
+    grep -Eq '^\{[[:space:]]*$|^\{.*\}[[:space:]]*$' "$FILE" || { echo "INVALID: $FILE (not JSON object)"; ERR=1; }
+    if grep -Eq '"(command|commands|script|exec|shell|sysfs|procfs|path|sql|javascript|python)"[[:space:]]*:' "$FILE"; then echo "INVALID: $FILE (forbidden executable/data field)"; ERR=1; fi
+    if grep -Eq '(^|[[:space:]])(eval|system|sh|bash|setprop|sysctl|settings[[:space:]]+put|kill|pkill|am[[:space:]]+force-stop)([[:space:]]|$)|/proc|/sys|\$\(|`' "$FILE"; then echo "INVALID: $FILE (unsafe execution or hardware path token)"; ERR=1; fi
+    ID="$(json_value id "$FILE")"; NAME="$(json_value name "$FILE")"; ENABLED="$(json_bool enabled "$FILE")"; MODE="$(json_value mode "$FILE")"; TARGET="$(json_value targetFps "$FILE")"; REFRESH="$(json_value preferredRefreshRate "$FILE")"; THERMAL="$(json_value maxPolicy "$FILE")"; MEMORY="$(json_value policy "$FILE")"
+    for REQUIRED in "$ID" "$NAME" "$ENABLED" "$MODE" "$TARGET" "$REFRESH" "$THERMAL" "$MEMORY"; do [ -n "$REQUIRED" ] || ERR=1; done
+    valid_id "$ID" || { echo "INVALID: $FILE (invalid id)"; ERR=1; }
+    [ -n "$NAME" ] || { echo "INVALID: $FILE (missing name)"; ERR=1; }
+    case "$ENABLED" in true|false) ;; *) echo "INVALID: $FILE (invalid enabled)"; ERR=1 ;; esac
+    valid_mode "$MODE" || { echo "INVALID: $FILE (invalid performance mode)"; ERR=1; }
+    valid_target "$TARGET" || { echo "INVALID: $FILE (invalid FPS target)"; ERR=1; }
+    valid_target "$REFRESH" || { echo "INVALID: $FILE (invalid refresh target)"; ERR=1; }
+    valid_thermal "$THERMAL" || { echo "INVALID: $FILE (invalid thermal policy)"; ERR=1; }
+    valid_policy "$MEMORY" || { echo "INVALID: $FILE (invalid memory policy)"; ERR=1; }
+    while IFS= read -r POLICY_VALUE; do [ -z "$POLICY_VALUE" ] || valid_policy "$POLICY_VALUE" || { echo "INVALID: $FILE (invalid CPU/GPU/memory policy $POLICY_VALUE)"; ERR=1; }; done <<EOF
+$(sed -n 's/.*"policy"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$FILE" 2>/dev/null)
+EOF
+    while IFS= read -r PKG; do [ -z "$PKG" ] || valid_package "$PKG" || { echo "INVALID: $FILE (invalid package $PKG)"; ERR=1; }; done <<EOF
+$(packages_from_file "$FILE")
+EOF
+    [ "$ERR" -eq 0 ]
+}
+
+profile_id() { json_value id "$1"; }
+profile_by_id() { TARGET="$1"; for F in $(profile_files); do [ "$(profile_id "$F")" = "$TARGET" ] && { printf '%s' "$F"; return 0; }; done; return 1; }
+index_profile() {
+    TARGET="$1"; [ -r "$INDEX_FILE" ] || return 1
+    sed -n "s/.*\"$TARGET\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p" "$INDEX_FILE" 2>/dev/null | head -n 1
+}
+profile_for_target() {
+    TARGET="$1"; FOUND=""
+    [ -z "$TARGET" ] && TARGET=default-safe
+    INDEX_ID="$(index_profile "$TARGET")"; [ -n "$INDEX_ID" ] && FOUND="$(profile_by_id "$INDEX_ID" 2>/dev/null || :)"
+    [ -z "$FOUND" ] && FOUND="$(profile_by_id "$TARGET" 2>/dev/null || :)"
+    if [ -z "$FOUND" ]; then
+        for F in $(profile_files); do
+            ID="$(profile_id "$F")"; NAME="$(json_value name "$F")"
+            [ "$(lower "$ID")" = "$(lower "$TARGET")" ] || [ "$(lower "$NAME")" = "$(lower "$TARGET")" ] || [ "$(basename "$F" .json)" = "$(lower "$TARGET")" ] || [ "$(basename "$F" .json)" = "example-$(lower "$TARGET")" ] || continue
+            FOUND="$F"; break
+        done
+    fi
+    [ -n "$FOUND" ] && { printf '%s' "$FOUND"; return 0; }
+    printf '%s' "$PROFILE_DIR/default-safe.json"
+}
+load_profile() {
+    FILE="$1"; [ -r "$FILE" ] || FILE="$PROFILE_DIR/default-safe.json"
+    PROFILE_FILE="$FILE"; PROFILE_ID="$(json_value id "$FILE")"; PROFILE_NAME="$(json_value name "$FILE")"; PROFILE_MODE="$(upper "$(json_value mode "$FILE")")"; TARGET_FPS="$(json_value targetFps "$FILE")"; PREFERRED_REFRESH="$(json_value preferredRefreshRate "$FILE")"; MAX_THERMAL="$(upper "$(json_value maxPolicy "$FILE")")"; MEMORY_POLICY="$(upper "$(json_value policy "$FILE")")"; PROFILE_ENABLED="$(json_bool enabled "$FILE")"; [ -n "$PROFILE_MODE" ] || PROFILE_MODE=BALANCED; [ -n "$TARGET_FPS" ] || TARGET_FPS=AUTO; [ -n "$PREFERRED_REFRESH" ] || PREFERRED_REFRESH=AUTO; [ -n "$MAX_THERMAL" ] || MAX_THERMAL=CONSERVATIVE
+}
+
+controller_value() { CMD="$1"; LABEL="$2"; OUT="$(AXGO_DATA_ROOT="$DATA_ROOT" THERMAL_DATA_ROOT="$DATA_ROOT" MEMORY_DATA_ROOT="$DATA_ROOT" CPU_DATA_ROOT="$DATA_ROOT" GPU_DATA_ROOT="$DATA_ROOT" sh "$AXGO_ROOT/bin/$CMD" 2>/dev/null || :)"; printf '%s\n' "$OUT" | sed -n "s/^$LABEL[[:space:]]*:[[:space:]]*//p" | head -n 1; }
+read_telemetry() {
+    THERMAL_STATE="${GAME_PROFILE_THERMAL_STATE:-$(controller_value thermal-controller 'Thermal state')}"; [ -n "$THERMAL_STATE" ] || THERMAL_STATE="${GAME_PROFILE_THERMAL_STATE:-UNKNOWN}"; THERMAL_STATE="$(upper "$THERMAL_STATE")"
+    MEMORY_STATE="${GAME_PROFILE_MEMORY_STATE:-$(controller_value memory-controller 'Memory state')}"; [ -n "$MEMORY_STATE" ] || MEMORY_STATE="${GAME_PROFILE_MEMORY_STATE:-UNKNOWN}"; MEMORY_STATE="$(upper "$MEMORY_STATE")"
+    GPU_STATE="${GAME_PROFILE_GPU_STATE:-$(controller_value gpu-controller 'GPU state')}"; [ -n "$GPU_STATE" ] || GPU_STATE="${GAME_PROFILE_GPU_STATE:-UNKNOWN}"; GPU_STATE="$(upper "$GPU_STATE")"
+    CPU_STATE="${GAME_PROFILE_CPU_STATE:-$(controller_value cpu-controller 'CPU state')}"; [ -n "$CPU_STATE" ] || CPU_STATE="${GAME_PROFILE_CPU_STATE:-UNKNOWN}"; CPU_STATE="$(upper "$CPU_STATE")"
+    DISPLAY_RESOLUTION="${GAME_PROFILE_DISPLAY_RESOLUTION:-UNKNOWN}"; DISPLAY_REFRESH="${GAME_PROFILE_DISPLAY_REFRESH:-UNKNOWN}"
+    if [ "$DISPLAY_RESOLUTION" = UNKNOWN ]; then OUT="$(DISPLAY_DATA_ROOT="$DATA_ROOT" sh "$AXGO_ROOT/bin/display-controller" status 2>/dev/null || :)"; DISPLAY_RESOLUTION="$(printf '%s\n' "$OUT" | sed -n 's/^Resolution: //p' | head -n 1)"; DISPLAY_REFRESH="$(printf '%s\n' "$OUT" | sed -n 's/^Current refresh rate: //p' | head -n 1)"; fi
+    [ -n "$DISPLAY_RESOLUTION" ] || DISPLAY_RESOLUTION=UNKNOWN; [ -n "$DISPLAY_REFRESH" ] || DISPLAY_REFRESH=UNKNOWN
+    FPS_STATE="${GAME_PROFILE_FPS_STATE:-${FPS_PERFORMANCE_CLASS:-UNKNOWN}}"; [ -n "$FPS_STATE" ] || FPS_STATE=UNKNOWN; FPS_STATE="$(upper "$FPS_STATE")"
+}
+
+mode_rank() { case "$1" in PERFORMANCE_BLOCKED) echo 5 ;; CONSERVATIVE) echo 4 ;; COOL) echo 3 ;; BALANCED) echo 2 ;; BATTERY) echo 1 ;; PERFORMANCE|COMPETITIVE) echo 0 ;; *) echo 4 ;; esac; }
+step_recovery_mode() { CURRENT_MODE="$1"; DESIRED_MODE="$2"; case "$CURRENT_MODE" in PERFORMANCE_BLOCKED) echo CONSERVATIVE ;; CONSERVATIVE) echo COOL ;; COOL) echo BALANCED ;; BALANCED) case "$DESIRED_MODE" in PERFORMANCE|COMPETITIVE) echo "$DESIRED_MODE" ;; *) echo BATTERY ;; esac ;; BATTERY) echo "$DESIRED_MODE" ;; *) echo "$DESIRED_MODE" ;; esac; }
+state_value() { KEY="$1"; FILE="$2"; sed -n "s/^$KEY=//p" "$FILE" 2>/dev/null | head -n 1; }
+final_recommendation() {
+    FINAL_MODE="$PROFILE_MODE"; REASON="Configured profile policy is applicable."
+    case "$THERMAL_STATE" in CRITICAL) FINAL_MODE=PERFORMANCE_BLOCKED; REASON="Critical thermal state overrides the profile." ;; THROTTLED|HOT) FINAL_MODE=COOL; REASON="Thermal throttling moves the profile toward COOL." ;; CAUTION) case "$FINAL_MODE" in PERFORMANCE|COMPETITIVE) FINAL_MODE=BALANCED; REASON="Thermal caution reduces the performance policy." ;; esac ;; UNKNOWN) FINAL_MODE=CONSERVATIVE; REASON="Unknown thermal state fails safe." ;; esac
+    case "$MEMORY_STATE" in CRITICAL) FINAL_MODE=PERFORMANCE_BLOCKED; REASON="Critical memory state overrides the profile." ;; HIGH_PRESSURE) FINAL_MODE=CONSERVATIVE; REASON="High memory pressure moves the profile toward CONSERVATIVE." ;; PRESSURE) case "$FINAL_MODE" in PERFORMANCE|COMPETITIVE) FINAL_MODE=BALANCED; REASON="Memory pressure limits the performance policy to BALANCED." ;; esac ;; UNKNOWN) FINAL_MODE=CONSERVATIVE; REASON="Unknown memory state fails safe." ;; esac
+    case "$FPS_STATE" in UNSTABLE|POOR|CRITICAL) case "$FINAL_MODE" in PERFORMANCE|COMPETITIVE) FINAL_MODE=BALANCED; REASON="Unstable FPS requires bottleneck analysis before increasing performance." ;; esac ;; esac
+}
+apply_hysteresis() {
+    DESIRED="$FINAL_MODE"; CURRENT="$(state_value mode "$RUNTIME_DIR/mode.state")"; RECOVERY="$(state_value recovery "$RUNTIME_DIR/mode.state")"; TRANSITIONS="$(state_value transitions "$RUNTIME_DIR/mode.state")"; [ -n "$RECOVERY" ] || RECOVERY=0; [ -n "$TRANSITIONS" ] || TRANSITIONS=0
+    [ -n "$CURRENT" ] || { CURRENT="$DESIRED"; TRANSITIONS=0; RECOVERY=0; }
+    CURRENT_RANK="$(mode_rank "$CURRENT")"; DESIRED_RANK="$(mode_rank "$DESIRED")"; STABLE="${GAME_PROFILE_STABLE_RECOVERY_SAMPLES:-3}"
+    case "$STABLE" in ''|*[!0-9]*|0) STABLE=3 ;; esac
+    if [ "$DESIRED_RANK" -gt "$CURRENT_RANK" ]; then CURRENT="$DESIRED"; RECOVERY=0; TRANSITIONS=$((TRANSITIONS + 1));
+    elif [ "$DESIRED" = "$CURRENT" ]; then RECOVERY=0;
+    else RECOVERY=$((RECOVERY + 1)); if [ "$RECOVERY" -ge "$STABLE" ]; then NEXT="$(step_recovery_mode "$CURRENT" "$DESIRED")"; CURRENT="$NEXT"; RECOVERY=0; TRANSITIONS=$((TRANSITIONS + 1)); fi; fi
+    printf 'mode=%s\nrecovery=%s\ntransitions=%s\n' "$CURRENT" "$RECOVERY" "$TRANSITIONS" > "$RUNTIME_DIR/mode.state"
+    [ "$CURRENT" = "$DESIRED" ] || REASON="$REASON Hysteresis holds recovery at $CURRENT until stable samples complete."
+    FINAL_MODE="$CURRENT"
+}
+print_profile() {
+    echo 'AX GAME PROFILE'; echo '==============='; echo; echo "Game: ${PROFILE_NAME:-UNKNOWN}"; echo "Package: ${PROFILE_PACKAGE:-UNKNOWN}"; echo "Profile: ${PROFILE_MODE:-BALANCED}"; echo "Display: ${DISPLAY_RESOLUTION:-UNKNOWN}"; echo "Refresh: ${DISPLAY_REFRESH:-UNKNOWN}"; echo "FPS target: ${TARGET_FPS:-AUTO}"; echo "Thermal: ${THERMAL_STATE:-UNKNOWN}"; echo "Memory: ${MEMORY_STATE:-UNKNOWN}"; echo "GPU: ${GPU_STATE:-UNKNOWN}"; echo "CPU: ${CPU_STATE:-UNKNOWN}"; echo "Final recommendation: ${FINAL_MODE:-BALANCED}"; echo "Reason: ${REASON:-Unknown-safe policy}"; echo 'No hardware settings were changed.'
+}
+
+validate_all() {
+    ERR=0; IDS=""
+    for F in $(profile_files); do
+        ID="$(profile_id "$F")"; if [ -z "$ID" ]; then ERR=1; else case " $IDS " in *" $ID "*) echo "INVALID: duplicate profile id $ID"; ERR=1 ;; *) IDS="$IDS $ID" ;; esac; fi
+        validate_profile_file "$F" || ERR=1
+    done
+    [ -r "$INDEX_FILE" ] || { echo "INVALID: missing index.json"; ERR=1; }
+    if [ "$ERR" -eq 0 ]; then echo 'PROFILE VALIDATION: PASS'; echo "Profiles: $(printf '%s\n' "$IDS" | awk '{print NF}')"; return 0; fi
+    echo 'PROFILE VALIDATION: FAIL'; return 1
+}
+
+list_profiles() {
+    echo 'AX GAME PROFILES'; echo '================';
+    for F in $(profile_files); do echo "$(profile_id "$F") | $(json_value name "$F") | $(upper "$(json_value mode "$F")") | packages=$(packages_from_file "$F" | tr '\n' ',')"; done
+}
+
+create_profile() {
+    GAME="$1"; ID="$(printf '%s' "$GAME" | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9' '-' | sed 's/^-//;s/-$//')"; [ -n "$ID" ] || { echo 'Cannot create a profile from an empty game name.' >&2; return 1; }; FILE="$PROFILE_DIR/$ID.json"; [ ! -e "$FILE" ] || { echo "Profile already exists: $ID"; return 1; }; printf '%s\n' '{' "  \"id\": \"$ID\"," "  \"name\": \"$GAME\"," '  "packages": [],' '  "enabled": true,' '  "example": false,' '  "display": { "targetFps": "AUTO", "preferredRefreshRate": "AUTO" },' '  "performance": { "mode": "BALANCED" },' '  "thermal": { "maxPolicy": "CONSERVATIVE" },' '  "memory": { "policy": "BALANCED" },' '  "gpu": { "policy": "BALANCED" },' '  "cpu": { "policy": "BALANCED" }' '}' > "$FILE"; echo "Created data-only profile: $FILE"; echo 'No package was added because no package was verified.'
+}
+
+recommend_for() {
+    TARGET="$1"; OVERRIDE="$(cat "$OVERRIDE_FILE" 2>/dev/null || :)"; [ -n "$OVERRIDE" ] && TARGET="$OVERRIDE"
+    FILE="$(profile_for_target "$TARGET")"; load_profile "$FILE"; PROFILE_PACKAGE=UNKNOWN; valid_package "$TARGET" 2>/dev/null && PROFILE_PACKAGE="$TARGET"; read_telemetry; final_recommendation; apply_hysteresis; print_profile
+}
+
+auto_profile() { PKG="$(GAME_DETECTOR_DATA_ROOT="$DATA_ROOT" GAME_PROFILE_DIR="$PROFILE_DIR" sh "$AXGO_ROOT/bin/game-detector" active 2>/dev/null | sed -n 's/^PACKAGE:[[:space:]]*//p' | head -n 1)"; [ -n "$PKG" ] || PKG=UNKNOWN; echo 'AX AUTO GAME PROFILE'; echo '===================='; echo; echo "Detected: ${PKG:-UNKNOWN}"; echo; recommend_for "$PKG"; }
+
+session_start() {
+    TARGET="${1:-$(GAME_DETECTOR_DATA_ROOT="$DATA_ROOT" GAME_PROFILE_DIR="$PROFILE_DIR" sh "$AXGO_ROOT/bin/game-detector" active 2>/dev/null | sed -n 's/^PACKAGE:[[:space:]]*//p' | head -n 1)}"; [ -n "$TARGET" ] || TARGET=UNKNOWN
+    printf 'target=%s\nstarted=%s\n' "$TARGET" "$(date '+%s' 2>/dev/null || echo 0)" > "$RUNTIME_DIR/session.state"
+    rm -f "$RUNTIME_DIR/mode.state" "$RUNTIME_DIR/interventions.state" 2>/dev/null || :
+    echo 'GAME PROFILE SESSION START'; echo '=========================='; echo "Detected package: $TARGET"; recommend_for "$TARGET"; echo 'Session monitoring: ENABLED';
+}
+session_sample() {
+    TARGET="$(state_value target "$RUNTIME_DIR/session.state")"; [ -n "$TARGET" ] || TARGET=UNKNOWN; recommend_for "$TARGET"; printf '%s|%s|%s|%s\n' "$(date '+%s' 2>/dev/null || echo 0)" "$FINAL_MODE" "$THERMAL_STATE" "$MEMORY_STATE" >> "$RUNTIME_DIR/session.samples" 2>/dev/null || :
+}
+session_stop() {
+    TARGET="$(state_value target "$RUNTIME_DIR/session.state")"; [ -n "$TARGET" ] || TARGET=UNKNOWN; STARTED="$(state_value started "$RUNTIME_DIR/session.state")"; NOW="$(date '+%s' 2>/dev/null || echo 0)"; DURATION=UNKNOWN; case "$STARTED:$NOW" in *[!0-9:]*|:) ;; *) DURATION=$((NOW-STARTED))s ;; esac
+    recommend_for "$TARGET" >/tmp/ax-game-profile-stop.$$ 2>/dev/null || :; REPORT="/tmp/ax-game-profile-stop.$$"; MODE_TRANSITIONS="$(state_value transitions "$RUNTIME_DIR/mode.state")"; [ -n "$MODE_TRANSITIONS" ] || MODE_TRANSITIONS=0
+    echo 'GAME PERFORMANCE REPORT'; echo '======================='; echo "Game: $PROFILE_NAME"; echo "Package: $PROFILE_PACKAGE"; echo "Profile: $PROFILE_MODE"; echo "Duration: $DURATION"; echo "Target FPS: $TARGET_FPS"; echo 'Average FPS: UNKNOWN'; echo 'Minimum FPS: UNKNOWN'; echo 'FPS P95: UNKNOWN'; echo 'Frame pacing: UNKNOWN'; echo 'Peak temperature: UNKNOWN'; echo 'Minimum available RAM: UNKNOWN'; echo "GPU state: $GPU_STATE"; echo "CPU state: $CPU_STATE"; echo "Performance mode: $FINAL_MODE"; echo "Mode transitions: $MODE_TRANSITIONS"; echo 'Thermal interventions: 0'; echo 'Memory interventions: 0'; echo 'Bottleneck: UNKNOWN'; echo 'Confidence: LOW'; echo 'No hardware settings were changed by Step 9.'
+    rm -f "$RUNTIME_DIR/session.state" "$RUNTIME_DIR/session.samples" "$RUNTIME_DIR/mode.state" "$RUNTIME_DIR/interventions.state" "$REPORT" 2>/dev/null || :
+}
+
+case "${1:-list}" in
+    list) [ "$#" -eq 1 ] || exit 2; list_profiles ;;
+    show) [ "$#" -eq 2 ] || { echo 'Usage: game-profile show <game>' >&2; exit 2; }; FILE="$(profile_for_target "$2")"; load_profile "$FILE"; PROFILE_PACKAGE="$2"; read_telemetry; FINAL_MODE="$PROFILE_MODE"; REASON='Profile data only; no recommendation override was applied.'; print_profile ;;
+    detect) [ "$#" -eq 2 ] || { echo 'Usage: game-profile detect <package>' >&2; exit 2; }; PKG="$2"; PROFILE_ID_VALUE="$(index_profile "$PKG" 2>/dev/null || :)"; [ -n "$PROFILE_ID_VALUE" ] || PROFILE_ID_VALUE=DEFAULT_SAFE; echo "Package: $PKG"; echo "Profile: $PROFILE_ID_VALUE"; [ "$PROFILE_ID_VALUE" = DEFAULT_SAFE ] && echo 'Unknown package: using ephemeral DEFAULT_SAFE.' ;;
+    create) [ "$#" -eq 2 ] || { echo 'Usage: game-profile create <game>' >&2; exit 2; }; create_profile "$2" ;;
+    validate) [ "$#" -eq 1 ] || exit 2; validate_all ;;
+    recommend) [ "$#" -eq 2 ] || { echo 'Usage: game-profile recommend <game>' >&2; exit 2; }; recommend_for "$2" ;;
+    auto) [ "$#" -eq 1 ] || exit 2; auto_profile ;;
+    use) [ "$#" -eq 2 ] || { echo 'Usage: game-profile use <profile>' >&2; exit 2; }; FILE="$(profile_for_target "$2")"; [ -r "$FILE" ] || exit 1; validate_profile_file "$FILE" >/dev/null || exit 1; printf '%s\n' "$(profile_id "$FILE")" > "$OVERRIDE_FILE"; echo "Temporary profile override: $(profile_id "$FILE")"; echo 'The override applies only to the current session.' ;;
+    clear) [ "$#" -eq 1 ] || exit 2; rm -f "$OVERRIDE_FILE" 2>/dev/null || :; echo 'Temporary profile override cleared.' ;;
+    session-start|game-start) [ "$#" -le 2 ] || exit 2; session_start "${2:-}" ;;
+    session-sample|sample) [ "$#" -eq 1 ] || exit 2; session_sample ;;
+    session-stop|game-stop) [ "$#" -eq 1 ] || exit 2; session_stop ;;
+    export) [ "$#" -eq 1 ] || exit 2; for F in $(profile_files); do cat "$F"; echo; done ;;
+    import) [ "$#" -le 2 ] || exit 2; FILE="${2:-${GAME_PROFILE_IMPORT_FILE:-}}"; [ -r "$FILE" ] || { echo 'Import source is unavailable.' >&2; exit 1; }; validate_profile_file "$FILE" >/dev/null || { echo 'Import rejected: profile validation failed.' >&2; exit 1; }; ID="$(profile_id "$FILE")"; cp "$FILE" "$PROFILE_DIR/$ID.json"; echo "Imported data-only profile: $ID" ;;
+    *) echo 'Usage: game-profile list|show <game>|detect <package>|create <game>|validate|recommend <game>|auto|use <profile>|clear|session-start|session-sample|session-stop|export|import [file]' >&2; exit 2 ;;
+esac

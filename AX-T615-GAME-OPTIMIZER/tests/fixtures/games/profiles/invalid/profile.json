@@ -1,0 +1,12 @@
+{
+  "id": "fixture-invalid",
+  "name": "Fixture Invalid",
+  "packages": ["not-a-package"],
+  "enabled": true,
+  "display": { "targetFps": 77, "preferredRefreshRate": "AUTO" },
+  "performance": { "mode": "TURBO" },
+  "thermal": { "maxPolicy": "UNSAFE" },
+  "memory": { "policy": "BALANCED" },
+  "gpu": { "policy": "BALANCED" },
+  "cpu": { "policy": "BALANCED" }
+}

@@ -1,0 +1,12 @@
+{
+  "id": "fixture-balanced",
+  "name": "Fixture Balanced",
+  "packages": [],
+  "enabled": true,
+  "display": { "targetFps": "AUTO", "preferredRefreshRate": "AUTO" },
+  "performance": { "mode": "BALANCED" },
+  "thermal": { "maxPolicy": "CONSERVATIVE" },
+  "memory": { "policy": "BALANCED" },
+  "gpu": { "policy": "BALANCED" },
+  "cpu": { "policy": "BALANCED" }
+}

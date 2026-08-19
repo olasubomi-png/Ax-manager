@@ -28,7 +28,29 @@ case "$COMMAND" in
         ;;
     game)
         shift
-        exec sh "$SCRIPT_DIR/game-manager" "${1:-status}"
+        case "${1:-status}" in
+            detect)
+                shift
+                if [ "$#" -eq 1 ]; then
+                    exec sh "$SCRIPT_DIR/game-detector" package "$1"
+                fi
+                exec sh "$SCRIPT_DIR/game-detector" identify
+                ;;
+            active)
+                [ "$#" -eq 1 ] || { echo "Usage: axgo game active" >&2; exit 2; }
+                exec sh "$SCRIPT_DIR/game-detector" active
+                ;;
+            profile)
+                shift
+                if [ "$#" -eq 0 ]; then
+                    exec sh "$SCRIPT_DIR/game-profile" list
+                fi
+                exec sh "$SCRIPT_DIR/game-profile" "$@"
+                ;;
+            *)
+                exec sh "$SCRIPT_DIR/game-manager" "${1:-status}"
+                ;;
+        esac
         ;;
     profile)
         shift
@@ -134,7 +156,7 @@ case "$COMMAND" in
         exec sh "$SCRIPT_DIR/cpu-reset"
         ;;
     *)
-        echo "Usage: axgo {status|detect|capabilities [--save]|cpu [status|inspect|dry-run|apply <profile>|restore|reset]|gpu [status|inspect|capabilities|dry-run [cool|balanced|performance]|apply <profile>|restore|reset|info]|display [status|inspect|refresh|modes]|fps [status|inspect|monitor|analyze|session-start|session-stop|report|recommend]|performance [analyze]|memory [status|inspect|pressure|zram|swap|monitor [--interval seconds]|dry-run|guard [status|check|recommend]|performance [status|check|recommend|game-start [game]|game-stop]]|games|game {status|detect|start|stop|current}|profile [get|set <profile>]|session [start|stop|status|current]|recovery [status|reset]|thermal [status|inspect|monitor|dry-run|guard [status|check|recommend|game-start|game-stop]]|gaming|reset}"
+        echo "Usage: axgo {status|detect|capabilities [--save]|cpu [status|inspect|dry-run|apply <profile>|restore|reset]|gpu [status|inspect|capabilities|dry-run [cool|balanced|performance]|apply <profile>|restore|reset|info]|display [status|inspect|refresh|modes]|fps [status|inspect|monitor|analyze|session-start|session-stop|report|recommend]|performance [analyze]|memory [status|inspect|pressure|zram|swap|monitor [--interval seconds]|dry-run|guard [status|check|recommend]|performance [status|check|recommend|game-start [game]|game-stop]]|games|game {status|detect|active|start|stop|current|profile [list|show <game>|recommend <game>|validate|auto|use <profile>|clear]}|profile [get|set <profile>]|session [start|stop|status|current]|recovery [status|reset]|thermal [status|inspect|monitor|dry-run|guard [status|check|recommend|game-start|game-stop]]|gaming|reset}"
         exit 2
         ;;
 esac

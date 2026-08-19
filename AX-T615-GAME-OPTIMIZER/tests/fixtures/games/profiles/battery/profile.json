@@ -1,0 +1,12 @@
+{
+  "id": "fixture-battery",
+  "name": "Fixture Battery",
+  "packages": [],
+  "enabled": true,
+  "display": { "targetFps": "AUTO", "preferredRefreshRate": "AUTO" },
+  "performance": { "mode": "BATTERY" },
+  "thermal": { "maxPolicy": "CONSERVATIVE" },
+  "memory": { "policy": "BALANCED" },
+  "gpu": { "policy": "BALANCED" },
+  "cpu": { "policy": "BALANCED" }
+}

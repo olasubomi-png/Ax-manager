@@ -1,0 +1,12 @@
+{
+  "id": "fixture-competitive",
+  "name": "Fixture Competitive",
+  "packages": [],
+  "enabled": true,
+  "display": { "targetFps": 90, "preferredRefreshRate": "AUTO" },
+  "performance": { "mode": "COMPETITIVE" },
+  "thermal": { "maxPolicy": "CONSERVATIVE" },
+  "memory": { "policy": "BALANCED" },
+  "gpu": { "policy": "BOOST_ALLOWED" },
+  "cpu": { "policy": "BOOST_ALLOWED" }
+}

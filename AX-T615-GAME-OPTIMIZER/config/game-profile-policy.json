@@ -1,0 +1,11 @@
+{
+  "transition_delay_seconds": 10,
+  "stable_recovery_samples": 3,
+  "minimum_mode_duration_seconds": 15,
+  "thermal_recovery_delay_seconds": 10,
+  "memory_recovery_delay_seconds": 10,
+  "read_only": true,
+  "allow_hardware_writes": false,
+  "modes": ["BATTERY", "COOL", "BALANCED", "PERFORMANCE", "COMPETITIVE"],
+  "fps_targets": [30, 40, 45, 60, 90, 120]
+}
