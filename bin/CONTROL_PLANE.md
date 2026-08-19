@@ -53,3 +53,9 @@ The control plane accepts component output only when its object structure, read-
 ## Explicitly unavailable capabilities
 
 The control plane cannot write `/proc` or `/sys`, alter CPU/GPU governor or frequency state, modify Android properties, charging, thermal policy, memory/ZRAM/swap, LMK/OOM, display state, games, or files outside its bounded simulation audit. It does not stop processes, invoke network operations, use `eval`, execute plugin metadata, dynamically dispatch to caller-provided paths, or create a rollback/apply path.
+
+## Final v1.0 release boundary
+
+The final release preserves the Control Plane as a read-only composition surface. Its public operation set is immutable: `status`, `snapshot`, `evaluate`, `simulate`, and `capabilities`. `simulate` remains an Action Safety Gate delegation that can yield only a bounded simulation record; it cannot become a real action, hardware change, rollback, profile change, process action, or browser control.
+
+For the product release declaration, see [`../RELEASE.md`](../RELEASE.md). The complete platform safety model is [`../SAFETY-MODEL.md`](../SAFETY-MODEL.md).

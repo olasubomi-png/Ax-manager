@@ -105,3 +105,13 @@
 - [x] Run shell and browser syntax checks, the security audit, adversarial and compatibility tests, plugin, evidence, policy, action-gate, control-plane, dashboard tests, and the complete project regression.
 - [x] Remove generated state, complete static scans and source-diff review, then verify the final simulation-only and no-control security invariants.
 - [x] Commit `security: harden vegas-inject production boundaries`, push to `origin/main`, and verify clean synchronization.
+
+## Phase 12 — Final Release, Documentation & Verification
+
+- [x] Audit the final repository baseline, required executables, permissions, registry and metadata declarations, configuration, dashboard, documentation, security audit, compatibility surfaces, and release verification matrix.
+- [x] Verify all fixed public VEGAS CLI and AX-T615 compatibility routes, plugin validation, dashboard snapshot export, simulation boundary records, and required no-control safety invariants from a clean baseline.
+- [x] Finalize product, architecture, AX-T615, plugin, dashboard, safety-model, security-audit, and release documentation; add `RELEASE.md`, `release/capabilities.json`, and `release/FINAL-VERIFICATION.md` without personal information or fabricated results.
+- [x] Add Termux-safe final-release verification coverage for required binary permissions, fixed routes, plugins, dashboard safety, simulation-only records, forbidden capabilities, release metadata, and clean-room no-action invariants.
+- [x] Run shell and browser syntax checks, security and adversarial suites, plugin, observer, AX-T615, evidence, policy, Action Gate, Control Plane, dashboard, compatibility, final-release tests, and the complete regression matrix.
+- [x] Perform clean-room public-interface verification; remove generated logs, runtime state, snapshots, temporary files, and test artifacts; then complete static scans and final source-diff review.
+- [x] Commit `release: finalize vegas-inject v1.0`, push to `origin/main`, verify clean synchronization, and record only the executed verification results in the final release report.

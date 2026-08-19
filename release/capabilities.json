@@ -1,0 +1,39 @@
+{
+  "schema": "1",
+  "product": "VEGAS-inject",
+  "release": "v1.0.0",
+  "mode": "read_only_simulation_only",
+  "public_interfaces": {
+    "vegas": ["status", "snapshot", "inspect", "capabilities", "plugin", "gaming", "system", "performance", "evidence", "analysis", "policy", "action", "control"],
+    "axgo": ["status", "dashboard", "evidence", "policy", "action", "control"],
+    "action_gate": ["status", "evaluate", "simulate", "capabilities"],
+    "control_plane": ["status", "snapshot", "evaluate", "simulate", "capabilities"],
+    "dashboard": ["path", "snapshot", "core-snapshot", "export", "help"]
+  },
+  "evidence_states": ["VALID", "UNKNOWN", "UNAVAILABLE", "STALE", "INVALID"],
+  "safety": {
+    "read_only": true,
+    "simulation_only": true,
+    "real_action_layer": "NOT_IMPLEMENTED",
+    "hardware_writes": false,
+    "proc_sys_writes": false,
+    "android_property_writes": false,
+    "process_control": false,
+    "network_operations": false,
+    "dynamic_command_execution": false,
+    "arbitrary_path_execution": false,
+    "browser_shell_bridge": false,
+    "personal_data_collection": false,
+    "audit": {
+      "repository_local": true,
+      "bounded": true,
+      "applied_state": false
+    }
+  },
+  "portability": {
+    "shell": "POSIX sh",
+    "termux_safe_temp_root": "tests/.tmp",
+    "root_required": false
+  },
+  "verification_record": "release/FINAL-VERIFICATION.md"
+}

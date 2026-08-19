@@ -60,6 +60,23 @@ Phase 11 constrains the direct `bin/axgo` compatibility router to reviewed read-
 
 This hardening does not transform an AX-T615 compatibility command into a device action. CPU/GPU, display, thermal, power, charging, memory, process, Android property, `/proc`, `/sys`, ZRAM, swap, LMKD, and OOM control remain unavailable through the VEGAS production interface. The repository-level security boundary and validation evidence are documented in [`../security/SECURITY-AUDIT.md`](../security/SECURITY-AUDIT.md).
 
+## Final v1.0 compatibility surface
+
+The final release retains the established AX-T615 compatibility CLI while making its public aliases explicit and bounded:
+
+```sh
+sh bin/axgo status
+sh bin/axgo dashboard
+sh bin/axgo evidence
+sh bin/axgo policy
+sh bin/axgo action
+sh bin/axgo control
+```
+
+`dashboard` emits a normalized read-only snapshot. `evidence` and `policy` report existing fixed read-only engines. `action` reaches only the public Action Safety Gate and `control` reaches only the VEGAS Control Plane; their available simulation routes remain non-executing. These aliases reject unknown, action-oriented, surplus, and caller-selected path arguments. The future real action layer remains unimplemented.
+
+For the repository-level release scope and portable safety model, see [`../RELEASE.md`](../RELEASE.md) and [`../SAFETY-MODEL.md`](../SAFETY-MODEL.md).
+
 ## Step 2 — Hardware & Kernel Discovery
 
 The project now includes a read-only diagnostic engine for inspecting the

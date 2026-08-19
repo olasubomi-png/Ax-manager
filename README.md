@@ -84,6 +84,12 @@ Phase 11 hardens the production boundary without introducing a control layer. Pu
 
 The dashboard retains a text-only static-data boundary. It validates optional envelopes before use, renders values through DOM text bindings, and contains no command bridge, action form, dynamic URL input, remote request, or mutation control. The machine-readable release record is [`security/audit-report.json`](security/audit-report.json); the threat model, blocked capabilities, and verification procedure are documented in [`security/SECURITY-AUDIT.md`](security/SECURITY-AUDIT.md).
 
+## Final v1.0 release
+
+VEGAS-inject v1.0 finalizes the product as a portable POSIX-shell platform for observation, deterministic advisory reasoning, and bounded simulation records. It is safe to run from Termux or another Android-readable shell because missing privileged paths are reported as unavailable and no root, device write, network operation, or remote service is required.
+
+The fixed AX-T615 compatibility route includes `sh bin/axgo dashboard`, `evidence`, `policy`, `action`, and `control` aliases in addition to its established status surface. These are direct aliases to existing fixed read-only or simulation-only components; they do not restore unrestricted forwarding or action-oriented arguments. See [`RELEASE.md`](RELEASE.md) for the v1.0 scope, [`SAFETY-MODEL.md`](SAFETY-MODEL.md) for the security boundary, [`plugins/README.md`](plugins/README.md) for the declarative plugin model, and [`release/capabilities.json`](release/capabilities.json) for machine-readable public capabilities.
+
 ## Safety guarantees
 
 VEGAS-inject evidence, analysis, policy, the public Action Safety Gate, and all bundled plugins are **read-only and recommendation-only**. The gate may append a bounded repository-local audit record after a simulation, but it never writes a managed action marker, `/proc`, `/sys`, Android properties, Power HAL state, display mode, charging, battery controls, thermal policy, ZRAM, swap, LMKD/OOM settings, or process state. It does not kill or force-stop applications, execute profile/telemetry/metadata content, inject into games, or expose raw hardware-control commands. **Hardware control capabilities are `BLOCKED`.** System Observer does not collect personal files, credentials, account data, messages, persistent identifiers, or arbitrary environment variables. Performance Observer does not access the network, run arbitrary commands, or infer missing performance values.

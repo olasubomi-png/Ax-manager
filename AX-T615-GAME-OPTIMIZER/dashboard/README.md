@@ -92,3 +92,9 @@ The **VEGAS Control Plane** panel shows the fixed component chain, lifecycle, re
 Phase 11 confirms the dashboard remains a static, text-only observability surface. The snapshot validator treats malformed, missing, or unrecognized optional envelopes as unavailable; it does not synthesize policy, control-plane, or Action Gate state. Every displayed value is assigned through a text binding, so a snapshot value cannot become markup, a command, a URL, an event handler, or a browser-to-shell request.
 
 The dashboard has no apply, rollback, evaluation, simulation, profile, package, runtime-path, remote-fetch, or device-control affordance. The supporting machine-readable audit record is [`../../security/audit-report.json`](../../security/audit-report.json), and the release threat model is [`../../security/SECURITY-AUDIT.md`](../../security/SECURITY-AUDIT.md).
+
+## Final v1.0 dashboard boundary
+
+The v1.0 dashboard remains a static, text-only view of a normalized snapshot. It may display `UNKNOWN`, `UNAVAILABLE`, `STALE`, `INVALID`, blocked, or simulated states, but none of those labels initiate an action. The only supported producer path is the fixed local exporter; the only supported browser input is a validated static snapshot. It has no hidden command bridge, form handler, action ID, profile target, mutable URL field, remote service, or hardware-control path.
+
+The final release scope is documented in [`../../RELEASE.md`](../../RELEASE.md), and the machine-readable no-control contract is available at [`../../release/capabilities.json`](../../release/capabilities.json).
