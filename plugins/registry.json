@@ -1,0 +1,12 @@
+{
+  "schema": 1,
+  "application": "VEGAS-inject",
+  "minimum_app_version": "1.0.0",
+  "plugins": [
+    {
+      "id": "ax-t615-game-optimizer",
+      "path": "plugins/ax-t615-game-optimizer",
+      "enabled": true
+    }
+  ]
+}

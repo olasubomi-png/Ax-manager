@@ -721,6 +721,24 @@ The existing `bin/session` coordinator invokes the orchestrator once at game-ses
 
 The Step 11 test suites cover evidence normalization, decision priority and unknown fallback, lifecycle idempotence, bounded monitoring, protection and performance hysteresis, session integration, blocked-action reporting, static forbidden-write scanning, dry-run behavior, audit/runtime cleanup, fixture immutability, and top-level `axgo` routing. The complete repository regression suite remains required after every orchestration change.
 
+## VEGAS-inject integration — Modular Application Layer
+
+VEGAS-inject adds a compatible application layer above this module without replacing its AX-T615 command, configuration, runtime, or test contracts. The module is the first registered plugin at `plugins/ax-t615-game-optimizer`; its existing `bin/axgo` router remains authoritative, and the repository-level `bin/axgo` wrapper delegates to it for compatibility.
+
+The `bin/vegas` CLI routes only a fixed set of read-only operations through `bin/plugin-manager`. Plugin metadata is declarative data: validation requires identity, version, description, type, literal `plugin.sh` entrypoint, `read_only: true`, and `hardware_writes: false`. Metadata containing executable keys (`command`, `script`, `exec`, `shell`, or `action`) or blocked operation identifiers is rejected. The adapter maps only established AXGO observations and dry-runs; it cannot call arbitrary paths or execute metadata.
+
+```sh
+sh ../bin/vegas status
+sh ../bin/vegas plugin list
+sh ../bin/vegas gaming status
+sh ../bin/vegas gaming dashboard path
+sh ../bin/vegas gaming dashboard snapshot
+sh ../bin/vegas gaming dry-run
+sh ../bin/axgo status
+```
+
+The product name **VEGAS-inject** denotes the modular application packaging only. It does not inject code into games, alter game data, write Android settings, or perform a hardware operation. The AX-T615 plugin remains read-only and continues to enforce all previously documented safeguards.
+
 ## Step 12 — Dashboard/UI & Final Validation
 
 Step 12 completes the planned Axmanager milestone with a separate, responsive dashboard for the existing read-only engines and a final end-to-end validation layer. The dashboard is an **observability and policy interface**: it renders only a normalized snapshot from the same Axmanager CLI and orchestration contracts used by terminal users. It does not contain its own decision algorithm, hardware-control path, arbitrary command execution, mutation API, or background collector.

@@ -1,0 +1,53 @@
+#!/usr/bin/env sh
+# VEGAS-inject main CLI: plugin-oriented routing with no arbitrary command execution.
+set -u
+
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
+APP_ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
+MANAGER="$SCRIPT_DIR/plugin-manager"
+PLUGIN="ax-t615-game-optimizer"
+
+usage() {
+    cat <<'EOF'
+VEGAS-inject — safety-first modular gaming observability and policy CLI
+
+Usage:
+  vegas status
+  vegas plugin {list|info <plugin>|status <plugin>|capabilities <plugin>|validate [plugin]}
+  vegas gaming {status|dashboard [path|snapshot]|capabilities|games|detect|profiles|fps|performance|memory|thermal|power|orchestrator|dry-run}
+
+VEGAS-inject does not inject code, modify games, write hardware controls, or execute plugin metadata.
+EOF
+}
+
+case "${1:-help}" in
+    status)
+        printf 'VEGAS_INJECT=READY\n'
+        exec sh "$MANAGER" summary
+        ;;
+    plugin)
+        shift
+        exec sh "$MANAGER" "$@"
+        ;;
+    gaming)
+        shift
+        case "${1:-status}" in
+            status) exec sh "$MANAGER" invoke "$PLUGIN" status ;;
+            dashboard) shift; exec sh "$MANAGER" invoke "$PLUGIN" dashboard "${1:-path}" ;;
+            capabilities) exec sh "$MANAGER" invoke "$PLUGIN" capabilities ;;
+            games) exec sh "$MANAGER" invoke "$PLUGIN" games ;;
+            detect) exec sh "$MANAGER" invoke "$PLUGIN" game-detection ;;
+            profiles) exec sh "$MANAGER" invoke "$PLUGIN" profiles ;;
+            fps) exec sh "$MANAGER" invoke "$PLUGIN" fps-analysis ;;
+            performance) exec sh "$MANAGER" invoke "$PLUGIN" performance-analysis ;;
+            memory) exec sh "$MANAGER" invoke "$PLUGIN" memory-monitoring ;;
+            thermal) exec sh "$MANAGER" invoke "$PLUGIN" thermal-monitoring ;;
+            power) exec sh "$MANAGER" invoke "$PLUGIN" power-telemetry ;;
+            orchestrator) exec sh "$MANAGER" invoke "$PLUGIN" orchestrator-status ;;
+            dry-run) exec sh "$MANAGER" invoke "$PLUGIN" dry-run ;;
+            *) usage >&2; exit 2 ;;
+        esac
+        ;;
+    help|-h|--help) usage ;;
+    *) usage >&2; exit 2 ;;
+esac

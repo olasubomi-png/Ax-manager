@@ -1,0 +1,9 @@
+{
+  "id": "ax-t615-game-optimizer",
+  "name": "Broken Plugin",
+  "version": "1.0.0",
+  "description": "Missing required safety declaration",
+  "type": "gaming",
+  "entrypoint": "plugin.sh",
+  "hardware_writes": false
+}

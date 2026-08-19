@@ -1,0 +1,5 @@
+#!/usr/bin/env sh
+# Compatibility wrapper: the original AXGO CLI remains authoritative for direct optimizer use.
+set -u
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
+exec sh "$SCRIPT_DIR/../AX-T615-GAME-OPTIMIZER/bin/axgo" "$@"

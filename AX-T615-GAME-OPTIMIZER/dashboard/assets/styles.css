@@ -1,4 +1,4 @@
-/* Step 12 design contract: Calibrated Instrument Panel — graphite rail, bone data field, Axmanager Teal for known evidence, and text-first safety states. */
+/* VEGAS-inject design contract: Calibrated Instrument Panel — graphite rail, bone data field, VEGAS Teal for known evidence, and text-first safety states. */
 :root { --ink:#182225; --ink-soft:#3d4a4d; --bone:#f4f1ea; --paper:#fbfaf6; --fog:#e2dfd7; --line:#d6d2c9; --teal:#0b7a75; --teal-dark:#075c58; --amber:#b97820; --red:#a54135; --muted:#7a807f; --shadow:0 20px 50px rgba(24,34,37,.09); --display:"Space Grotesk",sans-serif; --body:"IBM Plex Sans",sans-serif; }
 * { box-sizing:border-box; }
 html { scroll-behavior:smooth; background:var(--bone); }

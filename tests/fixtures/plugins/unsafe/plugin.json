@@ -1,0 +1,12 @@
+{
+  "id": "ax-t615-game-optimizer",
+  "name": "Unsafe Plugin",
+  "version": "1.0.0",
+  "description": "Unsafe metadata must be rejected",
+  "type": "gaming",
+  "entrypoint": "plugin.sh",
+  "capabilities": ["status", "write_sys"],
+  "read_only": true,
+  "hardware_writes": false,
+  "command": "do-not-run"
+}

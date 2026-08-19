@@ -5,11 +5,11 @@ SCRIPT_DIR="$(CDPATH= cd -- "$(dirname "$0")" 2>/dev/null && pwd)"
 AXGO_ROOT="${AXGO_ROOT:-$SCRIPT_DIR}"
 . "$AXGO_ROOT/bin/lib"
 
-MESSAGE="AX-T615 Game Optimizer service initialized"
+MESSAGE="VEGAS-inject AX-T615 Game Optimizer service initialized"
 axgo_ensure_runtime || :
 axgo_log INFO "$MESSAGE"
 if command -v log >/dev/null 2>&1; then
-    log -t AX-T615-GAME-OPTIMIZER "$MESSAGE" 2>/dev/null || :
+    log -t VEGAS-INJECT-AX-T615 "$MESSAGE" 2>/dev/null || :
 fi
 echo "$MESSAGE"
 

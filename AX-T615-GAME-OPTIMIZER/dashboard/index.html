@@ -5,8 +5,8 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="theme-color" content="#182225" />
-    <meta name="description" content="Axmanager read-only gaming performance observability dashboard." />
-    <title>Axmanager — Safety-first gaming telemetry</title>
+    <meta name="description" content="VEGAS-inject read-only gaming performance observability dashboard." />
+    <title>VEGAS-inject — Safety-first gaming telemetry</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet" />
@@ -16,9 +16,9 @@
     <a class="skip-link" href="#main">Skip to dashboard</a>
     <div class="app-shell">
       <aside class="rail" aria-label="Dashboard navigation">
-        <a class="brand" href="#overview" aria-label="Axmanager overview">
+        <a class="brand" href="#overview" aria-label="VEGAS-inject overview">
           <img src="/manus-storage/axmanager-logo_31db0166.png" width="42" height="42" alt="" onerror="this.hidden=true" />
-          <span><b>AX</b>MANAGER<small>read-only console</small></span>
+          <span><b>VEGAS</b>-INJECT<small>AX-T615 read-only console</small></span>
         </a>
         <nav class="nav-list" aria-label="Sections">
           <a class="nav-item active" href="#overview"><span class="nav-mark"></span>Overview</a>
@@ -43,7 +43,7 @@
           <div class="hero-copy">
             <p class="eyebrow">System observability / policy console</p>
             <h1 id="overview-title">Measure first.<br /><em>Protect always.</em></h1>
-            <p class="hero-text">Axmanager translates existing, read-only device evidence into a clear gaming-performance recommendation. It does not write hardware settings or claim changes it did not make.</p>
+            <p class="hero-text">VEGAS-inject translates existing, read-only device evidence into a clear gaming-performance recommendation. It does not write hardware settings or claim changes it did not make.</p>
             <div class="operational-strip" aria-label="Operational boundary summary">
               <div><span>Evidence</span><strong id="evidenceHeader">NO DATA</strong></div>
               <div><span>Safety boundary</span><strong>READ-ONLY</strong></div>
@@ -68,7 +68,7 @@
           <article class="briefing-main">
             <p class="eyebrow">Current recommendation</p>
             <div class="recommendation-line"><span class="state-dot" id="recommendationDot" aria-hidden="true"></span><h2 id="recommendationState">Unavailable</h2><span class="chip" id="priorityChip">NO PRIORITY</span></div>
-            <p id="recommendationReason">No safe telemetry snapshot has been loaded. Axmanager will not infer device values.</p>
+            <p id="recommendationReason">No safe telemetry snapshot has been loaded. VEGAS-inject will not infer device values.</p>
             <dl class="briefing-facts">
               <div><dt>Confidence</dt><dd id="confidenceValue">Unavailable</dd></div>
               <div><dt>Recovery condition</dt><dd id="recoveryValue">Unavailable</dd></div>
@@ -113,7 +113,7 @@
           <div class="dossier-grid">
             <article class="evidence-panel"><h3>Supporting evidence</h3><p id="evidenceSummary">No evidence summary available.</p><div class="evidence-key" id="evidenceKey"></div></article>
             <article class="actions-panel"><h3>Recommended logical actions</h3><ul id="actionsList"><li>Unavailable</li></ul><p class="microcopy">These are logical recommendations only. This dashboard does not run them as hardware actions.</p></article>
-            <article class="recovery-panel"><h3>Recovery status</h3><strong id="recoveryState">Not assessed</strong><p id="recoveryDetail">Load a normalized Axmanager snapshot to see the current recovery condition.</p><dl class="dossier-facts"><div><dt>Previous state</dt><dd id="previousStateValue">Unavailable</dd></div><div><dt>Lifecycle</dt><dd id="lifecycleValue">Unavailable</dd></div></dl></article>
+            <article class="recovery-panel"><h3>Recovery status</h3><strong id="recoveryState">Not assessed</strong><p id="recoveryDetail">Load a normalized VEGAS-inject snapshot to see the current recovery condition.</p><dl class="dossier-facts"><div><dt>Previous state</dt><dd id="previousStateValue">Unavailable</dd></div><div><dt>Lifecycle</dt><dd id="lifecycleValue">Unavailable</dd></div></dl></article>
           </div>
         </section>
 
@@ -123,11 +123,11 @@
         </section>
 
         <section id="safety" class="safety-panel" aria-labelledby="safety-title">
-          <div class="safety-copy"><p class="eyebrow">Safety boundary</p><h2 id="safety-title">The protective layer has the final word.</h2><p>Axmanager blocks unsafe operations before a performance recommendation can be considered. This dashboard makes the boundary visible rather than offering a bypass.</p><div class="safety-status"><span class="shield-mark">✓</span><div><strong id="guardStatus">Safety guard active</strong><small id="guardDetail">Read-only policy is enforced.</small></div></div></div>
+          <div class="safety-copy"><p class="eyebrow">Safety boundary</p><h2 id="safety-title">The protective layer has the final word.</h2><p>VEGAS-inject blocks unsafe operations before a performance recommendation can be considered. This dashboard makes the boundary visible rather than offering a bypass.</p><div class="safety-status"><span class="shield-mark">✓</span><div><strong id="guardStatus">Safety guard active</strong><small id="guardDetail">Read-only policy is enforced.</small></div></div></div>
           <div class="blocked-list"><p class="eyebrow">Blocked action classes</p><ul id="blockedActions"><li>Unavailable until evidence is loaded</li></ul><p class="safety-footnote">CPU/GPU governor, frequency, Power HAL, charging, kernel, process, ZRAM/swap, LMKD/OOM, thermal, and battery modifications are not exposed.</p></div>
         </section>
 
-        <footer><p>AXMANAGER / STEP 12 / SAFETY-FIRST OBSERVABILITY</p><p>Static dashboard. No polling. No arbitrary commands. No fabricated telemetry.</p></footer>
+        <footer><p>VEGAS-INJECT / AX-T615 PLUGIN / SAFETY-FIRST OBSERVABILITY</p><p>Static dashboard. No polling. No arbitrary commands. No fabricated telemetry.</p></footer>
       </main>
     </div>
     <script src="assets/app.js"></script>

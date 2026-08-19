@@ -1,0 +1,111 @@
+#!/usr/bin/env sh
+# VEGAS-inject plugin manager: metadata is validated as data and entrypoints are fixed allowlists.
+set -u
+
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
+APP_ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
+REGISTRY="$APP_ROOT/plugins/registry.json"
+PLUGIN_ID="ax-t615-game-optimizer"
+PLUGIN_DIR="$APP_ROOT/plugins/$PLUGIN_ID"
+PLUGIN_META="$PLUGIN_DIR/plugin.json"
+PLUGIN_ENTRYPOINT="$PLUGIN_DIR/plugin.sh"
+FORBIDDEN_CAPABILITIES='write_proc write_sys write_power_hal write_governor write_charging_limit modify_battery kill_process force_stop modify_zram modify_swap modify_lmkd disable_thermal_protection disable_battery_protection'
+
+usage() {
+    cat <<'EOF'
+Usage: plugin-manager {list|info <plugin>|status <plugin>|capabilities <plugin>|validate [plugin]|invoke <plugin> <operation>|summary}
+
+Only registered plugins with valid read-only metadata and fixed entrypoints are available.
+EOF
+}
+
+json_string() {
+    KEY="$1"
+    FILE="$2"
+    sed -n "s/.*\"$KEY\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p" "$FILE" 2>/dev/null | head -n 1
+}
+
+json_bool() {
+    KEY="$1"
+    FILE="$2"
+    sed -n "s/.*\"$KEY\"[[:space:]]*:[[:space:]]*\(true\|false\).*/\1/p" "$FILE" 2>/dev/null | head -n 1
+}
+
+registered() {
+    [ "$1" = "$PLUGIN_ID" ] && grep -Fq "\"id\": \"$PLUGIN_ID\"" "$REGISTRY" 2>/dev/null
+}
+
+valid_id() {
+    case "$1" in
+        ax-t615-game-optimizer) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+validate() {
+    ID="${1:-$PLUGIN_ID}"
+    if ! valid_id "$ID" || ! registered "$ID"; then
+        printf 'PLUGIN_VALID=NO\nPLUGIN_ERROR=UNREGISTERED\n'
+        return 1
+    fi
+    if [ ! -r "$PLUGIN_META" ] || [ ! -r "$PLUGIN_ENTRYPOINT" ]; then
+        printf 'PLUGIN_VALID=NO\nPLUGIN_ERROR=REQUIRED_FILE_MISSING\n'
+        return 1
+    fi
+    [ "$(json_string id "$PLUGIN_META")" = "$PLUGIN_ID" ] || { printf 'PLUGIN_VALID=NO\nPLUGIN_ERROR=INVALID_ID\n'; return 1; }
+    [ -n "$(json_string name "$PLUGIN_META")" ] || { printf 'PLUGIN_VALID=NO\nPLUGIN_ERROR=NAME_MISSING\n'; return 1; }
+    [ -n "$(json_string version "$PLUGIN_META")" ] || { printf 'PLUGIN_VALID=NO\nPLUGIN_ERROR=VERSION_MISSING\n'; return 1; }
+    [ -n "$(json_string description "$PLUGIN_META")" ] || { printf 'PLUGIN_VALID=NO\nPLUGIN_ERROR=DESCRIPTION_MISSING\n'; return 1; }
+    [ "$(json_string type "$PLUGIN_META")" = "gaming" ] || { printf 'PLUGIN_VALID=NO\nPLUGIN_ERROR=INVALID_TYPE\n'; return 1; }
+    [ "$(json_string entrypoint "$PLUGIN_META")" = "plugin.sh" ] || { printf 'PLUGIN_VALID=NO\nPLUGIN_ERROR=ENTRYPOINT_REJECTED\n'; return 1; }
+    [ "$(json_bool read_only "$PLUGIN_META")" = "true" ] || { printf 'PLUGIN_VALID=NO\nPLUGIN_ERROR=READ_ONLY_REQUIRED\n'; return 1; }
+    [ "$(json_bool hardware_writes "$PLUGIN_META")" = "false" ] || { printf 'PLUGIN_VALID=NO\nPLUGIN_ERROR=HARDWARE_WRITES_FORBIDDEN\n'; return 1; }
+    for CAPABILITY in $FORBIDDEN_CAPABILITIES; do
+        grep -Fq "\"$CAPABILITY\"" "$PLUGIN_META" 2>/dev/null && { printf 'PLUGIN_VALID=NO\nPLUGIN_ERROR=FORBIDDEN_CAPABILITY\n'; return 1; }
+    done
+    grep -Eq '"(command|script|exec|shell|action)"[[:space:]]*:' "$PLUGIN_META" 2>/dev/null && { printf 'PLUGIN_VALID=NO\nPLUGIN_ERROR=EXECUTABLE_METADATA_REJECTED\n'; return 1; }
+    printf 'PLUGIN_VALID=YES\nREAD_ONLY=YES\nHARDWARE_WRITES=NO\nFORBIDDEN_ACTIONS_BLOCKED=YES\n'
+}
+
+plugin_info() {
+    validate "$1" >/dev/null || { validate "$1"; return 1; }
+    printf 'PLUGIN_ID=%s\n' "$PLUGIN_ID"
+    printf 'PLUGIN_NAME=%s\n' "$(json_string name "$PLUGIN_META")"
+    printf 'PLUGIN_VERSION=%s\n' "$(json_string version "$PLUGIN_META")"
+    printf 'PLUGIN_DESCRIPTION=%s\n' "$(json_string description "$PLUGIN_META")"
+    printf 'PLUGIN_TYPE=%s\n' "$(json_string type "$PLUGIN_META")"
+    printf 'PLUGIN_ENTRYPOINT=plugin.sh (fixed allowlist)\n'
+    printf 'READ_ONLY=YES\nHARDWARE_WRITES=NO\n'
+}
+
+case "${1:-summary}" in
+    list)
+        validate "$PLUGIN_ID" >/dev/null || exit 1
+        printf 'VEGAS-INJECT PLUGINS\n'
+        printf '%s | ENABLED | VALID | READ_ONLY\n' "$PLUGIN_ID"
+        ;;
+    info) [ "$#" -eq 2 ] || { usage >&2; exit 2; }; plugin_info "$2" ;;
+    status)
+        [ "$#" -eq 2 ] || { usage >&2; exit 2; }
+        validate "$2" >/dev/null || { validate "$2"; exit 1; }
+        printf 'PLUGIN_ID=%s\nLIFECYCLE=ENABLED\nAVAILABILITY=AVAILABLE\nREAD_ONLY=YES\nHARDWARE_WRITES=NO\n' "$PLUGIN_ID"
+        ;;
+    capabilities)
+        [ "$#" -eq 2 ] || { usage >&2; exit 2; }
+        validate "$2" >/dev/null || { validate "$2"; exit 1; }
+        printf 'PLUGIN_ID=%s\nCAPABILITIES=status,capabilities,games,game-detection,profiles,fps-analysis,performance-analysis,memory-monitoring,thermal-monitoring,power-telemetry,orchestrator-status,dashboard,dry-run\nREAD_ONLY=YES\nHARDWARE_WRITES=NO\nFORBIDDEN_ACTIONS_BLOCKED=YES\n' "$PLUGIN_ID"
+        ;;
+    validate) validate "${2:-$PLUGIN_ID}" ;;
+    invoke)
+        [ "$#" -ge 3 ] || { usage >&2; exit 2; }
+        validate "$2" >/dev/null || { validate "$2"; exit 1; }
+        shift 2
+        exec sh "$PLUGIN_ENTRYPOINT" "$@"
+        ;;
+    summary)
+        validate "$PLUGIN_ID" >/dev/null || exit 1
+        printf 'VEGAS_INJECT=READY\nPLUGINS_DISCOVERED=1\nPLUGINS_VALID=1\nREAD_ONLY=YES\nHARDWARE_WRITES=NO\n'
+        ;;
+    help|-h|--help) usage ;;
+    *) usage >&2; exit 2 ;;
+esac
