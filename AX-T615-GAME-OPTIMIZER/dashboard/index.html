@@ -25,6 +25,7 @@
           <a class="nav-item" href="#telemetry"><span class="nav-mark"></span>Telemetry</a>
           <a class="nav-item" href="#orchestrator"><span class="nav-mark"></span>Orchestrator</a>
           <a class="nav-item" href="#profiles"><span class="nav-mark"></span>Profiles</a>
+          <a class="nav-item" href="#plugins"><span class="nav-mark"></span>Plugins</a>
           <a class="nav-item" href="#safety"><span class="nav-mark"></span>Safety</a>
         </nav>
         <div class="rail-footer">
@@ -120,6 +121,14 @@
         <section id="profiles" class="section-block profile-layout" aria-labelledby="profiles-title">
           <div class="profile-copy"><p class="eyebrow">Game policy</p><h2 id="profiles-title">Profiles remain policy-only</h2><p>Profile inspection and selection stay in the existing CLI policy layer. The dashboard displays the active policy but cannot invent hardware settings or bypass the core guardrails.</p><code>sh bin/axgo profile get</code><code>sh bin/axgo profile set &lt;balanced|performance|conservative&gt;</code></div>
           <div class="profile-paper"><span class="paper-tab">CURRENT POLICY</span><dl><div><dt>Profile</dt><dd id="profilePaperValue">Unavailable</dd></div><div><dt>Evidence status</dt><dd id="evidenceStatusValue">Unavailable</dd></div><div><dt>Policy decision</dt><dd id="policyDecisionValue">Unavailable</dd></div></dl><p class="profile-inventory-label">Available profiles</p><ul id="profilesList" class="profile-inventory"><li>Unavailable</li></ul><p class="microcopy">Profile selection is a safe policy operation. It is not presented as a frequency, governor, or charging change.</p></div>
+        </section>
+
+        <section id="plugins" class="section-block plugin-observer" aria-labelledby="plugins-title">
+          <div class="section-heading"><div><p class="eyebrow">Independent plugin / bounded data</p><h2 id="plugins-title">System Observer</h2></div><p class="section-note">Application and host evidence is optional, non-sensitive, and remains unavailable when a safe source cannot be read.</p></div>
+          <div class="observer-panel">
+            <div class="observer-intro"><span class="paper-tab">READ-ONLY PLUGIN</span><h3 id="observerName">System Observer</h3><p id="observerStatus">No observer snapshot loaded.</p><p class="microcopy">This plugin reports fixed application and host fields only. It does not inspect user files, credentials, messages, accounts, or identifiers beyond a safe hostname where available.</p></div>
+            <dl class="observer-ledger"><div><dt>Lifecycle</dt><dd id="observerLifecycle">Unavailable</dd></div><div><dt>Application version</dt><dd id="observerVersion">Unavailable</dd></div><div><dt>Operating system</dt><dd id="observerOs">Unavailable</dd></div><div><dt>Architecture</dt><dd id="observerArchitecture">Unavailable</dd></div><div><dt>Hostname</dt><dd id="observerHostname">Unavailable</dd></div><div><dt>Kernel</dt><dd id="observerKernel">Unavailable</dd></div><div><dt>Uptime</dt><dd id="observerUptime">Unavailable</dd></div><div><dt>Memory available</dt><dd id="observerMemory">Unavailable</dd></div></dl>
+          </div>
         </section>
 
         <section id="safety" class="safety-panel" aria-labelledby="safety-title">

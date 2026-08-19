@@ -7,6 +7,11 @@
       "id": "ax-t615-game-optimizer",
       "path": "plugins/ax-t615-game-optimizer",
       "enabled": true
+    },
+    {
+      "id": "system-observer",
+      "path": "plugins/system-observer",
+      "enabled": true
     }
   ]
 }

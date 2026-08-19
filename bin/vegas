@@ -13,8 +13,9 @@ VEGAS-inject — safety-first modular gaming observability and policy CLI
 
 Usage:
   vegas status
-  vegas plugin {list|info <plugin>|status <plugin>|capabilities <plugin>|validate [plugin]}
+  vegas plugin {list|info <plugin>|inspect <plugin>|status <plugin>|capabilities <plugin>|validate [plugin]}
   vegas gaming {status|dashboard [path|snapshot]|capabilities|games|detect|profiles|fps|performance|memory|thermal|power|orchestrator|dry-run}
+  vegas system {status|capabilities|inspect|snapshot}
 
 VEGAS-inject does not inject code, modify games, write hardware controls, or execute plugin metadata.
 EOF
@@ -45,6 +46,13 @@ case "${1:-help}" in
             power) exec sh "$MANAGER" invoke "$PLUGIN" power-telemetry ;;
             orchestrator) exec sh "$MANAGER" invoke "$PLUGIN" orchestrator-status ;;
             dry-run) exec sh "$MANAGER" invoke "$PLUGIN" dry-run ;;
+            *) usage >&2; exit 2 ;;
+        esac
+        ;;
+    system)
+        shift
+        case "${1:-status}" in
+            status|capabilities|inspect|snapshot) exec sh "$MANAGER" invoke system-observer "${1:-status}" ;;
             *) usage >&2; exit 2 ;;
         esac
         ;;

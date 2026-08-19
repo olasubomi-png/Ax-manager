@@ -13,13 +13,13 @@
   const list = (value) => known(value) ? String(value).split(",").map((item) => item.trim()).filter(Boolean) : [];
 
   const empty = () => ({
-    schema: "1", read_only: true, source: "no-snapshot", evidence: {}, decision: {}, orchestrator: {}, session: {}, profiles: [], safety: {}
+    schema: "1", read_only: true, source: "no-snapshot", evidence: {}, decision: {}, orchestrator: {}, session: {}, profiles: [], plugins: {}, safety: {}
   });
 
   function safeSnapshot(raw) {
     if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new Error("Snapshot must be a JSON object.");
     const snapshot = empty();
-    ["evidence", "decision", "orchestrator", "session", "safety"].forEach((section) => {
+    ["evidence", "decision", "orchestrator", "session", "plugins", "safety"].forEach((section) => {
       if (raw[section] !== undefined && (!raw[section] || typeof raw[section] !== "object" || Array.isArray(raw[section]))) throw new Error(`Invalid ${section} section.`);
       snapshot[section] = raw[section] || {};
     });
@@ -71,7 +71,7 @@
   }
 
   function render(raw) {
-    const snapshot = safeSnapshot(raw); const e = snapshot.evidence; const d = snapshot.decision; const o = snapshot.orchestrator; const s = snapshot.session; const safety = snapshot.safety;
+    const snapshot = safeSnapshot(raw); const e = snapshot.evidence; const d = snapshot.decision; const o = snapshot.orchestrator; const s = snapshot.session; const safety = snapshot.safety; const observer = snapshot.plugins.system_observer && typeof snapshot.plugins.system_observer === "object" ? snapshot.plugins.system_observer : {}; const observerPlugin = observer.plugin && typeof observer.plugin === "object" ? observer.plugin : {}; const observerSystem = observer.system && typeof observer.system === "object" ? observer.system : {};
     const state = d.state || o.state; const tone = stateTone(state);
     document.body.dataset.state = tone;
     text("sourceLabel", snapshot.source === "no-snapshot" ? "No snapshot loaded" : "Safe snapshot loaded");
@@ -91,6 +91,7 @@
     text("frameTimeValue", display(e.frame_time_ms, " ms")); text("pacingValue", label(e.frame_pacing)); text("powerValue", display(e.estimated_watts, " W")); text("timelineDescription", Array.isArray(raw.history) && raw.history.length ? "Bounded-session samples supplied by the exported snapshot." : "No bounded-session history was included in this snapshot.");
     text("evidenceSummary", d.evidence_summary, "No evidence summary available."); renderEvidence(d.evidence_summary); renderList("actionsList", list(d.recommended_actions), "Unavailable"); text("recoveryState", label(d.safety_classification, "Not assessed"), "Not assessed"); text("recoveryDetail", d.recovery_conditions, "Load a normalized VEGAS-inject snapshot to see the current recovery condition.");
     text("previousStateValue", o.previous_state); text("lifecycleValue", label(o.lifecycle)); text("evidenceStatusValue", label(d.evidence_status)); text("policyDecisionValue", label(state)); text("guardStatus", safety.forbidden_actions_blocked === "YES" ? "Safety guard active" : "Safety status unavailable"); text("guardDetail", safety.forbidden_actions_blocked === "YES" ? "Unsafe action classes remain blocked by policy." : "Load a validated snapshot to confirm the core safety guard."); renderList("blockedActions", list(safety.blocked_actions), "Unavailable until evidence is loaded"); renderProfiles(snapshot.profiles);
+    text("observerName", observerPlugin.name || "System Observer"); text("observerStatus", observerPlugin.status || "No observer snapshot loaded."); text("observerLifecycle", label(observerPlugin.lifecycle)); text("observerVersion", observerSystem.application_version); text("observerOs", observerSystem.os); text("observerArchitecture", observerSystem.architecture); text("observerHostname", observerSystem.hostname); text("observerKernel", observerSystem.kernel); text("observerUptime", known(observerSystem.uptime_seconds) ? `${observerSystem.uptime_seconds} seconds` : "Unavailable"); text("observerMemory", known(observerSystem.memory_available_kb) ? `${observerSystem.memory_available_kb} kB` : "Unavailable");
     const dot = byId("recommendationDot"); if (dot) dot.dataset.tone = tone; renderTimeline(raw.history);
   }
 

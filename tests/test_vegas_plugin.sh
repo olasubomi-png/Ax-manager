@@ -8,6 +8,7 @@ MANAGER="$ROOT/bin/plugin-manager"
 VEGAS="$ROOT/bin/vegas"
 AXGO="$ROOT/bin/axgo"
 META="$ROOT/plugins/ax-t615-game-optimizer/plugin.json"
+SYSTEM_META="$ROOT/plugins/system-observer/plugin.json"
 FIXTURES="$ROOT/tests/fixtures/plugins"
 TMP="${VEGAS_TEST_TMP:-$ROOT/tests/.tmp/vegas-plugin-$$}"
 PASS=0
@@ -36,6 +37,7 @@ contains "$VALIDATION" 'FORBIDDEN_ACTIONS_BLOCKED=YES' 'plugin blocks forbidden 
 
 LIST=$(sh "$MANAGER" list)
 contains "$LIST" 'ax-t615-game-optimizer | ENABLED | VALID | READ_ONLY' 'plugin list exposes lifecycle and safety state'
+contains "$LIST" 'system-observer | ENABLED | VALID | READ_ONLY' 'plugin list exposes isolated observer lifecycle and safety state'
 INFO=$(sh "$MANAGER" info ax-t615-game-optimizer)
 contains "$INFO" 'PLUGIN_ENTRYPOINT=plugin.sh (fixed allowlist)' 'metadata entrypoint is fixed'
 CAPABILITIES=$(sh "$MANAGER" capabilities ax-t615-game-optimizer)
@@ -47,7 +49,7 @@ contains "$STATUS" 'AVAILABILITY=AVAILABLE' 'plugin lifecycle reports available'
 
 VEGAS_STATUS=$(sh "$VEGAS" status)
 contains "$VEGAS_STATUS" 'VEGAS_INJECT=READY' 'main CLI reports ready status'
-contains "$VEGAS_STATUS" 'PLUGINS_VALID=1' 'main CLI reports validated plugin count'
+contains "$VEGAS_STATUS" 'PLUGINS_VALID=2' 'main CLI reports validated plugin count'
 DASHBOARD_PATH=$(sh "$VEGAS" gaming dashboard path)
 contains "$DASHBOARD_PATH" '/AX-T615-GAME-OPTIMIZER/dashboard/index.html' 'gaming dashboard resolves existing dashboard'
 DRY_RUN=$(sh "$VEGAS" gaming dry-run)
@@ -55,6 +57,22 @@ contains "$DRY_RUN" 'HARDWARE_WRITES_PERFORMED=NO' 'plugin dry-run remains recom
 
 AXGO_STATUS=$(sh "$AXGO" status)
 contains "$AXGO_STATUS" 'AX-T615 concise hardware status (read-only)' 'compatibility AXGO wrapper preserves direct status'
+
+SYSTEM_VALIDATION=$(sh "$MANAGER" validate system-observer)
+contains "$SYSTEM_VALIDATION" 'PLUGIN_VALID=YES' 'System Observer metadata validates independently'
+SYSTEM_STATUS=$(sh "$VEGAS" system status)
+contains "$SYSTEM_STATUS" 'PLUGIN_STATUS=AVAILABLE' 'System Observer lifecycle reports available'
+contains "$SYSTEM_STATUS" 'TELEMETRY_POLICY=NON_SENSITIVE_ONLY' 'System Observer declares bounded telemetry policy'
+SYSTEM_SNAPSHOT=$(sh "$VEGAS" system snapshot)
+contains "$SYSTEM_SNAPSHOT" '"source":"system-observer-read-only"' 'System Observer emits a fixed read-only snapshot'
+contains "$SYSTEM_SNAPSHOT" '"sensitive_information":"NOT_COLLECTED"' 'System Observer snapshot documents sensitive-data exclusion'
+not_contains "$SYSTEM_SNAPSHOT" '"credentials"' 'System Observer snapshot excludes credentials'
+not_contains "$SYSTEM_SNAPSHOT" '"account"' 'System Observer snapshot excludes account data'
+AX_STATUS_BEFORE=$(sh "$MANAGER" status ax-t615-game-optimizer)
+sh "$MANAGER" invoke system-observer inspect >/dev/null
+AX_STATUS_AFTER=$(sh "$MANAGER" status ax-t615-game-optimizer)
+[ "$AX_STATUS_BEFORE" = "$AX_STATUS_AFTER" ] && pass 'System Observer invocation does not alter AX-T615 lifecycle output' || fail 'System Observer invocation does not alter AX-T615 lifecycle output'
+expect_failure 'System Observer rejects arbitrary operations' sh "$MANAGER" invoke system-observer unknown-operation
 
 expect_failure 'unknown plugins are rejected' sh "$MANAGER" validate unknown-plugin
 
@@ -69,7 +87,7 @@ not_contains "$UNSAFE" 'do-not-run' 'unsafe metadata is never executed'
 
 cp "$TMP/original-plugin.json" "$META"
 
-STATIC_FILES="$ROOT/bin/vegas $ROOT/bin/plugin-manager $ROOT/bin/axgo $ROOT/plugins/ax-t615-game-optimizer/plugin.sh"
+STATIC_FILES="$ROOT/bin/vegas $ROOT/bin/plugin-manager $ROOT/bin/axgo $ROOT/plugins/ax-t615-game-optimizer/plugin.sh $ROOT/plugins/system-observer/plugin.sh"
 if grep -nE '(^|[[:space:];])eval([[:space:];]|$)|setprop[[:space:]]|[[:space:]]kill([[:space:];]|$)|[[:space:]]pkill([[:space:];]|$)|>[[:space:]]*/(proc|sys)/|sysctl[[:space:]]' $STATIC_FILES >/dev/null 2>&1; then
     fail 'new VEGAS executable sources contain no forbidden execution or hardware writes'
 else

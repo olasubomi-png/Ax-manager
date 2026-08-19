@@ -44,6 +44,8 @@ contains "$SNAPSHOT" '"read_only":true' "snapshot marks read-only"
 contains "$SNAPSHOT" '"decision":{"state":"balanced"' "healthy snapshot preserves orchestrator decision"
 contains "$SNAPSHOT" '"forbidden_actions_blocked":"YES"' "snapshot exposes safety guard"
 contains "$SNAPSHOT" '"blocked_actions":"write_proc,write_sys' "snapshot exposes blocked policy actions"
+contains "$SNAPSHOT" '"plugins":{"system_observer":{' "snapshot exposes optional System Observer envelope"
+contains "$SNAPSHOT" '"sensitive_information":"NOT_COLLECTED"' "System Observer dashboard envelope excludes sensitive information"
 
 cp "$FIXTURES/healthy/evidence.env" "$TMP/evidence.env"
 EXPORT_OUTPUT=$(ORCH_EVIDENCE_FILE="$TMP/evidence.env" AXGO_ROOT="$MODULE_ROOT" DASHBOARD_RUNTIME_DIR="$TMP/export-runtime" ORCH_RUNTIME_DIR="$TMP/export-orchestrator" sh "$MODULE_ROOT/bin/dashboard" export)

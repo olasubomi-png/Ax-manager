@@ -65,6 +65,16 @@ profile_json() {
     printf ']'
 }
 
+plugin_observability_json() {
+    APP_ROOT=$(CDPATH= cd -- "$AXGO_ROOT/.." 2>/dev/null && pwd || :)
+    MANAGER="${VEGAS_PLUGIN_MANAGER:-$APP_ROOT/bin/plugin-manager}"
+    if [ -n "$APP_ROOT" ] && [ -r "$MANAGER" ]; then
+        OBSERVER=$(sh "$MANAGER" invoke system-observer snapshot 2>/dev/null || :)
+        [ -n "$OBSERVER" ] && { printf '{"system_observer":%s}' "$OBSERVER"; return 0; }
+    fi
+    printf '{"system_observer":{"schema":"1","source":"unavailable","read_only":true,"plugin":{"id":"system-observer","status":"UNAVAILABLE","lifecycle":"UNKNOWN"},"system":{},"safety":{"read_only":"YES","hardware_writes":"NO","forbidden_actions_blocked":"YES","sensitive_information":"NOT_COLLECTED"}}}'
+}
+
 json_pair() {
     KEY="$1"
     RAW="$2"
@@ -147,6 +157,9 @@ snapshot() {
     printf '},'
     printf '"profiles":'
     profile_json "$PROFILE_LIST"
+    printf ','
+    printf '"plugins":'
+    plugin_observability_json
     printf ','
     printf '"safety":{'
     json_pair blocked_actions "$(value BLOCKED_ACTIONS "$DECISION")"; printf ','

@@ -1,0 +1,12 @@
+{
+  "id": "system-observer",
+  "name": "System Observer",
+  "version": "1.0.0",
+  "description": "Read-only VEGAS-inject application and host observability plugin with fail-safe UNKNOWN telemetry",
+  "type": "system",
+  "entrypoint": "plugin.sh",
+  "capabilities": ["status", "capabilities", "inspect", "snapshot"],
+  "read_only": true,
+  "hardware_writes": false,
+  "minimum_app_version": "1.0.0"
+}
