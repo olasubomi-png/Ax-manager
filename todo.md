@@ -37,3 +37,14 @@
 - [x] Add Phase 6 normalization, valid/unknown/unavailable/stale/invalid, timestamp, trend, bounded-history, condition, safety, isolation, compatibility, dashboard, and Termux tests.
 - [x] Run focused validations, complete regressions, static forbidden-operation scans, and source-diff review.
 - [x] Commit `feat: add advanced telemetry evidence engine`, push to `origin/main`, and verify clean synchronization.
+
+## Phase 7 — Intelligent Analysis & Bottleneck Engine
+
+- [x] Inspect Phase 7 requirements and the current evidence, decision, plugin, unified snapshot, dashboard, documentation, and test contracts.
+- [x] Define deterministic bottleneck classifications, confidence levels, bounded trend correlation, advisory recommendations, and conservative fallback semantics.
+- [x] Implement the fixed read-only bottleneck engine with only allowlisted operations and no dynamic paths, metadata execution, network access, or hardware controls.
+- [x] Integrate advisory analysis with AX-T615, unified VEGAS snapshots, decision context, plugin routing, and documentation while preserving compatibility.
+- [x] Extend the dashboard with a text-safe Intelligent Analysis section for classification, confidence, explanation, evidence, trends, recommendations, and safety state.
+- [x] Add classification, evidence-state, confidence, trend, bounded-history, determinism, fallback, isolation, metadata, path, dashboard, safety, and Termux tests.
+- [x] Run focused validations, complete regressions, static forbidden-operation scans, and source-diff review.
+- [x] Commit `feat: add intelligent bottleneck analysis`, push to `origin/main`, and verify clean synchronization.

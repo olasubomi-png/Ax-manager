@@ -91,6 +91,17 @@ evidence_engine_json() {
     printf '%s' "$ENGINE_JSON"
 }
 
+analysis_json() {
+    APP_ROOT=$(CDPATH= cd -- "$AXGO_ROOT/.." 2>/dev/null && pwd || :)
+    ENGINE="${VEGAS_BOTTLENECK_ENGINE:-$APP_ROOT/bin/bottleneck-engine}"
+    ENGINE_JSON=''
+    if [ -n "$APP_ROOT" ] && [ -r "$ENGINE" ]; then
+        ENGINE_JSON=$(ORCH_EVIDENCE_FILE="$TMP_EVIDENCE" AXGO_ROOT="$AXGO_ROOT" sh "$ENGINE" snapshot 2>/dev/null || :)
+    fi
+    [ -n "$ENGINE_JSON" ] || ENGINE_JSON='{"schema":"1","source":"unavailable","read_only":true,"classification":"INSUFFICIENT_EVIDENCE","confidence":"LOW","reason":"bottleneck engine unavailable","supporting_evidence":"NONE","conflicting_evidence":"NONE","evidence_quality":"UNSAFE_UNKNOWN","provenance":"unavailable","recommended_observation":"remain_conservative","safety_classification":"READ_ONLY_CONSERVATIVE_FALLBACK","history":{"retained_samples":0,"bounded":true},"safety":{"read_only":"YES","hardware_writes":"NO","forbidden_actions_blocked":"YES","advisory_only":"YES"}}'
+    printf '%s' "$ENGINE_JSON"
+}
+
 json_pair() {
     KEY="$1"
     RAW="$2"
@@ -166,6 +177,9 @@ snapshot() {
     json_pair safety_classification "$(value SAFETY_CLASSIFICATION "$DECISION")"; printf ','
     json_pair evidence_status "$(value EVIDENCE_STATUS "$DECISION")"
     printf '},'
+    printf '"analysis":'
+    analysis_json
+    printf ','
     printf '"orchestrator":{'
     json_pair lifecycle "$(value ORCHESTRATOR_LIFECYCLE "$ORCHESTRATOR")"; printf ','
     json_pair state "$(value ORCHESTRATOR_STATE "$ORCHESTRATOR")"; printf ','

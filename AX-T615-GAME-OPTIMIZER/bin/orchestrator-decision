@@ -6,6 +6,7 @@ AXGO_ROOT="${AXGO_ROOT:-$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)}"
 EVIDENCE_FILE="${ORCH_EVIDENCE_FILE:-}"
 [ -n "$EVIDENCE_FILE" ] || EVIDENCE_FILE="${1:-}"
 EVIDENCE_ENGINE="$AXGO_ROOT/../bin/evidence-engine"
+BOTTLENECK_ENGINE="$AXGO_ROOT/../bin/bottleneck-engine"
 
 value() {
     KEY="$1"
@@ -18,6 +19,13 @@ result_value() {
     KEY="$1"
     DATA="$2"
     RESULT="$(printf '%s\n' "$DATA" | awk -F= -v key="$KEY" '$1 == key { value=$0; sub(/^[^=]*=/, "", value); print value }' | tail -n 1)"
+    [ -n "$RESULT" ] && printf '%s' "$RESULT" || printf '%s' UNKNOWN
+}
+
+json_value() {
+    KEY="$1"
+    DATA="$2"
+    RESULT="$(printf '%s' "$DATA" | sed -n "s/.*\"$KEY\":\"\([^\"]*\)\".*/\1/p" | head -n 1)"
     [ -n "$RESULT" ] && printf '%s' "$RESULT" || printf '%s' UNKNOWN
 }
 
@@ -67,6 +75,15 @@ EVIDENCE_CONDITIONS=$(result_value EVIDENCE_CONDITIONS "$ENGINE_EVALUATION")
 EVIDENCE_FRESHNESS=$(result_value EVIDENCE_FRESHNESS "$ENGINE_EVALUATION")
 EVIDENCE_FALLBACK_REQUIRED=$(result_value EVIDENCE_FALLBACK_REQUIRED "$ENGINE_EVALUATION")
 EVIDENCE_FALLBACK_REASON=$(result_value EVIDENCE_FALLBACK_REASON "$ENGINE_EVALUATION")
+
+ANALYSIS='{"classification":"INSUFFICIENT_EVIDENCE","confidence":"LOW","reason":"bottleneck engine unavailable","recommended_observation":"remain_conservative","safety_classification":"READ_ONLY_CONSERVATIVE_FALLBACK"}'
+if [ -r "$BOTTLENECK_ENGINE" ]; then
+    ANALYSIS=$(ORCH_EVIDENCE_FILE="$EVIDENCE_FILE" AXGO_ROOT="$AXGO_ROOT" sh "$BOTTLENECK_ENGINE" snapshot 2>/dev/null || printf '%s' "$ANALYSIS")
+fi
+ANALYSIS_CLASSIFICATION=$(json_value classification "$ANALYSIS")
+ANALYSIS_CONFIDENCE=$(json_value confidence "$ANALYSIS")
+ANALYSIS_RECOMMENDATION=$(json_value recommended_observation "$ANALYSIS")
+ANALYSIS_SAFETY=$(json_value safety_classification "$ANALYSIS")
 
 STATE=balanced
 PRIORITY=PERFORMANCE
@@ -150,6 +167,10 @@ printf '%s\n' \
     "EVIDENCE_FRESHNESS=$EVIDENCE_FRESHNESS" \
     "CONSERVATIVE_FALLBACK_REQUIRED=$EVIDENCE_FALLBACK_REQUIRED" \
     "CONSERVATIVE_FALLBACK_REASON=$EVIDENCE_FALLBACK_REASON" \
+    "ANALYSIS_CLASSIFICATION=$ANALYSIS_CLASSIFICATION" \
+    "ANALYSIS_CONFIDENCE=$ANALYSIS_CONFIDENCE" \
+    "ANALYSIS_RECOMMENDATION=$ANALYSIS_RECOMMENDATION" \
+    "ANALYSIS_SAFETY_CLASSIFICATION=$ANALYSIS_SAFETY" \
     "TIMESTAMP=$TIMESTAMP" \
     "SESSION_ID=$SESSION_ID" \
     "GAME=$GAME" \

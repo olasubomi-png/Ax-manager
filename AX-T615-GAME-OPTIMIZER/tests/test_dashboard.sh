@@ -50,11 +50,14 @@ contains "$SNAPSHOT" '"performance_observer":{"schema":"1","source":"performance
 contains "$SNAPSHOT" '"observed_telemetry":"AX-T615_ORCHESTRATOR_EVIDENCE"' "Performance Observer dashboard envelope declares evidence provenance"
 contains "$SNAPSHOT" '"evidence_engine":{"schema":"1","source":"vegas-inject-evidence-engine-read-only"' "snapshot exposes backward-compatible Evidence Engine envelope"
 contains "$SNAPSHOT" '"classification":"HEALTHY"' "healthy telemetry remains healthy in Evidence Engine"
+contains "$SNAPSHOT" '"analysis":{"schema":"1","source":"vegas-inject-bottleneck-engine-read-only"' "snapshot exposes backward-compatible intelligent analysis envelope"
+contains "$SNAPSHOT" '"advisory_only":"YES"' "intelligent analysis remains advisory only"
 
 CORE_SNAPSHOT=$(ORCH_EVIDENCE_FILE="$FIXTURES/healthy/evidence.env" AXGO_ROOT="$MODULE_ROOT" DASHBOARD_RUNTIME_DIR="$TMP/core-runtime" ORCH_RUNTIME_DIR="$TMP/core-orchestrator" sh "$MODULE_ROOT/bin/dashboard" core-snapshot)
 contains "$CORE_SNAPSHOT" '"decision":{"state":"balanced"' "core snapshot preserves orchestrator decision"
 contains "$CORE_SNAPSHOT" '"plugins":{}' "core snapshot omits duplicated observer envelopes"
 contains "$CORE_SNAPSHOT" '"evidence_engine":{' "core snapshot retains fixed Evidence Engine envelope"
+contains "$CORE_SNAPSHOT" '"analysis":{' "core snapshot retains fixed intelligent analysis envelope"
 not_contains "$CORE_SNAPSHOT" '"system_observer"' "core snapshot excludes nested System Observer data"
 not_contains "$CORE_SNAPSHOT" '"performance_observer"' "core snapshot excludes nested Performance Observer data"
 
@@ -80,6 +83,8 @@ contains "$(cat "$MODULE_ROOT/dashboard/assets/app.js")" 'textContent' "UI keeps
 contains "$(cat "$MODULE_ROOT/dashboard/index.html")" 'Evidence quality ledger' "UI exposes evidence quality ledger"
 contains "$(cat "$MODULE_ROOT/dashboard/assets/app.js")" 'evidenceEngineQuality' "UI renders Evidence Engine quality text-safely"
 contains "$(cat "$MODULE_ROOT/dashboard/assets/app.js")" 'evidenceEngineFallbackReason' "UI renders conservative fallback rationale text-safely"
+contains "$(cat "$MODULE_ROOT/dashboard/index.html")" 'Intelligent Analysis' "UI exposes the intelligent analysis section"
+contains "$(cat "$MODULE_ROOT/dashboard/assets/app.js")" 'analysisRecommendation' "UI renders analysis recommendations text-safely"
 
 printf 'STEP12_DASHBOARD_TESTS: %s passed, %s failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

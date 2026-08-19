@@ -1,0 +1,240 @@
+#!/usr/bin/env sh
+# VEGAS-inject Phase 7: deterministic read-only bottleneck evidence and advisory analysis.
+set -u
+
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
+APP_ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
+EVIDENCE_ENGINE="$APP_ROOT/bin/evidence-engine"
+
+usage() {
+    cat <<'EOF'
+Usage: bottleneck-engine {status|analyze|snapshot|capabilities}
+
+Fixed read-only evidence analysis only. Recommendations are advisory and no device action is performed.
+EOF
+}
+
+escape() {
+    printf '%s' "$1" | tr -d '\r\n' | sed 's/\\/\\\\/g; s/"/\\"/g'
+}
+
+json_string() {
+    KEY="$1"
+    DATA="$2"
+    VALUE=$(printf '%s' "$DATA" | sed -n "s/.*\"$KEY\":\"\([^\"]*\)\".*/\1/p" | head -n 1)
+    [ -n "$VALUE" ] && printf '%s' "$VALUE" || printf '%s' 'UNKNOWN'
+}
+
+metric_field() {
+    METRIC="$1"
+    FIELD="$2"
+    DATA="$3"
+    VALUE=$(printf '%s' "$DATA" | sed -n "s/.*\"$METRIC\":{[^}]*\"$FIELD\":\"\([^\"]*\)\".*/\1/p" | head -n 1)
+    [ -n "$VALUE" ] && printf '%s' "$VALUE" || printf '%s' 'UNKNOWN'
+}
+
+trend_field() {
+    METRIC="$1"
+    DATA="$2"
+    VALUE=$(printf '%s' "$DATA" | sed -n "s/.*\"trends\":{[^}]*\"$METRIC\":\"\([^\"]*\)\".*/\1/p" | head -n 1)
+    [ -n "$VALUE" ] && printf '%s' "$VALUE" || printf '%s' 'UNKNOWN'
+}
+
+is_valid_metric() {
+    [ "$1" = 'VALID' ]
+}
+
+is_number_at_least() {
+    VALUE="$1"
+    THRESHOLD="$2"
+    case "$VALUE" in
+        ''|UNKNOWN|UNAVAILABLE|STALE|INVALID) return 1 ;;
+    esac
+    awk -v value="$VALUE" -v threshold="$THRESHOLD" 'BEGIN { exit !(value + 0 >= threshold + 0) }'
+}
+
+is_number_at_most() {
+    VALUE="$1"
+    THRESHOLD="$2"
+    case "$VALUE" in
+        ''|UNKNOWN|UNAVAILABLE|STALE|INVALID) return 1 ;;
+    esac
+    awk -v value="$VALUE" -v threshold="$THRESHOLD" 'BEGIN { exit !(value + 0 <= threshold + 0) }'
+}
+
+analysis_data() {
+    DATA=$(AXGO_ROOT="${AXGO_ROOT:-$APP_ROOT/AX-T615-GAME-OPTIMIZER}" AXGO_DATA_ROOT="${AXGO_DATA_ROOT:-${AXGO_ROOT:-$APP_ROOT/AX-T615-GAME-OPTIMIZER}}" sh "$EVIDENCE_ENGINE" snapshot 2>/dev/null || :)
+    [ -n "$DATA" ] && printf '%s' "$DATA" || printf '%s' '{"source":"unavailable","generated_at":"UNKNOWN","quality":{"classification":"UNSAFE_UNKNOWN","fallback_required":"YES","fallback_reason":"evidence engine unavailable"},"metrics":{},"history":{"retained_samples":0,"trends":{}}}'
+}
+
+add_candidate() {
+    if [ -n "$CANDIDATES" ]; then
+        CANDIDATES="$CANDIDATES,$1"
+    else
+        CANDIDATES="$1"
+    fi
+}
+
+evaluate() {
+    DATA="$1"
+    GENERATED_AT=$(json_string generated_at "$DATA")
+    SOURCE=$(json_string source "$DATA")
+    QUALITY=$(printf '%s' "$DATA" | sed -n 's/.*"quality":{"classification":"\([^"]*\)".*/\1/p' | head -n 1)
+    FALLBACK=$(printf '%s' "$DATA" | sed -n 's/.*"fallback_required":"\([^"]*\)".*/\1/p' | head -n 1)
+    [ -n "$QUALITY" ] || QUALITY=UNSAFE_UNKNOWN
+    [ -n "$FALLBACK" ] || FALLBACK=YES
+
+    CPU=$(metric_field cpu_utilization value "$DATA"); CPU_STATE=$(metric_field cpu_utilization state "$DATA")
+    GPU=$(metric_field gpu_utilization value "$DATA"); GPU_STATE=$(metric_field gpu_utilization state "$DATA")
+    MEMORY=$(metric_field memory_usage_percent value "$DATA"); MEMORY_STATE=$(metric_field memory_usage_percent state "$DATA")
+    THERMAL=$(metric_field thermal_state value "$DATA"); THERMAL_STATE=$(metric_field thermal_state state "$DATA")
+    BATTERY=$(metric_field battery_percent value "$DATA"); BATTERY_STATE=$(metric_field battery_percent state "$DATA")
+    POWER=$(metric_field power_state value "$DATA"); POWER_STATE=$(metric_field power_state state "$DATA")
+    FPS=$(metric_field fps value "$DATA"); FPS_STATE=$(metric_field fps state "$DATA")
+    FRAME_TIME=$(metric_field frame_time_ms value "$DATA"); FRAME_TIME_STATE=$(metric_field frame_time_ms state "$DATA")
+    FRAME_PACING=$(metric_field frame_pacing value "$DATA"); FRAME_PACING_STATE=$(metric_field frame_pacing state "$DATA")
+    DISPLAY=$(metric_field display_refresh_hz value "$DATA"); DISPLAY_STATE=$(metric_field display_refresh_hz state "$DATA")
+    FPS_TREND=$(trend_field fps "$DATA"); FRAME_TIME_TREND=$(trend_field frame_time_ms "$DATA")
+    CPU_TREND=$(trend_field cpu_utilization "$DATA"); GPU_TREND=$(trend_field gpu_utilization "$DATA")
+    MEMORY_TREND=$(trend_field memory_usage_percent "$DATA"); THERMAL_TREND=$(trend_field thermal_temperature "$DATA")
+    HISTORY=$(printf '%s' "$DATA" | sed -n 's/.*"retained_samples":\([0-9][0-9]*\).*/\1/p' | head -n 1)
+    [ -n "$HISTORY" ] || HISTORY=0
+
+    CLASSIFICATION=UNKNOWN
+    CONFIDENCE=UNKNOWN
+    REASON='validated evidence is unavailable'
+    SUPPORTING='NONE'
+    CONFLICTING='NONE'
+    RECOMMENDATION='collect_more_evidence'
+    SAFETY_CLASSIFICATION='READ_ONLY_ADVISORY'
+    CANDIDATES=''
+
+    case "$QUALITY:$FALLBACK" in
+        UNSAFE_UNKNOWN:*|INVALID:*|STALE:*)
+            CLASSIFICATION=INSUFFICIENT_EVIDENCE
+            CONFIDENCE=LOW
+            REASON='safety-critical evidence is missing, stale, or invalid; analysis remains conservative'
+            SUPPORTING="evidence_quality=$QUALITY fallback_required=$FALLBACK"
+            RECOMMENDATION='remain_conservative'
+            SAFETY_CLASSIFICATION='READ_ONLY_CONSERVATIVE_FALLBACK'
+            return
+            ;;
+    esac
+
+    for ANALYSIS_STATE in "$CPU_STATE" "$GPU_STATE" "$MEMORY_STATE" "$THERMAL_STATE" "$BATTERY_STATE" "$POWER_STATE" "$FPS_STATE" "$FRAME_TIME_STATE" "$FRAME_PACING_STATE" "$DISPLAY_STATE"; do
+        if [ "$ANALYSIS_STATE" = INVALID ]; then
+            QUALITY=INVALID
+            CLASSIFICATION=INSUFFICIENT_EVIDENCE
+            CONFIDENCE=LOW
+            REASON='one or more analysis metrics are invalid; analysis remains conservative'
+            SUPPORTING='invalid telemetry is not accepted as healthy evidence'
+            RECOMMENDATION='remain_conservative'
+            SAFETY_CLASSIFICATION='READ_ONLY_CONSERVATIVE_FALLBACK'
+            return
+        fi
+    done
+
+    if [ "$THERMAL_STATE" = VALID ] && case "$THERMAL" in CRITICAL|HOT|THROTTLED) true ;; *) false ;; esac; then
+        add_candidate THERMAL_LIMITED
+    fi
+    if [ "$MEMORY_STATE" = VALID ] && { is_number_at_least "$MEMORY" 90 || [ "$MEMORY" = HIGH_PRESSURE ] || [ "$MEMORY" = CRITICAL ]; }; then
+        add_candidate MEMORY_LIMITED
+    fi
+    if [ "$POWER_STATE" = VALID ] && case "$POWER" in LOW_POWER|POWER_SAVE|CHARGING_RESTRICTED) true ;; *) false ;; esac; then
+        add_candidate POWER_LIMITED
+    elif [ "$BATTERY_STATE" = VALID ] && is_number_at_most "$BATTERY" 15; then
+        add_candidate POWER_LIMITED
+    fi
+    if [ "$CPU_STATE" = VALID ] && [ "$FPS_STATE" = VALID ] && is_number_at_least "$CPU" 90 && is_number_at_most "$FPS" 45 && { [ "$GPU_STATE" != VALID ] || ! is_number_at_least "$GPU" 90; }; then
+        add_candidate CPU_LIMITED
+    fi
+    if [ "$GPU_STATE" = VALID ] && [ "$FPS_STATE" = VALID ] && is_number_at_least "$GPU" 90 && is_number_at_most "$FPS" 45 && { [ "$CPU_STATE" != VALID ] || ! is_number_at_least "$CPU" 90; }; then
+        add_candidate GPU_LIMITED
+    fi
+    if [ "$FRAME_PACING_STATE" = VALID ] && case "$FRAME_PACING" in UNSTABLE|HIGH_JANK|SEVERE_JANK|DEGRADED) true ;; *) false ;; esac; then
+        if { [ "$CPU_STATE" != VALID ] || ! is_number_at_least "$CPU" 85; } && { [ "$GPU_STATE" != VALID ] || ! is_number_at_least "$GPU" 85; }; then
+            add_candidate FRAME_PACING_LIMITED
+        fi
+    fi
+    if [ "$DISPLAY_STATE" = VALID ] && [ "$FPS_STATE" = VALID ] && is_number_at_most "$DISPLAY" 60 && is_number_at_least "$FPS" 55 && { [ "$FRAME_PACING" = STABLE ] || [ "$FRAME_PACING" = SMOOTH ]; }; then
+        add_candidate DISPLAY_LIMITED
+    fi
+
+    CANDIDATE_COUNT=0
+    [ -n "$CANDIDATES" ] && CANDIDATE_COUNT=$(printf '%s' "$CANDIDATES" | awk -F, '{ print NF }')
+    if [ "$CANDIDATE_COUNT" -gt 1 ]; then
+        CLASSIFICATION=MIXED_BOTTLENECK
+        CONFIDENCE=MEDIUM
+        REASON='multiple independent validated performance signals are concurrently elevated'
+        SUPPORTING="candidates=$CANDIDATES fps=$FPS cpu=$CPU gpu=$GPU memory=$MEMORY thermal=$THERMAL power=$POWER"
+        RECOMMENDATION='continue_monitoring'
+    elif [ "$CANDIDATE_COUNT" -eq 1 ]; then
+        CLASSIFICATION=$CANDIDATES
+        CONFIDENCE=HIGH
+        case "$CLASSIFICATION" in
+            CPU_LIMITED) REASON='high validated CPU utilization coincides with degraded measured FPS while GPU pressure is not confirmed'; RECOMMENDATION='inspect_cpu_pressure' ;;
+            GPU_LIMITED) REASON='high validated GPU utilization coincides with degraded measured FPS while CPU pressure is not confirmed'; RECOMMENDATION='inspect_gpu_pressure' ;;
+            MEMORY_LIMITED) REASON='validated memory pressure is elevated and can affect frame delivery'; RECOMMENDATION='inspect_memory_pressure' ;;
+            THERMAL_LIMITED) REASON='validated thermal state indicates heat or throttling pressure'; RECOMMENDATION='inspect_thermal_conditions' ;;
+            POWER_LIMITED) REASON='validated battery or power state indicates a power-related constraint'; RECOMMENDATION='inspect_power_conditions' ;;
+            FRAME_PACING_LIMITED) REASON='validated frame-pacing degradation is present while CPU and GPU saturation are not confirmed'; RECOMMENDATION='inspect_frame_pacing' ;;
+            DISPLAY_LIMITED) REASON='validated display refresh ceiling aligns with delivered FPS'; RECOMMENDATION='verify_display_refresh' ;;
+        esac
+        SUPPORTING="candidate=$CLASSIFICATION fps=$FPS frame_time_ms=$FRAME_TIME cpu=$CPU gpu=$GPU memory=$MEMORY thermal=$THERMAL"
+    else
+        CLASSIFICATION=NO_CLEAR_BOTTLENECK
+        CONFIDENCE=LOW
+        REASON='available validated evidence does not isolate a single bottleneck'
+        SUPPORTING="fps=$FPS cpu=$CPU gpu=$GPU memory=$MEMORY thermal=$THERMAL frame_pacing=$FRAME_PACING"
+        RECOMMENDATION='continue_monitoring'
+    fi
+
+    if [ "$HISTORY" -lt 2 ]; then
+        CONFIDENCE=LOW
+        CONFLICTING='bounded evidence history is not yet sufficient for trend correlation'
+    else
+        CONFLICTING="trend_correlation=fps:$FPS_TREND frame_time:$FRAME_TIME_TREND cpu:$CPU_TREND gpu:$GPU_TREND memory:$MEMORY_TREND thermal:$THERMAL_TREND"
+    fi
+    [ "$QUALITY" = DEGRADED ] && [ "$CONFIDENCE" = HIGH ] && CONFIDENCE=MEDIUM
+}
+
+emit_snapshot() {
+    DATA=$(analysis_data)
+    evaluate "$DATA"
+    printf '{'
+    printf '"schema":"1",'
+    printf '"source":"vegas-inject-bottleneck-engine-read-only",'
+    printf '"read_only":true,'
+    printf '"generated_at":"%s",' "$(escape "$GENERATED_AT")"
+    printf '"classification":"%s",' "$(escape "$CLASSIFICATION")"
+    printf '"confidence":"%s",' "$(escape "$CONFIDENCE")"
+    printf '"reason":"%s",' "$(escape "$REASON")"
+    printf '"supporting_evidence":"%s",' "$(escape "$SUPPORTING")"
+    printf '"conflicting_evidence":"%s",' "$(escape "$CONFLICTING")"
+    printf '"evidence_quality":"%s",' "$(escape "$QUALITY")"
+    printf '"provenance":"%s",' "$(escape "$SOURCE")"
+    printf '"recommended_observation":"%s",' "$(escape "$RECOMMENDATION")"
+    printf '"safety_classification":"%s",' "$(escape "$SAFETY_CLASSIFICATION")"
+    printf '"history":{"retained_samples":%s,"bounded":true,"fps_trend":"%s","frame_time_trend":"%s","cpu_trend":"%s","gpu_trend":"%s","memory_trend":"%s","thermal_trend":"%s"},' "$HISTORY" "$(escape "$FPS_TREND")" "$(escape "$FRAME_TIME_TREND")" "$(escape "$CPU_TREND")" "$(escape "$GPU_TREND")" "$(escape "$MEMORY_TREND")" "$(escape "$THERMAL_TREND")"
+    printf '"safety":{"read_only":"YES","hardware_writes":"NO","network_operations":"NO","process_control":"NO","forbidden_actions_blocked":"YES","advisory_only":"YES"}'
+    printf '}\n'
+}
+
+status() {
+    DATA=$(analysis_data)
+    evaluate "$DATA"
+    printf 'VEGAS-INJECT INTELLIGENT ANALYSIS\n'
+    printf 'Classification: %s\nConfidence: %s\nEvidence quality: %s\nRecommendation: %s\nSafety: %s\nRead-only: YES\nHardware writes: NO\n' "$CLASSIFICATION" "$CONFIDENCE" "$QUALITY" "$RECOMMENDATION" "$SAFETY_CLASSIFICATION"
+}
+
+capabilities() {
+    printf 'BOTTLENECK_ENGINE_CAPABILITIES=status,analyze,snapshot,capabilities\nREAD_ONLY=YES\nHARDWARE_WRITES=NO\nNETWORK_OPERATIONS=NO\nPROCESS_CONTROL=NO\nADVISORY_ONLY=YES\n'
+}
+
+case "${1:-status}" in
+    status) [ "$#" -eq 1 ] || { usage >&2; exit 2; }; status ;;
+    analyze|snapshot) [ "$#" -eq 1 ] || { usage >&2; exit 2; }; emit_snapshot ;;
+    capabilities) [ "$#" -eq 1 ] || { usage >&2; exit 2; }; capabilities ;;
+    help|-h|--help) usage ;;
+    *) usage >&2; exit 2 ;;
+esac

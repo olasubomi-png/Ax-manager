@@ -1,4 +1,4 @@
-# VEGAS-inject Dashboard/UI v2 + Evidence Engine
+# VEGAS-inject Dashboard/UI v2 + Evidence Engine + Intelligent Analysis
 
 Dashboard/UI v2 is a **static, read-only observability interface** for unified VEGAS-inject outputs. It presents the AX-T615 Game Optimizer, System Observer, and Performance Observer without changing their contracts. The dashboard is deliberately separate from optimizer engines: it does not contain decision logic, execute arbitrary commands, or provide a hardware-control path.
 
@@ -14,7 +14,7 @@ validated JSON snapshot
 dashboard/index.html
 ```
 
-The exporter invokes the existing `orchestrator-evidence`, `orchestrator-decision`, `orchestrator`, `session`, `profile`, and fixed `evidence-engine` outputs. It does not reinterpret their policy. The browser renders the exported fields as text and rejects snapshots that are not explicitly marked `read_only: true`.
+The exporter invokes the existing `orchestrator-evidence`, `orchestrator-decision`, `orchestrator`, `session`, `profile`, fixed `evidence-engine`, and fixed `bottleneck-engine` outputs. It does not reinterpret their policy. The browser renders the exported fields as text and rejects snapshots that are not explicitly marked `read_only: true`.
 
 ## Open the dashboard
 
@@ -54,3 +54,9 @@ The dashboard displays **Unavailable**, **Not detected**, or **No data** when a 
 Phase 6 adds an optional, backward-compatible `evidence_engine` envelope. The dashboard presents only its source-derived **quality classification**, **freshness**, **provenance**, per-metric **confidence**, retained bounded-history count, observed trends, conditions, and any explicit **conservative fallback** reason. Evidence states remain distinct: `VALID`, `UNKNOWN`, `UNAVAILABLE`, `STALE`, and `INVALID` are not treated as interchangeable values.
 
 Local history is bounded and available only to the fixed evidence engine. The UI neither writes to that history nor fabricates a trend when the retained sample window is insufficient. A fallback is informational: it communicates that existing policy elected the conservative read-only branch; it cannot change hardware, processes, game state, charging, kernel values, or memory settings.
+
+## Intelligent Analysis visibility
+
+Phase 7 adds an optional, backward-compatible `analysis` envelope alongside `evidence_engine`. It contains only deterministic advisory fields: `classification`, `confidence`, `reason`, `supporting_evidence`, `conflicting_evidence`, `evidence_quality`, `provenance`, `recommended_observation`, `safety_classification`, and bounded `history` correlation. The browser validates that this envelope is an object before reading it and uses text-node rendering for every field.
+
+The **Intelligent Analysis** panel presents the current bottleneck, confidence, explanation, supporting/conflicting evidence, quality, bounded history/trends, recommendation, and safety classification. It preserves `UNKNOWN` or `Unavailable` where data is absent; no telemetry is inferred. The pipeline is **Evidence → Analysis → Recommendation → Action**, and this dashboard stops at **Recommendation**. Neither analysis nor its presentation can apply CPU/GPU, display, charging, thermal, memory, process, or game modifications.

@@ -130,6 +130,15 @@
           </div>
         </section>
 
+        <section id="intelligent-analysis" class="section-block analysis-panel" aria-labelledby="analysis-title">
+          <div class="section-heading"><div><p class="eyebrow">Validated evidence / advisory interpretation</p><h2 id="analysis-title">Intelligent Analysis</h2></div><p class="section-note">Bottleneck analysis explains validated evidence only. It is advisory, bounded by retained samples, and cannot run hardware or process actions.</p></div>
+          <div class="analysis-grid">
+            <article class="analysis-summary"><p class="eyebrow">Current bottleneck</p><strong id="analysisClassification">UNKNOWN</strong><p id="analysisExplanation">No validated bottleneck analysis is available.</p><dl><div><dt>Confidence</dt><dd id="analysisConfidence">UNKNOWN</dd></div><div><dt>Evidence quality</dt><dd id="analysisEvidenceQuality">UNKNOWN</dd></div><div><dt>Safety classification</dt><dd id="analysisSafetyClassification">UNKNOWN</dd></div><div><dt>Bounded history</dt><dd id="analysisHistoryCount">Unavailable</dd></div></dl></article>
+            <article class="analysis-evidence"><p class="eyebrow">Evidence correlation</p><h3>Why this advisory exists</h3><dl><div><dt>Supporting evidence</dt><dd id="analysisSupportingEvidence">Unavailable</dd></div><div><dt>Conflicting evidence</dt><dd id="analysisConflictingEvidence">Unavailable</dd></div><div><dt>Recommended observation</dt><dd id="analysisRecommendation">Unavailable</dd></div></dl><p class="microcopy">Recommendations are observations to investigate, not executable tuning instructions.</p></article>
+            <article class="analysis-trends"><p class="eyebrow">Bounded history correlation</p><h3>Observed directional context</h3><ul id="analysisTrendList"><li>Trend: Unavailable</li></ul><p class="microcopy">Trend labels remain unavailable until retained local evidence is sufficient. No personal data or fabricated values are used.</p></article>
+          </div>
+        </section>
+
         <section id="profiles" class="section-block profile-layout" aria-labelledby="profiles-title">
           <div class="profile-copy"><p class="eyebrow">Game policy</p><h2 id="profiles-title">Profiles remain policy-only</h2><p>Profile inspection and selection stay in the existing CLI policy layer. The dashboard displays the active policy but cannot invent hardware settings or bypass the core guardrails.</p><code>sh bin/axgo profile get</code><code>sh bin/axgo profile set &lt;balanced|performance|conservative&gt;</code></div>
           <div class="profile-paper"><span class="paper-tab">CURRENT POLICY</span><dl><div><dt>Profile</dt><dd id="profilePaperValue">Unavailable</dd></div><div><dt>Evidence status</dt><dd id="evidenceStatusValue">Unavailable</dd></div><div><dt>Policy decision</dt><dd id="policyDecisionValue">Unavailable</dd></div></dl><p class="profile-inventory-label">Available profiles</p><ul id="profilesList" class="profile-inventory"><li>Unavailable</li></ul><p class="microcopy">Profile selection is a safe policy operation. It is not presented as a frequency, governor, or charging change.</p></div>

@@ -741,6 +741,9 @@ sh ../bin/vegas performance status
 sh ../bin/vegas performance capabilities
 sh ../bin/vegas performance inspect
 sh ../bin/vegas performance snapshot
+sh ../bin/vegas analysis status
+sh ../bin/vegas analysis snapshot
+sh ../bin/vegas analysis capabilities
 sh ../bin/axgo status
 ```
 
@@ -795,6 +798,16 @@ The unified layer preserves the complete safety policy: no arbitrary path dispat
 `../bin/evidence-engine` is a fixed POSIX, read-only normalizer exposed through `sh ../bin/vegas evidence {status|capabilities|inspect|evaluate|snapshot|history}` and the AX-T615 plugin’s fixed `evidence` operation. It consumes only repository-owned orchestrator evidence, preserves each metric’s explicit state (`VALID`, `UNKNOWN`, `UNAVAILABLE`, `STALE`, or `INVALID`), and emits timestamp, freshness, provenance, confidence, and validity without fabricating values. Its small fixed history contains no personal data and supplies deterministic CPU/GPU/memory/thermal/FPS/frame-time/battery/power trend classifications only.
 
 The engine reports transparent quality classifications and names thermal escalation, memory pressure, FPS instability, frame-pacing degradation, and power anomalies only when supported by normalized evidence. When safety evidence is invalid, stale, missing, or unreliable, `bin/orchestrator-decision` reports an explicit conservative read-only fallback with its reason; it does not perform a control action. Unified VEGAS and dashboard snapshots retain established schemas and plugin envelopes while adding the separate `evidence_engine` section. The static dashboard validates that shape before text-safe rendering of availability, freshness, provenance, confidence, trends, bounded history, quality, conditions, and fallback rationale.
+
+## Phase 7 — Intelligent Bottleneck Analysis Engine
+
+`../bin/bottleneck-engine` is a fixed POSIX, read-only analysis component, available through `sh ../bin/vegas analysis {status|analyze|snapshot|capabilities}` and the AX-T615 plugin’s fixed `analysis` operation. It consumes the Phase 6 evidence-engine snapshot rather than raw or fabricated device values. It can emit only the deterministic classifications `CPU_LIMITED`, `GPU_LIMITED`, `MEMORY_LIMITED`, `THERMAL_LIMITED`, `POWER_LIMITED`, `FRAME_PACING_LIMITED`, `DISPLAY_LIMITED`, `MIXED_BOTTLENECK`, `NO_CLEAR_BOTTLENECK`, or `INSUFFICIENT_EVIDENCE`, together with confidence, explanation, supporting and conflicting evidence, source provenance, a bounded trend summary, and a recommended observation.
+
+Its retained trend context is capped by the Phase 6 evidence-engine history; the analysis component does not create unbounded logs or access any personal data. Missing, stale, invalid, or unsafe safety evidence produces `INSUFFICIENT_EVIDENCE`, `LOW` confidence, and the advisory `remain_conservative` recommendation. Valid degraded evidence can still be explained as an advisory bottleneck, but never authorizes a change.
+
+The model is explicitly ordered as **Evidence → Analysis → Recommendation → Action**. Evidence is normalized observation; analysis is a deterministic interpretation; recommendation is an inspect/monitor/collect-more-evidence statement. **Action** would modify device or game state, and AX-T615/VEGAS-inject intentionally stops before that stage. `bin/orchestrator-decision` retains its existing safety-first policy behavior and exports analysis fields only as advisory decision context.
+
+Unified snapshots and `bin/dashboard snapshot` include a separate `analysis` envelope. The dashboard’s **Intelligent Analysis** panel text-safely presents the current bottleneck, confidence, explanation, supporting and conflicting evidence, evidence quality, bounded history/trends, recommended observation, and safety classification. No dashboard field is executable, and no analysis result changes CPU/GPU controls, display refresh, charging, thermal policy, memory policy, processes, or game data.
 
 ### Final validation
 

@@ -31,6 +31,10 @@ contains "$HTML" 'id="unifiedControl"' "header exposes safety status"
 for metric in cpu gpu memory thermal battery powerMetric; do contains "$HTML" "id=\"${metric}Value\"" "system overview exposes ${metric} value"; done
 for field in gameName packageName sessionStatus profileValue sessionFpsValue sessionFrameTimeValue sessionFramePacingValue sessionFpsTrendValue; do contains "$HTML" "id=\"${field}\"" "gaming session exposes ${field}"; done
 for field in recommendationState confidenceValue priorityChip recommendationReason evidenceStatusValue actionsValue recoveryValue; do contains "$HTML" "id=\"${field}\"" "policy section exposes ${field}"; done
+contains "$HTML" 'Intelligent Analysis' "dashboard includes the Phase 7 advisory analysis section"
+for field in analysisClassification analysisConfidence analysisExplanation analysisSupportingEvidence analysisConflictingEvidence analysisEvidenceQuality analysisRecommendation analysisSafetyClassification analysisHistoryCount analysisTrendList; do contains "$HTML" "id=\"${field}\"" "analysis section exposes ${field}"; done
+contains "$APP" 'Invalid analysis section.' "malformed analysis envelope is rejected"
+contains "$APP" 'renderAnalysisTrends' "analysis trends render through a text-safe helper"
 
 contains "$HTML" 'id="pluginHealthGrid"' "plugin health grid exists"
 contains "$APP" 'snapshot.plugin_health' "plugin health reads unified snapshot source"
@@ -58,6 +62,7 @@ contains "$CSS" '@media (max-width:1050px)' "tablet responsive breakpoint exists
 contains "$CSS" '@media (max-width:780px)' "mobile responsive breakpoint exists"
 contains "$CSS" '.plugin-health-grid { grid-template-columns:1fr;' "mobile plugin cards use a single column"
 contains "$CSS" '.safety-ledger { grid-template-columns:1fr;' "mobile safety ledger uses a single column"
+contains "$CSS" '.analysis-grid { grid-template-columns:1fr;' "mobile analysis panel uses a single column"
 contains "$CSS" 'prefers-reduced-motion' "reduced motion support exists"
 
 not_contains "$SOURCES" 'eval(' "no eval in Dashboard/UI v2"

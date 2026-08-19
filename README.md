@@ -12,7 +12,7 @@ VEGAS-inject CLI and plugin manager
 AX-T615 Game Optimizer plugin     System Observer plugin     Performance Observer plugin
         ↓ read-only telemetry and policy engines
         ↓ bounded non-sensitive application and host observation
-Orchestrator evidence → decision → lifecycle / hysteresis / audit
+Orchestrator evidence → bounded analysis → decision → lifecycle / hysteresis / audit
         ↓ validated JSON snapshot
 Static dashboard and logical recommendation
 ```
@@ -30,6 +30,9 @@ The existing `AX-T615-GAME-OPTIMIZER/bin/axgo` remains the direct compatibility 
 | `sh bin/vegas evidence status` | Report the fixed read-only evidence-engine lifecycle and no-write boundary. |
 | `sh bin/vegas evidence snapshot` | Emit normalized metric state, timestamp, freshness, provenance, confidence, quality, conditions, bounded trends, and conservative fallback fields. |
 | `sh bin/vegas evidence history` | Report only the fixed bounded non-sensitive history retained for trend classification. |
+| `sh bin/vegas analysis status` | Report the current fixed bottleneck classification, confidence, evidence quality, advisory observation, and read-only safety state. |
+| `sh bin/vegas analysis snapshot` | Emit a deterministic, read-only bottleneck-analysis envelope with explanation, supporting and conflicting evidence, bounded trend context, and an advisory recommendation. |
+| `sh bin/vegas analysis capabilities` | List the allowlisted analysis operations and the explicit no-write, no-network, no-process-control boundary. |
 | `sh bin/vegas plugin health` | Validate registry, metadata, fixed adapter syntax, supported operations, and safety declarations for every registered plugin. |
 | `sh bin/vegas plugin list` | List registered, validated read-only plugins. |
 | `sh bin/vegas plugin info ax-t615-game-optimizer` | Show fixed metadata and lifecycle information. |
@@ -51,7 +54,13 @@ The existing `AX-T615-GAME-OPTIMIZER/bin/axgo` remains the direct compatibility 
 
 Discovery starts from `plugins/registry.json`. A plugin must be registered, identify itself, declare `read_only: true`, declare `hardware_writes: false`, use the fixed `plugin.sh` entrypoint, and omit executable metadata (`command`, `script`, `exec`, `shell`, or `action`). Metadata is validated as data only and cannot provide an arbitrary command path.
 
-The AX-T615 plugin exposes only established observability operations: status, capabilities, games, game detection, profiles, FPS and performance analysis, memory/thermal/power telemetry, orchestrator status, dashboard access, fixed evidence output, and dry-run reports. The independent System Observer plugin exposes only `status`, `capabilities`, `inspect`, and `snapshot`; its fixed adapter reports application version, OS/kernel/architecture, a sanitized hostname when safe, uptime, and available memory summary. Performance Observer exposes the same fixed operation set and normalizes only existing AX-T615 orchestrator evidence across CPU, GPU, memory, thermal, FPS, battery, and power categories. Its unavailable values remain `UNKNOWN`, its provenance is declared, and it reports no derived values. The Phase 4 unified layer composes the three fixed adapters into a bounded `vegas snapshot`; it neither executes plugin-provided paths nor re-implements AX-T615 policy logic. Phase 6 adds a fixed evidence engine that classifies each metric as `VALID`, `UNKNOWN`, `UNAVAILABLE`, `STALE`, or `INVALID`, declares freshness, provenance, confidence, quality, and only a fixed small non-sensitive history for deterministic trends. Invalid, stale, missing, or unreliable safety evidence produces an explicit conservative recommendation fallback; it does not trigger a device action. Existing `AXGO_*` paths, variables, configuration, runtime, and module identifiers are retained.
+The AX-T615 plugin exposes only established observability operations: status, capabilities, games, game detection, profiles, FPS and performance analysis, memory/thermal/power telemetry, orchestrator status, dashboard access, fixed evidence output, fixed bottleneck analysis, and dry-run reports. The independent System Observer plugin exposes only `status`, `capabilities`, `inspect`, and `snapshot`; its fixed adapter reports application version, OS/kernel/architecture, a sanitized hostname when safe, uptime, and available memory summary. Performance Observer exposes the same fixed operation set and normalizes only existing AX-T615 orchestrator evidence across CPU, GPU, memory, thermal, FPS, battery, and power categories. Its unavailable values remain `UNKNOWN`, its provenance is declared, and it reports no derived values. The Phase 4 unified layer composes the three fixed adapters into a bounded `vegas snapshot`; it neither executes plugin-provided paths nor re-implements AX-T615 policy logic. Phase 6 adds a fixed evidence engine that classifies each metric as `VALID`, `UNKNOWN`, `UNAVAILABLE`, `STALE`, or `INVALID`, declares freshness, provenance, confidence, quality, and only a fixed small non-sensitive history for deterministic trends. Phase 7 adds the fixed `bin/bottleneck-engine`, exposed through `vegas analysis` and the AX-T615 adapter’s allowlisted `analysis` operation. It recognizes CPU, GPU, memory, thermal, power, frame-pacing, display, mixed, clear, and insufficient-evidence states only from validated evidence; it never turns an observation into a device action. Invalid, stale, missing, or unreliable safety evidence produces an explicit conservative recommendation fallback. Existing `AXGO_*` paths, variables, configuration, runtime, and module identifiers are retained.
+
+## Evidence, analysis, recommendation, and action
+
+The product maintains a deliberately one-way safety boundary. **Evidence** is normalized, provenance-labeled observation. **Analysis** is a deterministic explanation of which supported bottleneck signal may be present, plus bounded trend context and confidence. **Recommendation** is a read-only instruction to inspect, monitor, collect more evidence, or remain conservative. **Action** would change device, process, game, or system state; VEGAS-inject does **not** perform this stage.
+
+> `Evidence → Analysis → Recommendation → Action` stops at **Recommendation**. The `analysis` envelope is advisory context for the existing policy output; it cannot authorize or execute hardware, charging, display, thermal, memory, process, or game changes.
 
 ## Safety guarantees
 
