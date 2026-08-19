@@ -1,7 +1,7 @@
 id=vegas-inject
 name=VEGAS-inject (Read-only)
-version=1.1.0-axmanager
-versionCode=10100
+version=1.2.0-axmanager
+versionCode=10200
 author=VEGAS-inject maintainers
-description=Read-only gaming observability with capability-gated dry-run actions.
+description=Read-only gaming observability, universal compatibility reports, and capability-gated dry-run actions.
 axeronPlugin=14800

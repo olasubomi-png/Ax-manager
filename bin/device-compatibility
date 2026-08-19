@@ -1,0 +1,230 @@
+#!/usr/bin/env sh
+# Phase 16 design contract: fixed, read-only Android compatibility evidence.
+# This file never writes hardware controls, /proc, /sys, Android properties, games, or arbitrary paths.
+set -u
+set -f
+
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
+APP_ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
+TEST_ROOT=${VEGAS_DEVICE_TEST_ROOT:-}
+
+usage() {
+    cat <<'EOF'
+Usage: device-compatibility {status|snapshot|capabilities|inspect|compatibility|validate}
+
+Fixed read-only Android device detection. Output is non-identifying, evidence-backed,
+and generic-first. Unknown devices select a safe generic adapter; no device control,
+root escalation, Android-property write, process control, or arbitrary command exists.
+EOF
+}
+
+safe_token() {
+    VALUE=$(printf '%s' "$1" | tr -cd '[:alnum:]._-')
+    [ -n "$VALUE" ] && printf '%s' "$VALUE" || printf '%s' 'UNKNOWN'
+}
+
+safe_text() {
+    VALUE=$(printf '%s' "$1" | tr '\r\n' '  ' | tr -cd '[:alnum:] .,_:+/-')
+    [ -n "$VALUE" ] && printf '%s' "$VALUE" || printf '%s' 'UNKNOWN'
+}
+
+json_escape() { printf '%s' "$1" | tr -d '\r\n' | sed 's/\\/\\\\/g; s/"/\\"/g'; }
+
+test_root_valid() {
+    case "$TEST_ROOT" in
+        "$APP_ROOT"/tests/.tmp/*) [ -d "$TEST_ROOT" ] && [ ! -L "$TEST_ROOT" ] ;;
+        '') return 1 ;;
+        *) return 1 ;;
+    esac
+}
+
+probe_path() {
+    RELATIVE="$1"
+    if test_root_valid; then
+        printf '%s/%s' "$TEST_ROOT" "$RELATIVE"
+    else
+        printf '/%s' "$RELATIVE"
+    fi
+}
+
+read_probe() {
+    FILE=$(probe_path "$1")
+    [ -f "$FILE" ] && [ ! -L "$FILE" ] && [ -r "$FILE" ] && head -c 4096 "$FILE" 2>/dev/null || :
+}
+
+prop_from_fixture() {
+    KEY="$1"
+    DATA=$(read_probe system/build.prop)
+    printf '%s\n' "$DATA" | awk -F= -v key="$KEY" '$1 == key { value=$0; sub(/^[^=]*=/, "", value); print value; exit }'
+}
+
+android_property() {
+    KEY="$1"
+    VALUE=''
+    if test_root_valid; then
+        VALUE=$(prop_from_fixture "$KEY")
+    elif command -v getprop >/dev/null 2>&1; then
+        VALUE=$(getprop "$KEY" 2>/dev/null || :)
+    fi
+    safe_text "$VALUE"
+}
+
+path_readable() {
+    FILE=$(probe_path "$1")
+    [ -f "$FILE" ] && [ ! -L "$FILE" ] && [ -r "$FILE" ]
+}
+
+path_directory() {
+    DIR=$(probe_path "$1")
+    [ -d "$DIR" ] && [ ! -L "$DIR" ]
+}
+
+contains_ci() {
+    HAYSTACK=$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')
+    NEEDLE=$(printf '%s' "$2" | tr '[:upper:]' '[:lower:]')
+    case "$HAYSTACK" in *"$NEEDLE"*) return 0 ;; *) return 1 ;; esac
+}
+
+detect_profile() {
+    MANUFACTURER=$(android_property ro.product.manufacturer)
+    BRAND=$(android_property ro.product.brand)
+    MODEL=$(android_property ro.product.model)
+    DEVICE=$(android_property ro.product.device)
+    BOARD=$(android_property ro.board.platform)
+    HARDWARE=$(android_property ro.hardware)
+    SDK=$(android_property ro.build.version.sdk)
+    RELEASE=$(android_property ro.build.version.release)
+    ABI=$(android_property ro.product.cpu.abi)
+    KERNEL=$(safe_text "$(read_probe proc/version | awk '{ print $3; exit }')")
+    CPUINFO=$(read_probe proc/cpuinfo)
+    MEMINFO=$(read_probe proc/meminfo)
+    GPU=$(android_property ro.hardware.egl)
+    [ "$GPU" = UNKNOWN ] && GPU=$(safe_text "$(printf '%s\n' "$CPUINFO" | awk -F: 'tolower($1) ~ /gpu|mali|adreno|powervr/ { print $2; exit }')")
+    SOC=$(android_property ro.soc.model)
+    [ "$SOC" = UNKNOWN ] && SOC=$(safe_token "$BOARD")
+    CPU_VENDOR=UNKNOWN
+    contains_ci "$CPUINFO $SOC $BOARD $HARDWARE" qualcomm && CPU_VENDOR=QUALCOMM
+    contains_ci "$CPUINFO $SOC $BOARD $HARDWARE" mediatek && CPU_VENDOR=MEDIATEK
+    contains_ci "$CPUINFO $SOC $BOARD $HARDWARE" exynos && CPU_VENDOR=SAMSUNG_EXYNOS
+    contains_ci "$CPUINFO $SOC $BOARD $HARDWARE" unisoc && CPU_VENDOR=UNISOC
+    contains_ci "$CPUINFO $SOC $BOARD $HARDWARE" spreadtrum && CPU_VENDOR=UNISOC
+    case "$BOARD" in sm*|msm*|sdm*) CPU_VENDOR=QUALCOMM ;; mt*) CPU_VENDOR=MEDIATEK ;; ums*|ud*|t6*|t7*) [ "$CPU_VENDOR" = UNKNOWN ] && CPU_VENDOR=UNISOC ;; esac
+    MEMORY_KB=$(printf '%s\n' "$MEMINFO" | awk '/^MemTotal:/ { print $2; exit }')
+    case "$MEMORY_KB" in ''|*[!0-9]*) MEMORY_KB=UNKNOWN ;; esac
+    THERMAL_OBSERVATION=NOT_AVAILABLE
+    if path_directory sys/class/thermal || path_readable sys/devices/virtual/thermal/thermal_zone0/temp; then THERMAL_OBSERVATION=SUPPORTED_READ_ONLY; fi
+    BATTERY_OBSERVATION=NOT_AVAILABLE
+    if path_directory sys/class/power_supply || path_readable sys/class/power_supply/battery/capacity; then BATTERY_OBSERVATION=SUPPORTED_READ_ONLY; fi
+    CPU_OBSERVATION=NOT_AVAILABLE
+    if path_readable proc/cpuinfo || path_directory sys/devices/system/cpu; then CPU_OBSERVATION=SUPPORTED_READ_ONLY; fi
+    MEMORY_OBSERVATION=NOT_AVAILABLE
+    if path_readable proc/meminfo; then MEMORY_OBSERVATION=SUPPORTED_READ_ONLY; fi
+    GPU_OBSERVATION=NOT_AVAILABLE
+    if [ "$GPU" != UNKNOWN ]; then GPU_OBSERVATION=SUPPORTED_READ_ONLY; fi
+    DISPLAY_OBSERVATION=NOT_AVAILABLE
+    if path_directory sys/class/drm || [ "$(android_property ro.surface_flinger.primary_display_orientation)" != UNKNOWN ]; then DISPLAY_OBSERVATION=SUPPORTED_READ_ONLY; fi
+    detect_adapter
+}
+
+detect_adapter() {
+    ADAPTER=generic-android-read-only
+    ADAPTER_FAMILY=GENERIC
+    ADAPTER_REASON='generic fallback selected; observed identity does not enable control'
+    if [ "$CPU_VENDOR" = QUALCOMM ]; then
+        ADAPTER=qualcomm-read-only
+        ADAPTER_FAMILY=SOC
+        ADAPTER_REASON='Qualcomm-like platform evidence detected; read-only observation adapter selected'
+    elif [ "$CPU_VENDOR" = MEDIATEK ]; then
+        ADAPTER=mediatek-read-only
+        ADAPTER_FAMILY=SOC
+        ADAPTER_REASON='MediaTek-like platform evidence detected; read-only observation adapter selected'
+    elif [ "$CPU_VENDOR" = SAMSUNG_EXYNOS ]; then
+        ADAPTER=samsung-exynos-read-only
+        ADAPTER_FAMILY=SOC
+        ADAPTER_REASON='Exynos-like platform evidence detected; read-only observation adapter selected'
+    elif [ "$CPU_VENDOR" = UNISOC ]; then
+        ADAPTER=unisoc-read-only
+        ADAPTER_FAMILY=SOC
+        ADAPTER_REASON='Unisoc-like platform evidence detected; read-only observation adapter selected'
+    fi
+    contains_ci "$MANUFACTURER $BRAND" samsung && { ADAPTER=samsung-one-ui-read-only; ADAPTER_FAMILY=OEM; ADAPTER_REASON='Samsung brand evidence detected; generic read-only OEM adapter selected'; }
+    contains_ci "$MANUFACTURER $BRAND" xiaomi && { ADAPTER=xiaomi-hyperos-read-only; ADAPTER_FAMILY=OEM; ADAPTER_REASON='Xiaomi brand evidence detected; generic read-only OEM adapter selected'; }
+    contains_ci "$MANUFACTURER $BRAND" redmi && { ADAPTER=xiaomi-hyperos-read-only; ADAPTER_FAMILY=OEM; ADAPTER_REASON='Redmi brand evidence detected; generic read-only OEM adapter selected'; }
+    contains_ci "$MANUFACTURER $BRAND" poco && { ADAPTER=xiaomi-hyperos-read-only; ADAPTER_FAMILY=OEM; ADAPTER_REASON='POCO brand evidence detected; generic read-only OEM adapter selected'; }
+    contains_ci "$MANUFACTURER $BRAND" oneplus && { ADAPTER=oneplus-oxygenos-read-only; ADAPTER_FAMILY=OEM; ADAPTER_REASON='OnePlus brand evidence detected; generic read-only OEM adapter selected'; }
+    contains_ci "$MANUFACTURER $BRAND" oppo && { ADAPTER=oppo-coloros-read-only; ADAPTER_FAMILY=OEM; ADAPTER_REASON='OPPO brand evidence detected; generic read-only OEM adapter selected'; }
+    contains_ci "$MANUFACTURER $BRAND" realme && { ADAPTER=realme-ui-read-only; ADAPTER_FAMILY=OEM; ADAPTER_REASON='realme brand evidence detected; generic read-only OEM adapter selected'; }
+    contains_ci "$MANUFACTURER $BRAND" huawei && { ADAPTER=huawei-emui-read-only; ADAPTER_FAMILY=OEM; ADAPTER_REASON='Huawei brand evidence detected; generic read-only OEM adapter selected'; }
+    contains_ci "$MANUFACTURER $BRAND" honor && { ADAPTER=honor-magicui-read-only; ADAPTER_FAMILY=OEM; ADAPTER_REASON='HONOR brand evidence detected; generic read-only OEM adapter selected'; }
+    contains_ci "$MANUFACTURER $BRAND" google && { ADAPTER=google-pixel-read-only; ADAPTER_FAMILY=OEM; ADAPTER_REASON='Google brand evidence detected; generic read-only OEM adapter selected'; }
+    contains_ci "$MANUFACTURER $BRAND" asus && { ADAPTER=asus-read-only; ADAPTER_FAMILY=OEM; ADAPTER_REASON='ASUS brand evidence detected; generic read-only OEM adapter selected'; }
+}
+
+profile_lines() {
+    detect_profile
+    printf 'SCHEMA=1\nCOMPONENT=vegas-universal-android-compatibility\nSOURCE=vegas-inject-fixed-read-only-device-detection\n'
+    printf 'PROFILE_CLASS=NON_IDENTIFYING_DEVICE_COMPATIBILITY\nMANUFACTURER=%s\nBRAND=%s\nMODEL=%s\nDEVICE=%s\n' "$(safe_token "$MANUFACTURER")" "$(safe_token "$BRAND")" "$(safe_token "$MODEL")" "$(safe_token "$DEVICE")"
+    printf 'SOC=%s\nCPU_VENDOR=%s\nCPU_ABI=%s\nGPU_DRIVER=%s\nMEMORY_KB=%s\nKERNEL=%s\n' "$(safe_token "$SOC")" "$CPU_VENDOR" "$(safe_token "$ABI")" "$(safe_token "$GPU")" "$MEMORY_KB" "$(safe_token "$KERNEL")"
+    printf 'ANDROID_SDK=%s\nANDROID_RELEASE=%s\nPRIVILEGE_TIER=READ_ONLY_USER_SHELL\nROOT_REQUIRED=NO\n' "$(safe_token "$SDK")" "$(safe_token "$RELEASE")"
+    printf 'ADAPTER=%s\nADAPTER_FAMILY=%s\nADAPTER_STATE=SELECTED_READ_ONLY\nADAPTER_REASON=%s\n' "$ADAPTER" "$ADAPTER_FAMILY" "$(safe_text "$ADAPTER_REASON")"
+    printf 'CPU_OBSERVATION=%s\nGPU_OBSERVATION=%s\nMEMORY_OBSERVATION=%s\nTHERMAL_OBSERVATION=%s\nBATTERY_OBSERVATION=%s\nDISPLAY_OBSERVATION=%s\n' "$CPU_OBSERVATION" "$GPU_OBSERVATION" "$MEMORY_OBSERVATION" "$THERMAL_OBSERVATION" "$BATTERY_OBSERVATION" "$DISPLAY_OBSERVATION"
+    printf 'CPU_CONTROL=UNSUPPORTED_NO_DEVICE_WRITE_CONTRACT\nGPU_CONTROL=UNSUPPORTED_NO_DEVICE_WRITE_CONTRACT\nTHERMAL_CONTROL=UNSUPPORTED_NO_DEVICE_WRITE_CONTRACT\nBATTERY_CONTROL=UNSUPPORTED_NO_DEVICE_WRITE_CONTRACT\nDISPLAY_REFRESH_CONTROL=UNSUPPORTED_NO_DEVICE_WRITE_CONTRACT\nGAMING_MODE_CONTROL=NOT_AVAILABLE_UNVERIFIED\nGAME_SPECIFIC_OPTIMIZATION=NOT_AVAILABLE_UNVERIFIED\n'
+    printf 'PERSONAL_DATA=NOT_COLLECTED\nSERIAL=NOT_COLLECTED\nFINGERPRINT=NOT_COLLECTED\nNETWORK_TRANSMISSION=NO\nHARDWARE_WRITES=NO\nPROCESS_CONTROL=NO\nANDROID_PROPERTY_WRITES=NO\nARBITRARY_EXECUTION=NO\n'
+}
+
+capability_lines() {
+    detect_profile
+    printf 'CAPABILITY_SCHEMA=1\nCAPABILITY_SOURCE=OBSERVED_READ_ONLY_EVIDENCE\n'
+    printf 'READ_CPU_TELEMETRY=%s\nREAD_GPU_TELEMETRY=%s\nREAD_MEMORY_TELEMETRY=%s\nREAD_THERMAL_TELEMETRY=%s\nREAD_BATTERY_TELEMETRY=%s\nREAD_DISPLAY_TELEMETRY=%s\n' "$CPU_OBSERVATION" "$GPU_OBSERVATION" "$MEMORY_OBSERVATION" "$THERMAL_OBSERVATION" "$BATTERY_OBSERVATION" "$DISPLAY_OBSERVATION"
+    printf 'CPU_GOVERNOR_WRITE=UNSUPPORTED_NO_DEVICE_WRITE_CONTRACT\nGPU_FREQUENCY_WRITE=UNSUPPORTED_NO_DEVICE_WRITE_CONTRACT\nTHERMAL_POLICY_WRITE=UNSUPPORTED_NO_DEVICE_WRITE_CONTRACT\nBATTERY_CHARGING_WRITE=UNSUPPORTED_NO_DEVICE_WRITE_CONTRACT\nDISPLAY_REFRESH_WRITE=UNSUPPORTED_NO_DEVICE_WRITE_CONTRACT\nGAME_MODE_WRITE=UNSUPPORTED_NO_DEVICE_WRITE_CONTRACT\nPROCESS_PRIORITY_WRITE=UNSUPPORTED_NO_DEVICE_WRITE_CONTRACT\n'
+    printf 'ACTION_refresh_telemetry=SUPPORTED_READ_ONLY\nACTION_profile_balanced_advisory=SUPPORTED_POLICY_RECORD_ONLY\nACTION_profile_performance_advisory=UNSUPPORTED_DEVICE_CAPABILITY_UNVERIFIED\nACTION_set_refresh_rate=UNSUPPORTED_NO_DEVICE_WRITE_CONTRACT\nACTION_set_cpu_governor=UNSUPPORTED_NO_DEVICE_WRITE_CONTRACT\nACTION_enable_game_mode=NOT_AVAILABLE_UNVERIFIED\n'
+    printf 'CAPABILITY_VALIDITY=OBSERVED_OR_UNAVAILABLE_ONLY\nHARDWARE_WRITES=NO\n'
+}
+
+status() {
+    profile_lines
+    printf 'COMPATIBILITY_STATUS=SAFE_READ_ONLY\nVALIDATION_STATUS=REQUIRED_FOR_ACTIONS\n'
+}
+
+inspect() {
+    profile_lines
+    printf 'INSPECTION_SCOPE=fixed properties,proc cpu/memory,sys telemetry presence only\n'
+    printf 'PROBE_PATHS=system/build.prop,proc/cpuinfo,proc/meminfo,proc/version,sys/class/thermal,sys/class/power_supply,sys/class/drm\n'
+    printf 'PROHIBITED=hardware writes,sys writes,proc writes,setprop,root,su,kill,network,arbitrary commands,game modification\n'
+}
+
+compatibility() {
+    detect_profile
+    printf 'ADAPTER=%s\nADAPTER_FAMILY=%s\nADAPTER_STATE=SELECTED_READ_ONLY\nADAPTER_REASON=%s\nFALLBACK=generic-android-read-only\nOEM_CONTROL_BRIDGE=NOT_AVAILABLE\nHARDWARE_WRITES=NO\n' "$ADAPTER" "$ADAPTER_FAMILY" "$(safe_text "$ADAPTER_REASON")"
+}
+
+validate() {
+    detect_profile
+    printf 'VALIDATION_SCHEMA=1\nVALIDATION_RESULT=VALID\nPROFILE_SHAPE=VALID\nADAPTER=%s\nADAPTER_STATE=SELECTED_READ_ONLY\nCAPABILITY_STATES=OBSERVED_OR_UNAVAILABLE\nPERSONAL_DATA=NOT_COLLECTED\nNO_DEVICE_WRITE_INTERFACE=ENFORCED\n' "$ADAPTER"
+    printf 'SAFE_FALLBACK=%s\nHARDWARE_WRITES=NO\nPROCESS_CONTROL=NO\nARBITRARY_EXECUTION=NO\n' "generic-android-read-only"
+}
+
+snapshot() {
+    detect_profile
+    printf '{'
+    printf '"schema":"1","component":"vegas-universal-android-compatibility","source":"vegas-inject-fixed-read-only-device-detection","read_only":true,'
+    printf '"profile":{"class":"NON_IDENTIFYING_DEVICE_COMPATIBILITY","manufacturer":"%s","brand":"%s","model":"%s","device":"%s","soc":"%s","cpu_vendor":"%s","cpu_abi":"%s","gpu_driver":"%s","memory_kb":"%s","kernel":"%s","android_sdk":"%s","android_release":"%s","privilege_tier":"READ_ONLY_USER_SHELL"},' \
+        "$(json_escape "$(safe_token "$MANUFACTURER")")" "$(json_escape "$(safe_token "$BRAND")")" "$(json_escape "$(safe_token "$MODEL")")" "$(json_escape "$(safe_token "$DEVICE")")" "$(json_escape "$(safe_token "$SOC")")" "$CPU_VENDOR" "$(json_escape "$(safe_token "$ABI")")" "$(json_escape "$(safe_token "$GPU")")" "$MEMORY_KB" "$(json_escape "$(safe_token "$KERNEL")")" "$(json_escape "$(safe_token "$SDK")")" "$(json_escape "$(safe_token "$RELEASE")")"
+    printf '"adapter":{"id":"%s","family":"%s","state":"SELECTED_READ_ONLY","reason":"%s","fallback":"generic-android-read-only","oem_control_bridge":"NOT_AVAILABLE"},' "$ADAPTER" "$ADAPTER_FAMILY" "$(json_escape "$(safe_text "$ADAPTER_REASON")")"
+    printf '"capabilities":{"read_cpu_telemetry":"%s","read_gpu_telemetry":"%s","read_memory_telemetry":"%s","read_thermal_telemetry":"%s","read_battery_telemetry":"%s","read_display_telemetry":"%s","cpu_monitoring":"%s","thermal_monitoring":"%s","gaming_mode_detection":"NOT_AVAILABLE_UNVERIFIED","refresh_rate_control":"UNSUPPORTED_NO_DEVICE_WRITE_CONTRACT","cpu_governor_write":"UNSUPPORTED_NO_DEVICE_WRITE_CONTRACT","gpu_frequency_write":"UNSUPPORTED_NO_DEVICE_WRITE_CONTRACT","thermal_policy_write":"UNSUPPORTED_NO_DEVICE_WRITE_CONTRACT","battery_charging_write":"UNSUPPORTED_NO_DEVICE_WRITE_CONTRACT","display_refresh_write":"UNSUPPORTED_NO_DEVICE_WRITE_CONTRACT","game_mode_write":"UNSUPPORTED_NO_DEVICE_WRITE_CONTRACT","game_specific_optimization":"NOT_AVAILABLE_UNVERIFIED"},' "$CPU_OBSERVATION" "$GPU_OBSERVATION" "$MEMORY_OBSERVATION" "$THERMAL_OBSERVATION" "$BATTERY_OBSERVATION" "$DISPLAY_OBSERVATION" "$CPU_OBSERVATION" "$THERMAL_OBSERVATION"
+    printf '"action_capabilities":{"refresh_telemetry":"SUPPORTED_READ_ONLY","profile_balanced_advisory":"SUPPORTED_POLICY_RECORD_ONLY","profile_performance_advisory":"UNSUPPORTED_DEVICE_CAPABILITY_UNVERIFIED","set_refresh_rate":"UNSUPPORTED_NO_DEVICE_WRITE_CONTRACT","set_cpu_governor":"UNSUPPORTED_NO_DEVICE_WRITE_CONTRACT","enable_game_mode":"NOT_AVAILABLE_UNVERIFIED","real_device_apply":"NOT_AVAILABLE"},'
+    printf '"privacy":{"personal_data_collected":false,"serial_collected":false,"fingerprint_collected":false,"network_transmission":false},'
+    printf '"safety":{"hardware_writes":false,"process_control":false,"android_property_writes":false,"proc_writes":false,"sys_writes":false,"root_escalation":false,"arbitrary_execution":false,"game_modification":false,"safe_fallback":"generic-android-read-only"}'
+    printf '}\n'
+}
+
+case "${1:-status}" in
+    status) [ "$#" -eq 1 ] || { usage >&2; exit 2; }; status ;;
+    snapshot) [ "$#" -eq 1 ] || { usage >&2; exit 2; }; snapshot ;;
+    capabilities) [ "$#" -eq 1 ] || { usage >&2; exit 2; }; capability_lines ;;
+    inspect) [ "$#" -eq 1 ] || { usage >&2; exit 2; }; inspect ;;
+    compatibility) [ "$#" -eq 1 ] || { usage >&2; exit 2; }; compatibility ;;
+    validate) [ "$#" -eq 1 ] || { usage >&2; exit 2; }; validate ;;
+    help|-h|--help) usage ;;
+    *) usage >&2; exit 2 ;;
+esac

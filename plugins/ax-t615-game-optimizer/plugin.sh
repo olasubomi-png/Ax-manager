@@ -13,10 +13,11 @@ POLICY_ENGINE="$APP_ROOT/bin/policy-engine"
 ACTION_ENGINE="$APP_ROOT/bin/action-engine"
 ACTION_GATE="$APP_ROOT/bin/action-gate"
 CONTROL_PLANE="$APP_ROOT/bin/control-plane"
+DEVICE_COMPAT="$APP_ROOT/bin/device-compatibility"
 
 usage() {
     cat <<'EOF'
-Usage: plugin.sh {status|capabilities|games|game-detection|profiles|fps-analysis|performance-analysis|memory-monitoring|thermal-monitoring|power-telemetry|orchestrator-status|evidence {status|capabilities|inspect|evaluate|snapshot|history}|analysis {status|analyze|snapshot|capabilities}|policy {status|evaluate|snapshot|capabilities}|action {status|snapshot|capabilities|plan|validate|dry-run|apply|verify|rollback|history|lock|unlock|evaluate|simulate}|control {status|snapshot|evaluate|simulate|capabilities}|dashboard [path|snapshot|core-snapshot]|dry-run}
+Usage: plugin.sh {status|capabilities|games|game-detection|profiles|fps-analysis|performance-analysis|memory-monitoring|thermal-monitoring|power-telemetry|orchestrator-status|evidence {status|capabilities|inspect|evaluate|snapshot|history}|analysis {status|analyze|snapshot|capabilities}|policy {status|evaluate|snapshot|capabilities}|action {status|snapshot|capabilities|plan|validate|dry-run|apply|verify|rollback|history|lock|unlock|evaluate|simulate}|control {status|snapshot|evaluate|simulate|capabilities}|device {status|capabilities|inspect|compatibility|validate|snapshot}|dashboard [path|snapshot|core-snapshot]|dry-run}
 
 This is a fixed read-only operation allowlist. No plugin metadata is executed.
 EOF
@@ -64,6 +65,13 @@ case "${1:-status}" in
     control)
         case "${2:-status}" in
             status|snapshot|evaluate|simulate|capabilities) exec sh "$CONTROL_PLANE" "${2:-status}" ;;
+            *) usage >&2; exit 2 ;;
+        esac
+        ;;
+    device)
+        [ "$#" -le 2 ] || { usage >&2; exit 2; }
+        case "${2:-status}" in
+            status|capabilities|inspect|compatibility|validate|snapshot) exec sh "$DEVICE_COMPAT" "${2:-status}" ;;
             *) usage >&2; exit 2 ;;
         esac
         ;;

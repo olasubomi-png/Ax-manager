@@ -5,7 +5,7 @@
   "description": "Read-only Tecno POP 9 and Unisoc T615 gaming telemetry, profiling, orchestration, and dashboard plugin",
   "type": "gaming",
   "entrypoint": "plugin.sh",
-  "capabilities": ["status", "capabilities", "games", "game-detection", "profiles", "fps-analysis", "performance-analysis", "memory-monitoring", "thermal-monitoring", "power-telemetry", "orchestrator-status", "control", "dashboard", "dry-run"],
+  "capabilities": ["status", "capabilities", "games", "game-detection", "profiles", "fps-analysis", "performance-analysis", "memory-monitoring", "thermal-monitoring", "power-telemetry", "orchestrator-status", "control", "dashboard", "dry-run", "device"],
   "read_only": true,
   "hardware_writes": false,
   "minimum_app_version": "1.0.0"

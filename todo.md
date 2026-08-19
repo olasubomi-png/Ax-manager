@@ -144,3 +144,15 @@
 - [x] Run syntax checks, security audit, package validation, dashboard coverage, full regression, artifact cleanup, source-diff checks, and AxManager compatibility validation.
 - [x] Document the absence of sandbox-accessible target-device capabilities and a safe on-device validation protocol; do not claim real device validation or a real applied action without observed evidence.
 - [x] Commit `feat: add safe game optimization action layer`, push to `origin/main`, verify clean synchronization, and report executed validation results and unsupported capabilities.
+
+## Phase 16 — Universal Android Device Compatibility
+
+- [x] Complete the universal Android compatibility specification review and audit reusable device, evidence, policy, action, plugin, dashboard, package, and test contracts without changing existing safety boundaries.
+- [x] Define a fixed read-only device profile, privacy limits, normalized capability records, conservative state vocabulary, privilege tiers, and a generic-first OEM adapter registry.
+- [x] Implement fixed Android device detection and adapter selection with safe fallback for unknown OEMs; capabilities must be detected from observed evidence and never inferred from manufacturer identity alone.
+- [x] Add allowlisted `vegas device status`, `capabilities`, `inspect`, `compatibility`, and `validate` routes with read-only validation and no arbitrary system commands or device writes.
+- [x] Integrate the authoritative device-compatibility record with existing action, AX-T615 plugin, unified snapshot, and static dashboard reporting without adding control elements or a browser-to-shell bridge.
+- [x] Add Android compatibility, adapter, capability tier, privacy, privilege, unsupported-state, and safe on-device validation documentation; update AxManager package metadata and static guidance only after implementation is validated.
+- [x] Add dedicated device-profile, capability-schema, adapter-selection, CLI, action-integration, dashboard, privacy, isolation, safety, package, and Termux contract tests.
+- [x] Run syntax checks, security audit, package validation, dashboard coverage, full regression, artifact cleanup, source-diff checks, and AxManager compatibility validation.
+- [x] Commit the Phase 16 release, push to `origin/main`, verify clean synchronization, and report only executed validation results and device capabilities actually observed.

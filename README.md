@@ -31,6 +31,12 @@ The existing `AX-T615-GAME-OPTIMIZER/bin/axgo` remains the direct compatibility 
 | `sh bin/vegas snapshot` | Emit the fixed unified JSON snapshot with AX-T615, System Observer, and Performance Observer provenance. |
 | `sh bin/vegas inspect` | Inspect product version, registered plugin count, fixed operations, evidence categories, and the no-control boundary. |
 | `sh bin/vegas capabilities` | List grouped observation and policy outputs; hardware control capabilities are explicitly `NONE`. |
+| `sh bin/vegas device status` | Report a non-identifying, fixed read-only Android compatibility profile and generic-first adapter selection. |
+| `sh bin/vegas device capabilities` | List evidence-backed monitoring states and explicitly unavailable device-control categories. |
+| `sh bin/vegas device inspect` | Report the fixed local probe and privacy boundary without exposing raw property dumps. |
+| `sh bin/vegas device compatibility` | Report the selected generic-first OEM adapter or safe fallback. |
+| `sh bin/vegas device validate` | Validate only the device-profile schema and no-write compatibility boundary. |
+| `sh bin/vegas device snapshot` | Emit the namespaced read-only universal Android compatibility envelope. |
 | `sh bin/vegas evidence status` | Report the fixed read-only evidence-engine lifecycle and no-write boundary. |
 | `sh bin/vegas evidence snapshot` | Emit normalized metric state, timestamp, freshness, provenance, confidence, quality, conditions, bounded trends, and conservative fallback fields. |
 | `sh bin/vegas evidence history` | Report only the fixed bounded non-sensitive history retained for trend classification. |
@@ -99,9 +105,15 @@ VEGAS-inject v1.0 finalizes the product as a portable POSIX-shell platform for o
 
 The fixed AX-T615 compatibility route includes `sh bin/axgo dashboard`, `evidence`, `policy`, `action`, and `control` aliases in addition to its established status surface. These are direct aliases to existing fixed read-only or simulation-only components; they do not restore unrestricted forwarding or action-oriented arguments. See [`RELEASE.md`](RELEASE.md) for the v1.0 scope, [`SAFETY-MODEL.md`](SAFETY-MODEL.md) for the security boundary, [`plugins/README.md`](plugins/README.md) for the declarative plugin model, and [`release/capabilities.json`](release/capabilities.json) for machine-readable public capabilities.
 
-## Capability-gated action release
+## Universal Android compatibility layer
 
-The current package version is **1.1.0-axmanager**. It introduces a fixed action schema and a separate action snapshot so policy recommendations can be traced through planning, validation, dry-run audit, verification, and rollback reporting without being converted into a real device operation. The only dry-run-capable IDs are `refresh_telemetry` and `profile_balanced_advisory`; the profile-performance, thermal, memory, and battery advisory IDs are explicit device-capability `UNSUPPORTED` records. `REAL_DEVICE_APPLY=NOT_AVAILABLE` is intentional, because this repository does not have independently verified device optimization interfaces.
+The universal compatibility layer adds a fixed non-identifying device profile, normalized monitoring capability records, and generic-first OEM adapter selection. It is strictly an **observation and explanation layer**: an OEM or SoC label cannot unlock a control, and an unavailable field remains unavailable. The separate `device_compatibility` snapshot is consumed by the capability-gated action planner and static dashboard only to explain safety decisions; it cannot authorize device changes.
+
+Read [`docs/ANDROID-COMPATIBILITY.md`](docs/ANDROID-COMPATIBILITY.md) for the complete data schema, capability states, privacy boundary, adapter policy, explicit non-goals, and a safe on-device validation procedure.
+
+## Capability-gated action and compatibility release
+
+The current package version is **1.2.0-axmanager**. It combines a fixed universal Android compatibility report with the action schema and separate action snapshot, so normalized capability evidence and policy recommendations can be traced through planning, validation, dry-run audit, verification, and rollback reporting without being converted into a real device operation. The only dry-run-capable IDs are `refresh_telemetry` and `profile_balanced_advisory`; the profile-performance, thermal, memory, and battery advisory IDs are explicit device-capability `UNSUPPORTED` records. `REAL_DEVICE_APPLY=NOT_AVAILABLE` is intentional, because this repository does not have independently verified device optimization interfaces.
 
 The static dashboard reports this state textually and has no apply button. The installed AxManager module keeps its existing `vegas action simulate` entrypoint, so the package Action remains simulation-only even though the fixed planning layer is available to repository and plugin routes. Read [`docs/ACTION-ENGINE.md`](docs/ACTION-ENGINE.md) for the complete contract and [`docs/ON_DEVICE_VALIDATION.md`](docs/ON_DEVICE_VALIDATION.md) for the safe, honest device-validation protocol.
 

@@ -7,6 +7,7 @@ APP_ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
 MANAGER="$SCRIPT_DIR/plugin-manager"
 CONTROL_PLANE="$SCRIPT_DIR/control-plane"
 ACTION_ENGINE="$SCRIPT_DIR/action-engine"
+DEVICE_COMPAT="$SCRIPT_DIR/device-compatibility"
 PLUGIN="ax-t615-game-optimizer"
 PLUGIN_IDS='ax-t615-game-optimizer system-observer performance-observer'
 PRODUCT_META="$APP_ROOT/vegas.json"
@@ -27,6 +28,7 @@ Usage:
   vegas policy {status|evaluate|snapshot|capabilities}
   vegas action {status|capabilities|plan <action-id>|validate <action-id>|dry-run <action-id>|apply <action-id> --dry-run|verify <action-id>|rollback <action-id>|history|lock|unlock --explicit-unlock|evaluate|simulate}
   vegas control {status|snapshot|evaluate|simulate|capabilities}
+  vegas device {status|capabilities|inspect|compatibility|validate|snapshot}
   vegas gaming {status|snapshot|dashboard [path|snapshot]|capabilities|games|detect|profiles|fps|performance|memory|thermal|power|orchestrator|dry-run}
   vegas system {status|capabilities|inspect|snapshot}
   vegas performance {status|capabilities|inspect|snapshot}
@@ -121,6 +123,11 @@ policy_snapshot() {
     [ -n "$OUTPUT" ] && printf '%s' "$OUTPUT" || printf '%s' '{"schema":"1","source":"unavailable","read_only":true,"policy_state":"INSUFFICIENT_EVIDENCE","recommendation":"remain_conservative","confidence":"LOW","priority":"SAFETY","reason":"policy engine unavailable","evidence_quality":"UNSAFE_UNKNOWN","bottleneck":"INSUFFICIENT_EVIDENCE","bottleneck_confidence":"LOW","supporting_evidence":"NONE","rejected_options":"performance_advisory,automatic_action","safety_classification":"READ_ONLY_CONSERVATIVE_FALLBACK","provenance":"unavailable","history":{"retained_samples":0,"bounded":true},"safety":{"read_only":"YES","hardware_writes":"NO","forbidden_actions_blocked":"YES","advisory_only":"YES","action_layer":"NOT_IMPLEMENTED"}}'
 }
 
+device_snapshot() {
+    OUTPUT=$(VEGAS_DEVICE_TEST_ROOT="${VEGAS_DEVICE_TEST_ROOT:-}" sh "$DEVICE_COMPAT" snapshot 2>/dev/null || :)
+    [ -n "$OUTPUT" ] && printf '%s' "$OUTPUT" || printf '%s' '{"schema":"1","component":"vegas-universal-android-compatibility","source":"unavailable","read_only":true,"profile":{"class":"NON_IDENTIFYING_DEVICE_COMPATIBILITY","manufacturer":"UNKNOWN","brand":"UNKNOWN","model":"UNKNOWN","device":"UNKNOWN","soc":"UNKNOWN","privilege_tier":"READ_ONLY_USER_SHELL"},"adapter":{"id":"generic-android-read-only","family":"GENERIC","state":"SAFE_FALLBACK"},"capabilities":{"game_specific_optimization":"NOT_AVAILABLE_UNVERIFIED"},"privacy":{"personal_data_collected":false,"network_transmission":false},"safety":{"hardware_writes":false,"arbitrary_execution":false}}'
+}
+
 action_snapshot() {
     OUTPUT=$(AXGO_ROOT="${AXGO_ROOT:-$APP_ROOT/AX-T615-GAME-OPTIMIZER}" AXGO_DATA_ROOT="${AXGO_DATA_ROOT:-${AXGO_ROOT:-$APP_ROOT/AX-T615-GAME-OPTIMIZER}}" ORCH_EVIDENCE_FILE="${ORCH_EVIDENCE_FILE:-}" sh "$APP_ROOT/bin/action-engine" snapshot 2>/dev/null || :)
     [ -n "$OUTPUT" ] && printf '%s' "$OUTPUT" || printf '%s' '{"schema":"1","source":"unavailable","read_only":true,"mode":"DRY_RUN","action_lock":"ENABLED","real_device_apply":"NOT_AVAILABLE","device_capabilities":"UNVERIFIED","safety_gate":"ENFORCED","current_recommendation":"remain_conservative","policy_state":"INSUFFICIENT_EVIDENCE","evidence_quality":"UNSAFE_UNKNOWN","planned_action":"refresh_telemetry","validation_status":"REQUIRED","available_actions":"NONE","unsupported_actions":"ALL_DEVICE_ACTIONS_UNSUPPORTED","blocked_actions":"hardware,process,network,arbitrary_execution","rollback_available":"NO_APPLIED_DEVICE_ACTIONS","audit_history":{"count":0,"maximum":16,"bounded":true},"safety":{"hardware_writes":false,"process_control":false,"network_execution":false,"arbitrary_execution":false,"device_action_execution":"NOT_AVAILABLE","browser_execution":false}}'
@@ -198,6 +205,7 @@ unified_snapshot() {
     ANALYSIS=$(analysis_snapshot)
     POLICY=$(policy_snapshot)
     CAPABILITY_ACTION=$(action_snapshot)
+    DEVICE=$(device_snapshot)
     ACTION_GATE=$(action_gate_snapshot)
     CONTROL=$(control_plane_snapshot)
     GENERATED_AT=$(json_value generated_at "$GAMING")
@@ -217,6 +225,7 @@ unified_snapshot() {
     printf '"policy":%s,' "$POLICY"
     printf '"action":%s,' "$(legacy_action_snapshot)"
     printf '"capability_action":%s,' "$CAPABILITY_ACTION"
+    printf '"device":%s,' "$DEVICE"
     printf '"action_gate":%s,' "$ACTION_GATE"
     printf '"control_plane":%s,' "$CONTROL"
     printf '"gaming":%s,' "$GAMING"
@@ -430,6 +439,14 @@ case "${1:-help}" in
         shift
         case "${1:-status}" in
             status|snapshot|evaluate|simulate|capabilities) [ "$#" -le 1 ] || { usage >&2; exit 2; }; exec sh "$CONTROL_PLANE" "${1:-status}" ;;
+            *) usage >&2; exit 2 ;;
+        esac
+        ;;
+    device)
+        shift
+        [ "$#" -eq 1 ] || { usage >&2; exit 2; }
+        case "$1" in
+            status|capabilities|inspect|compatibility|validate|snapshot) exec sh "$DEVICE_COMPAT" "$1" ;;
             *) usage >&2; exit 2 ;;
         esac
         ;;

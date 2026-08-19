@@ -42,7 +42,7 @@ Use only a trusted network, keep debugging access limited to devices you control
 
 1. Keep `vegas-inject.zip` intact after download.
 2. In the connected AxManager app, open its **Plugin** installer and select the ZIP. Review the AxManager **Install Plugin?** confirmation before accepting it.
-3. Refresh the plugin list if needed and verify a plugin card named **VEGAS-inject (Read-only)** with ID `vegas-inject`, version `1.0.0-axmanager`, and AxManager support value `14800`.
+3. Refresh the plugin list if needed and verify a plugin card named **VEGAS-inject (Read-only)** with ID `vegas-inject`, version `1.2.0-axmanager`, and AxManager support value `14800`.
 4. AxManager auto-enables a plugin after its confirmed installation. Use the plugin toggle only to enable or disable it. This package has no `post-fs-data.sh` or `service.sh`, so enabling it never starts a daemon, applies a setting, or performs a boot-time operation.
 5. When the plugin is enabled, **Web UI** opens the static safety notice and **Action** runs only `vegas action simulate`. The action can return a conservative `SIMULATION_BLOCKED` result when the observed evidence is unavailable or weak; do not attempt to bypass that result.
 6. Use AxManager’s normal uninstall action to remove the plugin. The package-local `uninstall.sh` is a no-op confirmation script and does not restore, reset, or modify device settings.

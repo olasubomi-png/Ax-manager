@@ -33,17 +33,18 @@ sh "$BUILD" >"$TMP/build.out" 2>&1 && pass 'package build succeeds' || { fail 'p
 unzip -t "$ZIPFILE" >"$TMP/unzip-test.out" 2>&1 && pass 'module ZIP integrity check passes' || { fail 'module ZIP integrity check passes'; cat "$TMP/unzip-test.out" >&2; }
 unzip -q "$ZIPFILE" -d "$EXTRACT" && pass 'module ZIP extracts cleanly' || fail 'module ZIP extracts cleanly'
 
-for item in module.prop action.sh uninstall.sh README.md runtime/bin/vegas runtime/bin/action-gate runtime/bin/control-plane runtime/plugins/registry.json runtime/AX-T615-GAME-OPTIMIZER/bin/axgo webroot/index.html; do
+for item in module.prop action.sh uninstall.sh README.md runtime/bin/vegas runtime/bin/action-gate runtime/bin/control-plane runtime/bin/device-compatibility runtime/plugins/registry.json runtime/AX-T615-GAME-OPTIMIZER/bin/axgo webroot/index.html; do
     [ -f "$EXTRACT/$item" ] && pass "required package file exists: $item" || fail "required package file exists: $item"
 done
 
 PROP=$(cat "$EXTRACT/module.prop" 2>/dev/null || :)
 contains "$PROP" 'id=vegas-inject' 'module ID is fixed and valid'
-contains "$PROP" 'version=1.1.0-axmanager' 'module version is declared'
-contains "$PROP" 'versionCode=10100' 'module version code is declared'
+contains "$PROP" 'version=1.2.0-axmanager' 'module version is declared'
+contains "$PROP" 'versionCode=10200' 'module version code is declared'
 contains "$PROP" 'axeronPlugin=14800' 'module declares official AxManager v1.4.8 compatibility code'
 
 [ -x "$EXTRACT/action.sh" ] && [ -x "$EXTRACT/uninstall.sh" ] && [ -x "$EXTRACT/runtime/bin/vegas" ] && pass 'module action and runtime entrypoints are executable' || fail 'module action and runtime entrypoints are executable'
+ [ -x "$EXTRACT/runtime/bin/device-compatibility" ] && pass 'universal device compatibility engine is executable' || fail 'universal device compatibility engine is executable'
 grep -Fq 'MODDIR=${0%/*}' "$EXTRACT/action.sh" && pass 'action entrypoint resolves installed module root portably' || fail 'action entrypoint resolves installed module root portably'
 grep -Fq 'vegas" action simulate' "$EXTRACT/action.sh" && pass 'action entrypoint invokes only fixed simulation route' || fail 'action entrypoint invokes only fixed simulation route'
 
@@ -51,6 +52,10 @@ ACTION=$(sh "$EXTRACT/action.sh" 2>/dev/null || :)
 contains "$ACTION" '"execution_mode":"SIMULATION_ONLY"' 'extracted module action reports simulation-only mode'
 contains "$ACTION" '"real_action_execution":"NOT_AVAILABLE"' 'extracted module action exposes no execution capability'
 contains "$ACTION" '"hardware_writes":"NO"' 'extracted module action exposes no hardware-write capability'
+
+DEVICE=$(sh "$EXTRACT/runtime/bin/vegas" device snapshot 2>/dev/null || :)
+contains "$DEVICE" '"component":"vegas-universal-android-compatibility"' 'extracted module exposes universal device compatibility snapshot'
+contains "$DEVICE" '"hardware_writes":false' 'extracted universal compatibility snapshot remains read-only'
 
 WEBUI=$(cat "$EXTRACT/webroot/index.html" 2>/dev/null || :)
 contains "$WEBUI" 'READ-ONLY · CAPABILITY-GATED · NO DEVICE APPLY' 'static WebUI states read-only capability-gated boundary'
@@ -67,7 +72,7 @@ else
     pass 'ZIP excludes repository, generated, and sensitive artifacts'
 fi
 
-STATIC_FILES="$EXTRACT/action.sh $EXTRACT/uninstall.sh $EXTRACT/runtime/bin/vegas $EXTRACT/runtime/bin/action-gate $EXTRACT/runtime/bin/control-plane $EXTRACT/runtime/AX-T615-GAME-OPTIMIZER/bin/axgo"
+STATIC_FILES="$EXTRACT/action.sh $EXTRACT/uninstall.sh $EXTRACT/runtime/bin/vegas $EXTRACT/runtime/bin/action-gate $EXTRACT/runtime/bin/control-plane $EXTRACT/runtime/bin/device-compatibility $EXTRACT/runtime/AX-T615-GAME-OPTIMIZER/bin/axgo"
 if grep -nE '(^|[[:space:];])eval([[:space:];]|$)|(^|[[:space:];])su([[:space:];]|$)|setprop[[:space:]]|(^|[[:space:];])kill([[:space:];]|$)|(^|[[:space:];])pkill([[:space:];]|$)|sysctl[[:space:]]|>[[:space:]]*/(proc|sys)/|curl[[:space:]]|wget[[:space:]]|nc[[:space:]]' $STATIC_FILES >/dev/null 2>&1; then
     fail 'package public surfaces contain no root, execution, network, process, or hardware-write primitive'
 else

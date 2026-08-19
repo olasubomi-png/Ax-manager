@@ -19,7 +19,7 @@ install -m 0644 "$TEMPLATE/README.md" "$MODULE/README.md"
 install -m 0644 "$TEMPLATE/webroot/index.html" "$MODULE/webroot/index.html"
 
 mkdir -p "$MODULE/runtime/bin" "$MODULE/runtime/plugins" "$MODULE/runtime/AX-T615-GAME-OPTIMIZER/bin"
-for entry in action-engine action-gate axgo bottleneck-engine control-plane evidence-engine plugin-manager policy-engine vegas; do
+for entry in action-engine action-gate axgo bottleneck-engine control-plane device-compatibility evidence-engine plugin-manager policy-engine vegas; do
     install -m 0755 "$ROOT/bin/$entry" "$MODULE/runtime/bin/$entry"
 done
 
