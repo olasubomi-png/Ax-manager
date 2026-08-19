@@ -17,4 +17,8 @@ No operation accepts an action identifier, executable command, path, profile, se
 
 `simulate` can record a maximum of sixteen local non-sensitive audit entries. An audit record documents a simulation decision only. It cannot represent an applied configuration, and no apply, rollback, lock, unlock, plan, or arbitrary-dispatch operation exists.
 
+## Phase 11 input-integrity hardening
+
+The gate accepts only structurally valid, bounded policy output from its fixed repository-owned policy engine. It rejects missing provenance, malformed context, stale, unknown, unsafe, or low-confidence evidence before simulation; it does not downgrade those conditions into a recommendation. Fixture and audit locations are constrained to repository-local reviewed paths, and the bounded audit rejects unsafe symlink and temporary-file targets. These controls preserve the same simulation-only result contract and add no executable or device-control capability.
+
 > **Evidence → Analysis → Policy → Recommendation → Action Gate → [Future Real Action Layer]** ends at the gate. The future layer is not implemented. The gate cannot alter hardware, Android settings, charging, thermal behavior, memory policy, processes, games, profiles, packages, files outside its own bounded audit record, or network state.

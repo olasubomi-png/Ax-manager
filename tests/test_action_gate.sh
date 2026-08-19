@@ -88,14 +88,15 @@ contains 'capabilities require internally derived policy requests' "$CAPS" 'INTE
 contains 'capabilities exclude arbitrary execution' "$CAPS" 'ARBITRARY_EXECUTION=NO'
 
 EVALUATED=$(run_gate "$GOOD" evaluate)
-contains 'healthy evidence allows an advisory simulation gate' "$EVALUATED" '"gate_state":"ALLOWED"'
+contains 'low-confidence healthy evidence remains blocked by the gate' "$EVALUATED" '"gate_state":"BLOCKED"'
+contains 'low-confidence policy explains conservative blocking' "$EVALUATED" 'confidence LOW is insufficient for simulation'
 contains 'evaluation remains simulation only' "$EVALUATED" '"execution_mode":"SIMULATION_ONLY"'
 contains 'evaluation marks real execution unavailable' "$EVALUATED" '"real_action_execution":"NOT_AVAILABLE"'
 contains 'evaluation records internally derived request source' "$EVALUATED" '"caller_input":"NOT_ACCEPTED"'
 [ ! -e "$AUDIT/simulation-audit.log" ] && ok 'evaluate does not append an audit record' || not_ok 'evaluate does not append an audit record'
 
 SIMULATED=$(run_gate "$GOOD" simulate)
-contains 'simulate reports an allowed simulation result' "$SIMULATED" '"simulation_status":"SIMULATION_READY"'
+contains 'simulate preserves blocked state for insufficient confidence' "$SIMULATED" '"simulation_status":"SIMULATION_BLOCKED"'
 contains 'simulate marks audit append in output' "$SIMULATED" '"appended_after_simulation":"YES"'
 grep -F 'real_action_execution=NOT_AVAILABLE' "$AUDIT/simulation-audit.log" >/dev/null 2>&1 && ok 'simulation audit records no real execution' || not_ok 'simulation audit records no real execution'
 [ ! -e "$ACTION_RUNTIME/managed-state" ] && ok 'simulation never changes controlled-action managed state' || not_ok 'simulation never changes controlled-action managed state'

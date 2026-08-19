@@ -42,6 +42,10 @@ The normalized `snapshot` envelope exposes fixed records for `evidence`, `analys
 
 The only persistent effect available through this component is the existing Action Safety Gate’s bounded repository-local simulation audit. It retains at most 16 non-sensitive records, never records device changes, never creates an applied-state marker, and is unchanged by `status`, `snapshot`, `evaluate`, or `capabilities`.
 
+## Phase 11 hardening invariant
+
+The control plane accepts component output only when its object structure, read-only marker, known provenance, required stage fields, safety state, and bounded size are valid. The component-output limit is fixed at `262144` bytes; oversized, malformed, missing-provenance, stale, unknown, or low-confidence input is converted to a conservative unavailable or `BLOCKED` state. Environment values cannot redirect the component root outside the repository-owned AX-T615 module or redirect an evidence fixture outside the reviewed repository-local fixture and runtime locations. The audit directory is similarly fenced to repository-local storage and refuses unsafe symlink targets.
+
 ## Integration boundaries
 
 `sh bin/vegas control {status|snapshot|evaluate|simulate|capabilities}` is the public fixed route. The AX-T615 plugin’s `control` compatibility surface and the plugin manager use the same five-operation allowlist. `vegas snapshot` and `AX-T615-GAME-OPTIMIZER/bin/dashboard snapshot` embed the control-plane envelope for static, text-only dashboard rendering. Neither route accepts browser input, metadata-provided executable fields, arbitrary file paths, action IDs, shell fragments, package targets, or control parameters.

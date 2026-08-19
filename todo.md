@@ -94,3 +94,14 @@
 - [x] Add Termux-safe control-plane contract tests covering schema, lifecycle, fallback states, simulation invariants, audit bounds, isolation, dashboard compatibility, and forbidden capability scans.
 - [x] Run focused checks, complete regression, safety scans, source-diff review, and generated-artifact cleanup.
 - [x] Commit `feat: unify vegas control plane`, push to `origin/main`, and verify clean synchronization.
+
+## Phase 11 — Production Hardening & Security Audit
+
+- [x] Audit the complete fixed CLI, AX-T615 and observer adapters, plugin metadata and registry, configuration, dashboard, security boundaries, portability assumptions, and test infrastructure against the Phase 11 specification.
+- [x] Define the fixed hardening invariant, threat model, trust boundaries, integrity checks, bounded-resource checks, and machine-readable audit-report schema without creating a real action layer.
+- [x] Harden fixed CLI routing, plugin metadata validation, control-plane evidence ordering, output integrity, resource limits, and missing-command or malformed-input behavior while preserving read-only simulation-only compatibility.
+- [x] Add the machine-readable `security/audit-report.json`, the human-readable `security/SECURITY-AUDIT.md`, and requested product, architecture, safety, plugin, and dashboard documentation updates.
+- [x] Add Termux-safe security-audit and adversarial tests for forbidden capabilities, malformed inputs, unknown and extra arguments, metadata and path attacks, stale or unknown evidence, bounded resources, interface isolation, and dashboard text safety.
+- [x] Run shell and browser syntax checks, the security audit, adversarial and compatibility tests, plugin, evidence, policy, action-gate, control-plane, dashboard tests, and the complete project regression.
+- [x] Remove generated state, complete static scans and source-diff review, then verify the final simulation-only and no-control security invariants.
+- [x] Commit `security: harden vegas-inject production boundaries`, push to `origin/main`, and verify clean synchronization.

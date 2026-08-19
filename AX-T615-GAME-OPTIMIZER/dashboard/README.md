@@ -86,3 +86,9 @@ The public data path is **Evidence → Analysis → Policy → Recommendation �
 Phase 10 adds an optional, backward-compatible `control_plane` envelope. It contains fixed records for `evidence`, `analysis`, `policy`, `recommendation`, `action_gate`, `plugins`, `safety`, `provenance`, `simulation`, and bounded `audit`, plus a deterministic lifecycle. Every stage reports only its existing state, confidence, evidence quality, provenance, and availability. The browser validates the envelope as an object and writes every displayed value through `textContent`; malformed or missing control-plane data is preserved as unavailable rather than inferred.
 
 The **VEGAS Control Plane** panel shows the fixed component chain, lifecycle, recommendation-only output, Action Gate state, simulation state, audit count/bound, and provenance. It has no controls, forms, endpoints, dynamic command path, URL input, browser-to-shell bridge, action ID, profile target, or device-control affordance. Loading a dashboard snapshot cannot evaluate, simulate, apply, roll back, or modify a device action.
+
+## Phase 11 security hardening
+
+Phase 11 confirms the dashboard remains a static, text-only observability surface. The snapshot validator treats malformed, missing, or unrecognized optional envelopes as unavailable; it does not synthesize policy, control-plane, or Action Gate state. Every displayed value is assigned through a text binding, so a snapshot value cannot become markup, a command, a URL, an event handler, or a browser-to-shell request.
+
+The dashboard has no apply, rollback, evaluation, simulation, profile, package, runtime-path, remote-fetch, or device-control affordance. The supporting machine-readable audit record is [`../../security/audit-report.json`](../../security/audit-report.json), and the release threat model is [`../../security/SECURITY-AUDIT.md`](../../security/SECURITY-AUDIT.md).

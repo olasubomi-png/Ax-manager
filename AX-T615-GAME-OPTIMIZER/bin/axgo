@@ -5,6 +5,55 @@ SCRIPT_DIR="$(CDPATH= cd -- "$(dirname "$0")" 2>/dev/null && pwd)"
 ROOT_DIR="$(CDPATH= cd -- "$SCRIPT_DIR/.." 2>/dev/null && pwd)"
 COMMAND="${1:-status}"
 
+usage_rejected() {
+    echo "AXGO_ERROR=OPERATION_REJECTED" >&2
+    exit 2
+}
+
+safe_name() {
+    case "$1" in ''|*[!A-Za-z0-9._-]*) return 1 ;; *) return 0 ;; esac
+}
+
+validate_fixed_route() {
+    ROUTE="$1"
+    shift
+    case "$ROUTE" in
+        status|detect|games|gaming) [ "$#" -eq 0 ] || usage_rejected ;;
+        capabilities) [ "$#" -eq 0 ] || usage_rejected ;;
+        cpu|gpu)
+            case "${1:-status}:$#" in status:0|status:1|inspect:1|capabilities:1|info:1) ;; dry-run:2) case "$2" in cool|balanced|performance) ;; *) usage_rejected ;; esac ;; *) usage_rejected ;; esac
+            ;;
+        display) case "${1:-status}:$#" in status:0|status:1|inspect:1|refresh:1|modes:1) ;; *) usage_rejected ;; esac ;;
+        fps) case "${1:-status}:$#" in status:0|status:1|inspect:1|monitor:1|analyze:1|report:1|recommend:1) ;; *) usage_rejected ;; esac ;;
+        performance) case "${1:-analyze}:$#" in analyze:0|analyze:1) ;; *) usage_rejected ;; esac ;;
+        power)
+            case "${1:-status}:$#" in status:0|status:1|inspect:1|battery:1|charging:1|health:1|temperature:1|estimate:1|dry-run:1|monitor:1|guard:2) ;; *) usage_rejected ;; esac
+            case "${1:-}" in guard) case "${2:-status}" in status|check|recommend) ;; *) usage_rejected ;; esac ;; esac
+            ;;
+        orchestrator)
+            case "${1:-status}:$#" in status:0|status:1|decision:1|inspect:1|dry-run:1) ;; dry-run:3) [ "$2" = start ] && safe_name "$3" || usage_rejected ;; *) usage_rejected ;; esac
+            ;;
+        memory)
+            case "${1:-status}:$#" in status:0|status:1|inspect:1|pressure:1|zram:1|swap:1|monitor:1|dry-run:1|guard:2|performance:2) ;; *) usage_rejected ;; esac
+            case "${1:-}" in guard|performance) case "${2:-status}" in status|check|recommend) ;; *) usage_rejected ;; esac ;; esac
+            ;;
+        thermal)
+            case "${1:-status}:$#" in status:0|status:1|inspect:1|monitor:1|dry-run:1|guard:2) ;; *) usage_rejected ;; esac
+            case "${1:-}" in guard) case "${2:-status}" in status|check|recommend) ;; *) usage_rejected ;; esac ;; esac
+            ;;
+        game)
+            case "${1:-status}:$#" in status:0|active:1|detect:1|profile:2) ;; detect:2) safe_name "$2" || usage_rejected ;; *) usage_rejected ;; esac
+            case "${1:-}" in profile) [ "${2:-}" = list ] || usage_rejected ;; esac
+            ;;
+        profile) case "${1:-get}:$#" in get:0|get:1) ;; *) usage_rejected ;; esac ;;
+        session) case "${1:-status}:$#" in status:0|status:1|current:1) ;; *) usage_rejected ;; esac ;;
+        recovery) case "${1:-status}:$#" in status:0|status:1) ;; *) usage_rejected ;; esac ;;
+        reset|*) usage_rejected ;;
+    esac
+}
+
+validate_fixed_route "$@"
+
 case "$COMMAND" in
     status)
         exec sh "$ROOT_DIR/status.sh"

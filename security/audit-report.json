@@ -1,0 +1,43 @@
+{
+  "schema": "vegas-security-audit-v1",
+  "scope": "Phase 11 Production Hardening & Security Audit",
+  "security_status": "PASS",
+  "execution_model": "READ_ONLY_SIMULATION_ONLY",
+  "trust_boundaries": {
+    "cli": "fixed allowlisted operations and fixed repository-owned program paths",
+    "plugins": "fixed registry, declarative metadata, fixed plugin.sh entrypoints, and no executable metadata",
+    "control_plane": "validated component envelopes, conservative fallback, and Action Safety Gate simulation delegation only",
+    "dashboard": "validated static snapshot data rendered through text-only DOM bindings",
+    "audit_storage": "bounded repository-local simulation records with non-symlink path checks"
+  },
+  "blocked_capabilities": [
+    "hardware_write",
+    "sysfs_procfs_write",
+    "android_property_write",
+    "process_control",
+    "network_access",
+    "arbitrary_command_execution",
+    "arbitrary_path_execution",
+    "browser_to_shell_bridge",
+    "real_action_application"
+  ],
+  "validated_controls": {
+    "argument_allowlists": "PASS",
+    "extra_argument_rejection": "PASS",
+    "plugin_metadata_schema": "PASS",
+    "plugin_path_and_entrypoint_integrity": "PASS",
+    "unknown_or_stale_evidence_fails_closed": "PASS",
+    "simulation_requires_action_gate": "PASS",
+    "bounded_runtime_audits": "PASS",
+    "dashboard_text_only_rendering": "PASS",
+    "termux_safe_temporary_directories": "PASS"
+  },
+  "evidence": {
+    "security_contract": "tests/test_security_audit.sh",
+    "plugin_compatibility": "tests/test_vegas_plugin.sh",
+    "action_gate_contract": "tests/test_action_gate.sh",
+    "control_plane_contract": "tests/test_control_plane.sh",
+    "dashboard_contracts": "AX-T615-GAME-OPTIMIZER/tests/test_dashboard.sh and AX-T615-GAME-OPTIMIZER/tests/test_dashboard_ui_v2.sh"
+  },
+  "release_rule": "Any failed control changes security_status to FAIL and blocks release."
+}

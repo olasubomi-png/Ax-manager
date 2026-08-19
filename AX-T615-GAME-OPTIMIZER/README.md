@@ -54,6 +54,12 @@ The AX-T615 plugin adapter exposes the same fixed `control {status|snapshot|eval
 
 The dashboard snapshot now carries an optional backward-compatible `control_plane` envelope. It is descriptive: it shows component availability, state, confidence, evidence quality, provenance, lifecycle, simulation state, and bounded audit metadata through text-only browser rendering. It never creates a browser-to-shell bridge, executes a CLI command, or turns the static dashboard into a device-control interface.
 
+## Phase 11 — production hardening compatibility boundary
+
+Phase 11 constrains the direct `bin/axgo` compatibility router to reviewed read-only and dry-run forms. It rejects unknown commands, surplus arguments, action-oriented routes, profile or session mutation, reset/restore/apply forms, arbitrary identifiers, and caller-selected executable paths before a fixed child script is reached. Existing compatibility status, inspection, telemetry, evidence, decision, and dry-run routes remain available only with their documented bounded arguments.
+
+This hardening does not transform an AX-T615 compatibility command into a device action. CPU/GPU, display, thermal, power, charging, memory, process, Android property, `/proc`, `/sys`, ZRAM, swap, LMKD, and OOM control remain unavailable through the VEGAS production interface. The repository-level security boundary and validation evidence are documented in [`../security/SECURITY-AUDIT.md`](../security/SECURITY-AUDIT.md).
+
 ## Step 2 — Hardware & Kernel Discovery
 
 The project now includes a read-only diagnostic engine for inspecting the

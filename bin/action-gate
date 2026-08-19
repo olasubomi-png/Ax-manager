@@ -4,12 +4,19 @@ set -u
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
 APP_ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
-AXGO_ROOT="${AXGO_ROOT:-$APP_ROOT/AX-T615-GAME-OPTIMIZER}"
-AXGO_DATA_ROOT="${AXGO_DATA_ROOT:-$AXGO_ROOT}"
+DEFAULT_AXGO_ROOT="$APP_ROOT/AX-T615-GAME-OPTIMIZER"
+AXGO_ROOT="$DEFAULT_AXGO_ROOT"
+AXGO_DATA_ROOT="$DEFAULT_AXGO_ROOT"
 POLICY_ENGINE="$APP_ROOT/bin/policy-engine"
-ACTION_GATE_RUNTIME_DIR="${VEGAS_ACTION_GATE_RUNTIME_DIR:-$AXGO_DATA_ROOT/runtime/action-safety-gate}"
-ACTION_GATE_AUDIT_FILE="$ACTION_GATE_RUNTIME_DIR/simulation-audit.log"
+DEFAULT_RUNTIME_DIR="$AXGO_DATA_ROOT/runtime/action-safety-gate"
+ACTION_GATE_RUNTIME_DIR="${VEGAS_ACTION_GATE_RUNTIME_DIR:-$DEFAULT_RUNTIME_DIR}"
 MAX_AUDIT_RECORDS=16
+
+case "$ACTION_GATE_RUNTIME_DIR" in
+    "$APP_ROOT"/*) ;;
+    *) ACTION_GATE_RUNTIME_DIR="$DEFAULT_RUNTIME_DIR" ;;
+esac
+ACTION_GATE_AUDIT_FILE="$ACTION_GATE_RUNTIME_DIR/simulation-audit.log"
 
 usage() {
     cat <<'EOF'
@@ -35,9 +42,47 @@ json_value() {
     [ -n "$VALUE" ] && printf '%s' "$VALUE" || printf '%s' 'UNKNOWN'
 }
 
+bounded_json() {
+    DATA="$1"
+    case "$DATA" in \{*\}) ;; *) return 1 ;; esac
+    SIZE=$(printf '%s' "$DATA" | wc -c | tr -d '[:space:]')
+    case "$SIZE" in ''|*[!0-9]*) return 1 ;; esac
+    [ "$SIZE" -le 131072 ] 2>/dev/null
+}
+
+has_fragments() {
+    DATA="$1"
+    shift
+    for FRAGMENT do
+        case "$DATA" in *"$FRAGMENT"*) ;; *) return 1 ;; esac
+    done
+}
+
+policy_output_valid() {
+    bounded_json "$1" && has_fragments "$1" \
+        '"schema":"1"' '"read_only":true' '"policy_state":"' \
+        '"recommendation":"' '"confidence":"' '"evidence_quality":"' \
+        '"provenance":"' '"safety_classification":"'
+}
+
+trusted_evidence_file() {
+    CANDIDATE="${ORCH_EVIDENCE_FILE:-}"
+    case "$CANDIDATE" in
+        '') printf '%s' '' ;;
+        "$APP_ROOT"/tests/.tmp/*|"$AXGO_DATA_ROOT"/runtime/*)
+            [ -r "$CANDIDATE" ] && printf '%s' "$CANDIDATE" || printf '%s' ''
+            ;;
+        *) printf '%s' '' ;;
+    esac
+}
+
 policy_snapshot() {
-    OUTPUT=$(AXGO_ROOT="$AXGO_ROOT" AXGO_DATA_ROOT="$AXGO_DATA_ROOT" ORCH_EVIDENCE_FILE="${ORCH_EVIDENCE_FILE:-}" sh "$POLICY_ENGINE" snapshot 2>/dev/null || :)
-    [ -n "$OUTPUT" ] && printf '%s' "$OUTPUT" || printf '%s' '{"source":"unavailable","policy_state":"INSUFFICIENT_EVIDENCE","recommendation":"remain_conservative","confidence":"LOW","evidence_quality":"UNSAFE_UNKNOWN","bottleneck":"INSUFFICIENT_EVIDENCE","safety_classification":"READ_ONLY_CONSERVATIVE_FALLBACK","provenance":"unavailable"}'
+    OUTPUT=$(AXGO_ROOT="$AXGO_ROOT" AXGO_DATA_ROOT="$AXGO_DATA_ROOT" ORCH_EVIDENCE_FILE="$(trusted_evidence_file)" sh "$POLICY_ENGINE" snapshot 2>/dev/null || :)
+    if policy_output_valid "$OUTPUT"; then
+        printf '%s' "$OUTPUT"
+    else
+        printf '%s' '{"schema":"1","source":"unavailable","read_only":true,"policy_state":"INSUFFICIENT_EVIDENCE","recommendation":"remain_conservative","confidence":"LOW","evidence_quality":"UNSAFE_UNKNOWN","bottleneck":"INSUFFICIENT_EVIDENCE","safety_classification":"READ_ONLY_CONSERVATIVE_FALLBACK","provenance":"unavailable"}'
+    fi
 }
 
 allowed_recommendation() {
@@ -55,7 +100,7 @@ allowed_policy_state() {
 }
 
 allowed_confidence() {
-    case "$1" in HIGH|MEDIUM|LOW) return 0 ;; *) return 1 ;; esac
+    case "$1" in HIGH|MEDIUM) return 0 ;; *) return 1 ;; esac
 }
 
 acceptable_evidence_quality() {
@@ -68,6 +113,10 @@ known_analysis() {
 
 read_only_safety_classification() {
     case "$1" in READ_ONLY_ADVISORY|READ_ONLY_CONSERVATIVE|READ_ONLY_CONSERVATIVE_FALLBACK|READ_ONLY_THERMAL_PROTECTION|READ_ONLY_MEMORY_PROTECTION|READ_ONLY_POWER_PROTECTION) return 0 ;; *) return 1 ;; esac
+}
+
+known_provenance() {
+    case "$1" in ''|UNKNOWN|UNAVAILABLE|INVALID|NONE|unavailable) return 1 ;; *) return 0 ;; esac
 }
 
 derive_request() {
@@ -110,7 +159,11 @@ evaluate_gate() {
         return 1
     }
     allowed_confidence "$CONFIDENCE" || {
-        GATE_REASON="policy confidence $CONFIDENCE is unavailable"
+        GATE_REASON="policy confidence $CONFIDENCE is insufficient for simulation"
+        return 1
+    }
+    known_provenance "$PROVENANCE" || {
+        GATE_REASON='policy provenance is unavailable or invalid'
         return 1
     }
     known_analysis "$ANALYSIS" || {
@@ -131,7 +184,8 @@ evaluate_gate() {
 
 ensure_audit_runtime() {
     umask 077
-    mkdir -p "$ACTION_GATE_RUNTIME_DIR" 2>/dev/null
+    [ ! -L "$ACTION_GATE_RUNTIME_DIR" ] || return 1
+    mkdir -p "$ACTION_GATE_RUNTIME_DIR" 2>/dev/null && chmod 700 "$ACTION_GATE_RUNTIME_DIR" 2>/dev/null
 }
 
 audit_count() {
@@ -142,9 +196,11 @@ audit_count() {
 append_simulation_audit() {
     ensure_audit_runtime || return 1
     TEMP_AUDIT="$ACTION_GATE_AUDIT_FILE.tmp.$$"
+    [ ! -L "$ACTION_GATE_AUDIT_FILE" ] && [ ! -e "$TEMP_AUDIT" ] || return 1
+    (umask 077; set -C; : > "$TEMP_AUDIT") 2>/dev/null || return 1
     RECORD="timestamp=$(now);operation=simulate;gate_state=$GATE_STATE;simulation_status=$SIMULATION_STATUS;request_id=$INTERNAL_ACTION_ID;policy_state=$POLICY_STATE;recommendation=$RECOMMENDATION;evidence_quality=$EVIDENCE_QUALITY;confidence=$CONFIDENCE;analysis=$ANALYSIS;safety=$SAFETY_CLASSIFICATION;real_action_execution=NOT_AVAILABLE"
     { [ -r "$ACTION_GATE_AUDIT_FILE" ] && tail -n $((MAX_AUDIT_RECORDS - 1)) "$ACTION_GATE_AUDIT_FILE" 2>/dev/null || :; printf '%s\n' "$RECORD"; } > "$TEMP_AUDIT" 2>/dev/null || return 1
-    mv -f "$TEMP_AUDIT" "$ACTION_GATE_AUDIT_FILE" 2>/dev/null
+    mv -f "$TEMP_AUDIT" "$ACTION_GATE_AUDIT_FILE" 2>/dev/null || { rm -f "$TEMP_AUDIT" 2>/dev/null || :; return 1; }
 }
 
 emit_json() {

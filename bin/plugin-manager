@@ -1,13 +1,16 @@
 #!/usr/bin/env sh
 # VEGAS-inject plugin manager: metadata is declarative data and dispatch uses fixed allowlists only.
 set -u
+set -f
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
 APP_ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
 REGISTRY="$APP_ROOT/plugins/registry.json"
 PLUGIN_IDS='ax-t615-game-optimizer system-observer performance-observer'
 FORBIDDEN_CAPABILITIES='write_proc write_sys write_power_hal write_governor write_charging_limit modify_battery kill_process force_stop modify_zram modify_swap modify_lmkd disable_thermal_protection disable_battery_protection'
-FORBIDDEN_METADATA_KEYS='command script exec shell action path'
+FORBIDDEN_METADATA_KEYS='command script exec shell action path url download endpoint executable binary'
+MAX_REGISTRY_BYTES=16384
+MAX_METADATA_BYTES=16384
 
 usage() {
     cat <<'EOF'
@@ -29,6 +32,67 @@ json_bool() {
     sed -n "s/.*\"$KEY\"[[:space:]]*:[[:space:]]*\(true\|false\).*/\1/p" "$FILE" 2>/dev/null | head -n 1
 }
 
+file_size_within() {
+    FILE="$1"
+    LIMIT="$2"
+    SIZE=$(wc -c < "$FILE" 2>/dev/null | tr -d '[:space:]')
+    case "$SIZE" in ''|*[!0-9]*) return 1 ;; esac
+    [ "$SIZE" -le "$LIMIT" ] 2>/dev/null
+}
+
+regular_nonlink_file() { [ -f "$1" ] && [ ! -L "$1" ]; }
+
+json_key_count() {
+    KEY="$1"
+    awk -v key="$KEY" '$0 ~ "\"" key "\"[[:space:]]*:" { count++ } END { print count + 0 }' "$2" 2>/dev/null
+}
+
+json_object_shape() {
+    awk 'BEGIN { first=1 } /^[[:space:]]*$/ { next } { if (first) { start=($0 ~ /^[[:space:]]*{/); first=0 } last=$0 } END { exit(start && last ~ /}[[:space:]]*$/ ? 0 : 1) }' "$1" 2>/dev/null
+}
+
+forbidden_metadata_content() {
+    grep -Eq '"(command|script|exec|shell|action|path|url|download|endpoint|executable|binary)"[[:space:]]*:' "$1" 2>/dev/null || \
+        grep -Eq '(\.\./|\.\\|https?://|file://|"/[^"]*"|\\)' "$1" 2>/dev/null
+}
+
+forbidden_registry_content() {
+    grep -Eq '"(command|script|exec|shell|action|url|download|endpoint|executable|binary)"[[:space:]]*:' "$1" 2>/dev/null || \
+        grep -Eq '(\.\./|\.\\|https?://|file://|"/[^"]*"|\\)' "$1" 2>/dev/null
+}
+
+allowed_metadata_capability() {
+    case "$1" in
+        status|capabilities|inspect|snapshot|games|game-detection|profiles|fps-analysis|performance-analysis|memory-monitoring|thermal-monitoring|power-telemetry|orchestrator-status|evidence|analysis|policy|action|control|dashboard|dry-run|read_cpu|read_gpu|read_memory|read_thermal|read_fps|read_battery|read_power) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+metadata_capabilities_valid() {
+    FILE="$2"
+    CAPABILITIES=$(awk '/"capabilities"/ { line=$0; sub(/^.*"capabilities"[[:space:]]*:[[:space:]]*\[/, "", line); sub(/\].*$/, "", line); print line; exit }' "$FILE" 2>/dev/null)
+    [ -n "$CAPABILITIES" ] || return 1
+    for CAPABILITY in $(printf '%s' "$CAPABILITIES" | tr -d '"' | tr ',' ' '); do
+        allowed_metadata_capability "$CAPABILITY" || return 1
+    done
+    return 0
+}
+
+registry_valid() {
+    regular_nonlink_file "$REGISTRY" && file_size_within "$REGISTRY" "$MAX_REGISTRY_BYTES" && json_object_shape "$REGISTRY" || return 1
+    forbidden_registry_content "$REGISTRY" && return 1
+    [ "$(json_key_count id "$REGISTRY")" = 3 ] || return 1
+    [ "$(json_key_count path "$REGISTRY")" = 3 ] || return 1
+    [ "$(json_key_count enabled "$REGISTRY")" = 3 ] || return 1
+    for REGISTRY_ID in $PLUGIN_IDS; do
+        COUNT=$(awk -v id="$REGISTRY_ID" '$0 ~ "\"id\": \"" id "\"" { count++ } END { print count + 0 }' "$REGISTRY" 2>/dev/null)
+        [ "$COUNT" = 1 ] || return 1
+    done
+    grep -Fq '"path": "plugins/ax-t615-game-optimizer"' "$REGISTRY" 2>/dev/null && \
+        grep -Fq '"path": "plugins/system-observer"' "$REGISTRY" 2>/dev/null && \
+        grep -Fq '"path": "plugins/performance-observer"' "$REGISTRY" 2>/dev/null
+}
+
 valid_id() {
     case "$1" in
         ax-t615-game-optimizer|system-observer|performance-observer) return 0 ;;
@@ -42,7 +106,7 @@ plugin_dir() {
 
 registered() {
     ID="$1"
-    valid_id "$ID" && grep -Fq "\"id\": \"$ID\"" "$REGISTRY" 2>/dev/null
+    valid_id "$ID" && registry_valid && [ "$(awk -v id="$ID" '$0 ~ "\"id\": \"" id "\"" { count++ } END { print count + 0 }' "$REGISTRY" 2>/dev/null)" = 1 ]
 }
 
 enabled() {
@@ -71,26 +135,36 @@ plugin_type_valid() {
 
 validate() {
     ID="${1:-}"
+    if ! registry_valid; then
+        printf 'PLUGIN_VALID=NO\nPLUGIN_ERROR=REGISTRY_INVALID\n'
+        return 1
+    fi
     if ! valid_id "$ID" || ! registered "$ID"; then
         printf 'PLUGIN_VALID=NO\nPLUGIN_ERROR=UNREGISTERED\n'
         return 1
     fi
     set_plugin_paths "$ID"
-    if [ ! -r "$PLUGIN_META" ] || [ ! -r "$PLUGIN_ENTRYPOINT" ]; then
+    if ! regular_nonlink_file "$PLUGIN_META" || ! regular_nonlink_file "$PLUGIN_ENTRYPOINT"; then
         printf 'PLUGIN_VALID=NO\nPLUGIN_ERROR=REQUIRED_FILE_MISSING\n'
         return 1
     fi
+    file_size_within "$PLUGIN_META" "$MAX_METADATA_BYTES" && json_object_shape "$PLUGIN_META" || { printf 'PLUGIN_VALID=NO\nPLUGIN_ERROR=MALFORMED_METADATA\n'; return 1; }
     [ "$(json_string id "$PLUGIN_META")" = "$ID" ] || { printf 'PLUGIN_VALID=NO\nPLUGIN_ERROR=INVALID_ID\n'; return 1; }
-    [ -n "$(json_string name "$PLUGIN_META")" ] || { printf 'PLUGIN_VALID=NO\nPLUGIN_ERROR=NAME_MISSING\n'; return 1; }
-    [ -n "$(json_string version "$PLUGIN_META")" ] || { printf 'PLUGIN_VALID=NO\nPLUGIN_ERROR=VERSION_MISSING\n'; return 1; }
-    [ -n "$(json_string description "$PLUGIN_META")" ] || { printf 'PLUGIN_VALID=NO\nPLUGIN_ERROR=DESCRIPTION_MISSING\n'; return 1; }
-    plugin_type_valid "$(json_string type "$PLUGIN_META")" || { printf 'PLUGIN_VALID=NO\nPLUGIN_ERROR=INVALID_TYPE\n'; return 1; }
-    [ "$(json_string entrypoint "$PLUGIN_META")" = 'plugin.sh' ] || { printf 'PLUGIN_VALID=NO\nPLUGIN_ERROR=ENTRYPOINT_REJECTED\n'; return 1; }
     [ "$(json_bool read_only "$PLUGIN_META")" = 'true' ] || { printf 'PLUGIN_VALID=NO\nPLUGIN_ERROR=READ_ONLY_REQUIRED\n'; return 1; }
     [ "$(json_bool hardware_writes "$PLUGIN_META")" = 'false' ] || { printf 'PLUGIN_VALID=NO\nPLUGIN_ERROR=HARDWARE_WRITES_FORBIDDEN\n'; return 1; }
     for CAPABILITY in $FORBIDDEN_CAPABILITIES; do
         grep -Fq "\"$CAPABILITY\"" "$PLUGIN_META" 2>/dev/null && { printf 'PLUGIN_VALID=NO\nPLUGIN_ERROR=FORBIDDEN_CAPABILITY\n'; return 1; }
     done
+    forbidden_metadata_content "$PLUGIN_META" && { printf 'PLUGIN_VALID=NO\nPLUGIN_ERROR=EXECUTABLE_METADATA_REJECTED\n'; return 1; }
+    for REQUIRED_KEY in id name version description type entrypoint capabilities read_only hardware_writes minimum_app_version; do
+        [ "$(json_key_count "$REQUIRED_KEY" "$PLUGIN_META")" = 1 ] || { printf 'PLUGIN_VALID=NO\nPLUGIN_ERROR=REQUIRED_FIELD_INVALID\n'; return 1; }
+    done
+    [ -n "$(json_string name "$PLUGIN_META")" ] || { printf 'PLUGIN_VALID=NO\nPLUGIN_ERROR=NAME_MISSING\n'; return 1; }
+    [ -n "$(json_string version "$PLUGIN_META")" ] || { printf 'PLUGIN_VALID=NO\nPLUGIN_ERROR=VERSION_MISSING\n'; return 1; }
+    [ -n "$(json_string description "$PLUGIN_META")" ] || { printf 'PLUGIN_VALID=NO\nPLUGIN_ERROR=DESCRIPTION_MISSING\n'; return 1; }
+    plugin_type_valid "$(json_string type "$PLUGIN_META")" || { printf 'PLUGIN_VALID=NO\nPLUGIN_ERROR=INVALID_TYPE\n'; return 1; }
+    [ "$(json_string entrypoint "$PLUGIN_META")" = 'plugin.sh' ] || { printf 'PLUGIN_VALID=NO\nPLUGIN_ERROR=ENTRYPOINT_REJECTED\n'; return 1; }
+    metadata_capabilities_valid "$ID" "$PLUGIN_META" || { printf 'PLUGIN_VALID=NO\nPLUGIN_ERROR=UNKNOWN_OPERATION\n'; return 1; }
     for KEY in $FORBIDDEN_METADATA_KEYS; do
         grep -Eq "\"$KEY\"[[:space:]]*:" "$PLUGIN_META" 2>/dev/null && { printf 'PLUGIN_VALID=NO\nPLUGIN_ERROR=EXECUTABLE_METADATA_REJECTED\n'; return 1; }
     done
@@ -238,7 +312,7 @@ case "${1:-summary}" in
     status) [ "$#" -eq 2 ] || { usage >&2; exit 2; }; plugin_status "$2" ;;
     capabilities) [ "$#" -eq 2 ] || { usage >&2; exit 2; }; plugin_capabilities "$2" ;;
     validate) [ "$#" -le 2 ] || { usage >&2; exit 2; }; validate "${2:-ax-t615-game-optimizer}" ;;
-    invoke) [ "$#" -ge 3 ] || { usage >&2; exit 2; }; invoke "$2" "$3" "${4:-}" ;;
+    invoke) [ "$#" -ge 3 ] && [ "$#" -le 4 ] || { usage >&2; exit 2; }; invoke "$2" "$3" "${4:-}" ;;
     summary) [ "$#" -eq 1 ] || { usage >&2; exit 2; }; summary ;;
     help|-h|--help) usage ;;
     *) usage >&2; exit 2 ;;

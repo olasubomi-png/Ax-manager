@@ -4,8 +4,9 @@ set -u
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
 APP_ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
-AXGO_ROOT="${AXGO_ROOT:-$APP_ROOT/AX-T615-GAME-OPTIMIZER}"
-AXGO_DATA_ROOT="${AXGO_DATA_ROOT:-$AXGO_ROOT}"
+DEFAULT_AXGO_ROOT="$APP_ROOT/AX-T615-GAME-OPTIMIZER"
+AXGO_ROOT="$DEFAULT_AXGO_ROOT"
+AXGO_DATA_ROOT="$DEFAULT_AXGO_ROOT"
 PLUGIN_MANAGER="$APP_ROOT/bin/plugin-manager"
 EVIDENCE_ENGINE="$APP_ROOT/bin/evidence-engine"
 BOTTLENECK_ENGINE="$APP_ROOT/bin/bottleneck-engine"
@@ -15,6 +16,7 @@ ORCHESTRATOR="$AXGO_ROOT/bin/orchestrator"
 DEFAULT_RUNTIME_DIR="$APP_ROOT/runtime/control-plane"
 CONTROL_RUNTIME_DIR="${VEGAS_CONTROL_PLANE_RUNTIME_DIR:-$DEFAULT_RUNTIME_DIR}"
 MAX_AUDIT_RECORDS=16
+MAX_COMPONENT_BYTES=262144
 
 # The audit path is deliberately constrained to the repository. It records only
 # non-sensitive simulation safety outcomes and cannot target a device path.
@@ -69,6 +71,53 @@ json_object_or() {
     esac
 }
 
+bounded_json() {
+    DATA="$1"
+    case "$DATA" in \{*\}) ;; *) return 1 ;; esac
+    SIZE=$(printf '%s' "$DATA" | wc -c | tr -d '[:space:]')
+    case "$SIZE" in ''|*[!0-9]*) return 1 ;; esac
+    [ "$SIZE" -le "$MAX_COMPONENT_BYTES" ] 2>/dev/null
+}
+
+has_fragments() {
+    DATA="$1"
+    shift
+    for FRAGMENT do
+        case "$DATA" in *"$FRAGMENT"*) ;; *) return 1 ;; esac
+    done
+}
+
+valid_evidence_output() { bounded_json "$1" && has_fragments "$1" '"schema":"1"' '"read_only":true' '"quality":{' '"provenance":"'; }
+valid_analysis_output() { bounded_json "$1" && has_fragments "$1" '"schema":"1"' '"read_only":true' '"classification":"' '"confidence":"' '"evidence_quality":"' '"provenance":"'; }
+valid_policy_output() { bounded_json "$1" && has_fragments "$1" '"schema":"1"' '"read_only":true' '"policy_state":"' '"recommendation":"' '"confidence":"' '"evidence_quality":"' '"provenance":"'; }
+valid_gate_output() { bounded_json "$1" && has_fragments "$1" '"schema":"1"' '"read_only":true' '"gate_state":"' '"simulation_status":"' '"confidence":"' '"evidence_quality":"' '"provenance":"'; }
+
+known_provenance() {
+    case "$1" in ''|UNKNOWN|UNAVAILABLE|INVALID|NONE|unavailable) return 1 ;; *) return 0 ;; esac
+}
+
+trusted_evidence_file() {
+    CANDIDATE="${ORCH_EVIDENCE_FILE:-}"
+    case "$CANDIDATE" in
+        '') printf '%s' '' ;;
+        "$APP_ROOT"/tests/.tmp/*|"$AXGO_DATA_ROOT"/runtime/*)
+            [ -r "$CANDIDATE" ] && printf '%s' "$CANDIDATE" || printf '%s' ''
+            ;;
+        *) printf '%s' '' ;;
+    esac
+}
+
+trusted_gate_runtime() {
+    CANDIDATE="${VEGAS_ACTION_GATE_RUNTIME_DIR:-}"
+    case "$CANDIDATE" in
+        '') printf '%s' '' ;;
+        "$APP_ROOT"/tests/.tmp/*|"$APP_ROOT"/runtime/*|"$AXGO_DATA_ROOT"/runtime/*)
+            [ ! -L "$CANDIDATE" ] && printf '%s' "$CANDIDATE" || printf '%s' ''
+            ;;
+        *) printf '%s' '' ;;
+    esac
+}
+
 confidence_for_quality() {
     case "$1" in
         HEALTHY|VALID) printf '%s' 'HIGH' ;;
@@ -101,24 +150,24 @@ valid_recommendation() {
 }
 
 run_evidence() {
-    ORCH_EVIDENCE_FILE="${ORCH_EVIDENCE_FILE:-}" AXGO_ROOT="$AXGO_ROOT" AXGO_DATA_ROOT="$AXGO_DATA_ROOT" sh "$EVIDENCE_ENGINE" snapshot 2>/dev/null || :
+    ORCH_EVIDENCE_FILE="$(trusted_evidence_file)" AXGO_ROOT="$AXGO_ROOT" AXGO_DATA_ROOT="$AXGO_DATA_ROOT" sh "$EVIDENCE_ENGINE" snapshot 2>/dev/null || :
 }
 
 run_analysis() {
-    ORCH_EVIDENCE_FILE="${ORCH_EVIDENCE_FILE:-}" AXGO_ROOT="$AXGO_ROOT" AXGO_DATA_ROOT="$AXGO_DATA_ROOT" sh "$BOTTLENECK_ENGINE" snapshot 2>/dev/null || :
+    ORCH_EVIDENCE_FILE="$(trusted_evidence_file)" AXGO_ROOT="$AXGO_ROOT" AXGO_DATA_ROOT="$AXGO_DATA_ROOT" sh "$BOTTLENECK_ENGINE" snapshot 2>/dev/null || :
 }
 
 run_policy() {
-    ORCH_EVIDENCE_FILE="${ORCH_EVIDENCE_FILE:-}" AXGO_ROOT="$AXGO_ROOT" AXGO_DATA_ROOT="$AXGO_DATA_ROOT" sh "$POLICY_ENGINE" snapshot 2>/dev/null || :
+    ORCH_EVIDENCE_FILE="$(trusted_evidence_file)" AXGO_ROOT="$AXGO_ROOT" AXGO_DATA_ROOT="$AXGO_DATA_ROOT" sh "$POLICY_ENGINE" snapshot 2>/dev/null || :
 }
 
 run_gate() {
     OPERATION="$1"
-    ORCH_EVIDENCE_FILE="${ORCH_EVIDENCE_FILE:-}" AXGO_ROOT="$AXGO_ROOT" AXGO_DATA_ROOT="$AXGO_DATA_ROOT" sh "$ACTION_GATE" "$OPERATION" 2>/dev/null || :
+    ORCH_EVIDENCE_FILE="$(trusted_evidence_file)" VEGAS_ACTION_GATE_RUNTIME_DIR="$(trusted_gate_runtime)" AXGO_ROOT="$AXGO_ROOT" AXGO_DATA_ROOT="$AXGO_DATA_ROOT" sh "$ACTION_GATE" "$OPERATION" 2>/dev/null || :
 }
 
 run_orchestrator_status() {
-    AXGO_ROOT="$AXGO_ROOT" AXGO_DATA_ROOT="$AXGO_DATA_ROOT" ORCH_RUNTIME_DIR="${ORCH_RUNTIME_DIR:-$AXGO_DATA_ROOT/runtime/orchestrator}" sh "$ORCHESTRATOR" status 2>/dev/null || :
+    AXGO_ROOT="$AXGO_ROOT" AXGO_DATA_ROOT="$AXGO_DATA_ROOT" ORCH_RUNTIME_DIR="$AXGO_DATA_ROOT/runtime/orchestrator" sh "$ORCHESTRATOR" status 2>/dev/null || :
 }
 
 plugin_status() { sh "$PLUGIN_MANAGER" status "$1" 2>/dev/null || :; }
@@ -142,10 +191,14 @@ plugin_stage() {
 }
 
 load_components() {
-    EVIDENCE=$(json_object_or "$(run_evidence)" '{"schema":"1","source":"unavailable","read_only":true,"quality":{"classification":"UNSAFE_UNKNOWN","fallback_required":"YES","fallback_reason":"evidence engine unavailable"},"metrics":{},"safety":{"read_only":"YES"}}')
-    ANALYSIS=$(json_object_or "$(run_analysis)" '{"schema":"1","source":"unavailable","read_only":true,"classification":"INSUFFICIENT_EVIDENCE","confidence":"LOW","evidence_quality":"UNSAFE_UNKNOWN","provenance":"unavailable","reason":"analysis engine unavailable","safety":{"read_only":"YES"}}')
-    POLICY=$(json_object_or "$(run_policy)" '{"schema":"1","source":"unavailable","read_only":true,"policy_state":"INSUFFICIENT_EVIDENCE","recommendation":"remain_conservative","confidence":"LOW","evidence_quality":"UNSAFE_UNKNOWN","provenance":"unavailable","reason":"policy engine unavailable","safety":{"read_only":"YES"}}')
-    ACTION_GATE_RESULT=$(json_object_or "$(run_gate evaluate)" '{"schema":"1","source":"unavailable","read_only":true,"gate_state":"BLOCKED","simulation_status":"SIMULATION_BLOCKED","simulated_recommendation":"remain_conservative","confidence":"LOW","evidence_quality":"UNSAFE_UNKNOWN","provenance":"unavailable","reason":"action gate unavailable","safety":{"read_only":"YES","simulation_only":"YES"}}')
+    RAW_EVIDENCE=$(run_evidence)
+    RAW_ANALYSIS=$(run_analysis)
+    RAW_POLICY=$(run_policy)
+    RAW_GATE=$(run_gate evaluate)
+    if valid_evidence_output "$RAW_EVIDENCE"; then EVIDENCE="$RAW_EVIDENCE"; else EVIDENCE='{"schema":"1","source":"unavailable","read_only":true,"quality":{"classification":"UNSAFE_UNKNOWN","fallback_required":"YES","fallback_reason":"evidence engine unavailable or malformed"},"metrics":{},"safety":{"read_only":"YES"}}'; fi
+    if valid_analysis_output "$RAW_ANALYSIS"; then ANALYSIS="$RAW_ANALYSIS"; else ANALYSIS='{"schema":"1","source":"unavailable","read_only":true,"classification":"INSUFFICIENT_EVIDENCE","confidence":"LOW","evidence_quality":"UNSAFE_UNKNOWN","provenance":"unavailable","reason":"analysis engine unavailable or malformed","safety":{"read_only":"YES"}}'; fi
+    if valid_policy_output "$RAW_POLICY"; then POLICY="$RAW_POLICY"; else POLICY='{"schema":"1","source":"unavailable","read_only":true,"policy_state":"INSUFFICIENT_EVIDENCE","recommendation":"remain_conservative","confidence":"LOW","evidence_quality":"UNSAFE_UNKNOWN","provenance":"unavailable","reason":"policy engine unavailable or malformed","safety":{"read_only":"YES"}}'; fi
+    if valid_gate_output "$RAW_GATE"; then ACTION_GATE_RESULT="$RAW_GATE"; else ACTION_GATE_RESULT='{"schema":"1","source":"unavailable","read_only":true,"gate_state":"BLOCKED","simulation_status":"SIMULATION_BLOCKED","simulated_recommendation":"remain_conservative","confidence":"LOW","evidence_quality":"UNSAFE_UNKNOWN","provenance":"unavailable","reason":"action gate unavailable or malformed","safety":{"read_only":"YES","simulation_only":"YES"}}'; fi
     ORCHESTRATOR_STATUS=$(run_orchestrator_status)
     plugin_stage
 
@@ -194,6 +247,14 @@ evaluate_safety() {
     CONTROL_SAFE=NO
 
     case "$EVIDENCE_QUALITY" in HEALTHY|VALID) ;; *) CONTROL_REASON="evidence quality $EVIDENCE_QUALITY requires conservative blocking"; return ;; esac
+    safe_confidence "$EVIDENCE_CONFIDENCE" || { CONTROL_REASON='evidence confidence is insufficient'; return; }
+    safe_confidence "$ANALYSIS_CONFIDENCE" || { CONTROL_REASON='analysis confidence is insufficient'; return; }
+    safe_confidence "$POLICY_CONFIDENCE" || { CONTROL_REASON='policy confidence is insufficient'; return; }
+    safe_confidence "$GATE_CONFIDENCE" || { CONTROL_REASON='action-gate confidence is insufficient'; return; }
+    known_provenance "$EVIDENCE_SOURCE" || { CONTROL_REASON='evidence provenance is unavailable or invalid'; return; }
+    known_provenance "$ANALYSIS_PROVENANCE" || { CONTROL_REASON='analysis provenance is unavailable or invalid'; return; }
+    known_provenance "$POLICY_PROVENANCE" || { CONTROL_REASON='policy provenance is unavailable or invalid'; return; }
+    known_provenance "$GATE_PROVENANCE" || { CONTROL_REASON='action-gate provenance is unavailable or invalid'; return; }
     [ "$EVIDENCE_AVAILABILITY" = AVAILABLE ] || { CONTROL_REASON='evidence stage is unavailable'; return; }
     [ "$ANALYSIS_AVAILABILITY" = AVAILABLE ] || { CONTROL_REASON='analysis stage is unavailable'; return; }
     [ "$POLICY_AVAILABILITY" = AVAILABLE ] || { CONTROL_REASON='policy stage is unavailable'; return; }
@@ -223,7 +284,8 @@ set_lifecycle() {
 
 ensure_audit_runtime() {
     umask 077
-    mkdir -p "$CONTROL_RUNTIME_DIR" 2>/dev/null
+    [ ! -L "$CONTROL_RUNTIME_DIR" ] || return 1
+    mkdir -p "$CONTROL_RUNTIME_DIR" 2>/dev/null && chmod 700 "$CONTROL_RUNTIME_DIR" 2>/dev/null
 }
 
 audit_count() {
@@ -234,9 +296,11 @@ audit_count() {
 append_simulation_audit() {
     ensure_audit_runtime || return 1
     TEMP_AUDIT="$CONTROL_AUDIT_FILE.tmp.$$"
+    [ ! -L "$CONTROL_AUDIT_FILE" ] && [ ! -e "$TEMP_AUDIT" ] || return 1
+    (umask 077; set -C; : > "$TEMP_AUDIT") 2>/dev/null || return 1
     RECORD="timestamp=$(now);operation=simulate;lifecycle=$LIFECYCLE;evidence_quality=$EVIDENCE_QUALITY;analysis_state=$ANALYSIS_STATE;policy_state=$POLICY_STATE;action_gate_state=$CONTROL_GATE_STATE;simulation=true;executed=false;hardware_changed=false"
     { [ -r "$CONTROL_AUDIT_FILE" ] && tail -n $((MAX_AUDIT_RECORDS - 1)) "$CONTROL_AUDIT_FILE" 2>/dev/null || :; printf '%s\n' "$RECORD"; } > "$TEMP_AUDIT" 2>/dev/null || return 1
-    mv -f "$TEMP_AUDIT" "$CONTROL_AUDIT_FILE" 2>/dev/null
+    mv -f "$TEMP_AUDIT" "$CONTROL_AUDIT_FILE" 2>/dev/null || { rm -f "$TEMP_AUDIT" 2>/dev/null || :; return 1; }
 }
 
 emit_snapshot() {
@@ -305,14 +369,14 @@ evaluate() {
 simulate() {
     prepare simulate
     AUDIT_APPENDED=NO
+    ACTION_GATE_RESULT=$(json_object_or "$(run_gate simulate)" "$ACTION_GATE_RESULT")
+    RAW_GATE_STATE=$(json_string gate_state "$ACTION_GATE_RESULT")
+    GATE_SIMULATION_STATUS=$(json_string simulation_status "$ACTION_GATE_RESULT")
+    GATE_CONFIDENCE=$(json_string confidence "$ACTION_GATE_RESULT")
+    GATE_QUALITY=$(json_string evidence_quality "$ACTION_GATE_RESULT")
+    GATE_PROVENANCE=$(json_string provenance "$ACTION_GATE_RESULT")
+    GATE_REASON=$(json_string reason "$ACTION_GATE_RESULT")
     if [ "$CONTROL_SAFE" = YES ]; then
-        ACTION_GATE_RESULT=$(json_object_or "$(run_gate simulate)" "$ACTION_GATE_RESULT")
-        RAW_GATE_STATE=$(json_string gate_state "$ACTION_GATE_RESULT")
-        GATE_SIMULATION_STATUS=$(json_string simulation_status "$ACTION_GATE_RESULT")
-        GATE_CONFIDENCE=$(json_string confidence "$ACTION_GATE_RESULT")
-        GATE_QUALITY=$(json_string evidence_quality "$ACTION_GATE_RESULT")
-        GATE_PROVENANCE=$(json_string provenance "$ACTION_GATE_RESULT")
-        GATE_REASON=$(json_string reason "$ACTION_GATE_RESULT")
         [ "$RAW_GATE_STATE" = ALLOWED ] || { CONTROL_SAFE=NO; CONTROL_GATE_STATE=BLOCKED; CONTROL_REASON="$GATE_REASON"; LIFECYCLE=BLOCKED; }
     fi
     append_simulation_audit && AUDIT_APPENDED=YES || :
