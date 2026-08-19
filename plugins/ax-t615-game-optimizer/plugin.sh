@@ -10,7 +10,7 @@ DASHBOARD="$MODULE_ROOT/bin/dashboard"
 
 usage() {
     cat <<'EOF'
-Usage: plugin.sh {status|capabilities|games|game-detection|profiles|fps-analysis|performance-analysis|memory-monitoring|thermal-monitoring|power-telemetry|orchestrator-status|dashboard [path|snapshot]|dry-run}
+Usage: plugin.sh {status|capabilities|games|game-detection|profiles|fps-analysis|performance-analysis|memory-monitoring|thermal-monitoring|power-telemetry|orchestrator-status|dashboard [path|snapshot|core-snapshot]|dry-run}
 
 This is a fixed read-only operation allowlist. No plugin metadata is executed.
 EOF
@@ -30,7 +30,7 @@ case "${1:-status}" in
     orchestrator-status) exec sh "$AXGO" orchestrator status ;;
     dashboard)
         case "${2:-path}" in
-            path|snapshot) exec sh "$DASHBOARD" "${2:-path}" ;;
+            path|snapshot|core-snapshot) exec sh "$DASHBOARD" "${2:-path}" ;;
             *) usage >&2; exit 2 ;;
         esac
         ;;

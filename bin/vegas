@@ -1,11 +1,13 @@
 #!/usr/bin/env sh
-# VEGAS-inject main CLI: plugin-oriented routing with no arbitrary command execution.
+# VEGAS-inject unified control plane: fixed read-only plugin routing with no arbitrary command execution.
 set -u
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
 APP_ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
 MANAGER="$SCRIPT_DIR/plugin-manager"
 PLUGIN="ax-t615-game-optimizer"
+PLUGIN_IDS='ax-t615-game-optimizer system-observer performance-observer'
+PRODUCT_META="$APP_ROOT/vegas.json"
 
 usage() {
     cat <<'EOF'
@@ -13,8 +15,12 @@ VEGAS-inject — safety-first modular gaming observability and policy CLI
 
 Usage:
   vegas status
+  vegas snapshot
+  vegas inspect
+  vegas capabilities
+  vegas plugin health
   vegas plugin {list|info <plugin>|inspect <plugin>|status <plugin>|capabilities <plugin>|validate [plugin]}
-  vegas gaming {status|dashboard [path|snapshot]|capabilities|games|detect|profiles|fps|performance|memory|thermal|power|orchestrator|dry-run}
+  vegas gaming {status|snapshot|dashboard [path|snapshot]|capabilities|games|detect|profiles|fps|performance|memory|thermal|power|orchestrator|dry-run}
   vegas system {status|capabilities|inspect|snapshot}
   vegas performance {status|capabilities|inspect|snapshot}
 
@@ -22,45 +28,281 @@ VEGAS-inject does not inject code, modify games, write hardware controls, or exe
 EOF
 }
 
+key_value() {
+    KEY="$1"
+    DATA="$2"
+    RESULT=$(printf '%s\n' "$DATA" | awk -F= -v key="$KEY" '$1 == key { value=$0; sub(/^[^=]*=/, "", value); print value }' | tail -n 1)
+    [ -n "$RESULT" ] && printf '%s' "$RESULT" || printf '%s' 'UNKNOWN'
+}
+
+json_value() {
+    KEY="$1"
+    DATA="$2"
+    RESULT=$(printf '%s' "$DATA" | sed -n "s/.*\"$KEY\":\"\([^\"]*\)\".*/\1/p" | head -n 1)
+    [ -n "$RESULT" ] && printf '%s' "$RESULT" || printf '%s' 'UNKNOWN'
+}
+
+json_object() {
+    KEY="$1"
+    DATA="$2"
+    RESULT=$(printf '%s' "$DATA" | sed -n "s/.*\"$KEY\":{\([^}]*\)}.*/{\1}/p" | head -n 1)
+    [ -n "$RESULT" ] && printf '%s' "$RESULT" || printf '%s' '{}'
+}
+
+product_version() {
+    VALUE=$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$PRODUCT_META" 2>/dev/null | head -n 1)
+    [ -n "$VALUE" ] && printf '%s' "$VALUE" || printf '%s' 'UNKNOWN'
+}
+
+plugin_status_data() {
+    sh "$MANAGER" status "$1" 2>/dev/null || :
+}
+
+plugin_readiness() {
+    ID="$1"
+    DATA=$(plugin_status_data "$ID")
+    LIFECYCLE=$(key_value LIFECYCLE "$DATA")
+    AVAILABILITY=$(key_value AVAILABILITY "$DATA")
+    if [ "$LIFECYCLE" = 'ENABLED' ] && [ "$AVAILABILITY" = 'AVAILABLE' ]; then
+        printf '%s' 'READY'
+    else
+        printf '%s' 'UNAVAILABLE'
+    fi
+}
+
+platform_ready() {
+    for ID in $PLUGIN_IDS; do
+        [ "$(plugin_readiness "$ID")" = 'READY' ] || return 1
+    done
+    return 0
+}
+
+gaming_snapshot() {
+    OUTPUT=$(sh "$MANAGER" invoke "$PLUGIN" dashboard core-snapshot 2>/dev/null || :)
+    [ -n "$OUTPUT" ] && printf '%s' "$OUTPUT" || printf '%s' '{"schema":"1","source":"unavailable","read_only":true,"evidence":{},"decision":{"state":"UNKNOWN","confidence":"UNKNOWN","priority":"UNKNOWN","reason":"required safety telemetry is unavailable"},"orchestrator":{},"session":{},"profiles":[],"plugins":{},"safety":{"read_only":"YES","forbidden_actions_blocked":"YES"}}'
+}
+
+system_snapshot() {
+    OUTPUT=$(sh "$MANAGER" invoke system-observer snapshot 2>/dev/null || :)
+    [ -n "$OUTPUT" ] && printf '%s' "$OUTPUT" || printf '%s' '{"schema":"1","source":"unavailable","read_only":true,"plugin":{"id":"system-observer","status":"UNAVAILABLE","lifecycle":"UNKNOWN"},"system":{},"safety":{"read_only":"YES","hardware_writes":"NO","forbidden_actions_blocked":"YES"}}'
+}
+
+performance_snapshot() {
+    OUTPUT=$(sh "$MANAGER" invoke performance-observer snapshot 2>/dev/null || :)
+    [ -n "$OUTPUT" ] && printf '%s' "$OUTPUT" || printf '%s' '{"schema":"1","source":"unavailable","read_only":true,"plugin":{"id":"performance-observer","status":"UNAVAILABLE","lifecycle":"UNKNOWN"},"evidence":{},"provenance":{"observed_telemetry":"UNAVAILABLE","unavailable_telemetry":"UNAVAILABLE","derived_values":"NONE"},"safety":{"read_only":"YES","hardware_writes":"NO","forbidden_actions_blocked":"YES","network_access":"NOT_AVAILABLE","process_control":"NOT_AVAILABLE"}}'
+}
+
+plugin_provenance_json() {
+    printf '%s' '{"ax-t615-game-optimizer":{"id":"ax-t615-game-optimizer","source":"ax-t615-authoritative-gaming-adapter","read_only":true,"hardware_writes":false},"system-observer":{"id":"system-observer","source":"system-observer-read-only","read_only":true,"hardware_writes":false},"performance-observer":{"id":"performance-observer","source":"performance-observer-read-only","read_only":true,"hardware_writes":false}}'
+}
+
+safety_json() {
+    printf '%s' '{"read_only":true,"hardware_writes":false,"process_control":false,"android_property_writes":false,"proc_writes":false,"sys_writes":false,"network_operations":false,"code_execution":false,"game_modification":false,"forbidden_actions_blocked":true}'
+}
+
+unified_snapshot() {
+    GAMING=$(gaming_snapshot)
+    SYSTEM=$(system_snapshot)
+    PERFORMANCE=$(performance_snapshot)
+    GENERATED_AT=$(json_value generated_at "$GAMING")
+    DECISION=$(json_object decision "$GAMING")
+    printf '{'
+    printf '"schema":"1",'
+    printf '"product":"VEGAS-inject",'
+    printf '"generated_at":"%s",' "$GENERATED_AT"
+    printf '"read_only":true,'
+    printf '"plugins":%s,' "$(plugin_provenance_json)"
+    printf '"system":%s,' "$SYSTEM"
+    printf '"performance":%s,' "$PERFORMANCE"
+    printf '"gaming":%s,' "$GAMING"
+    printf '"decision":%s,' "$DECISION"
+    printf '"safety":%s' "$(safety_json)"
+    printf '}\n'
+}
+
+unified_status() {
+    GAMING=$(gaming_snapshot)
+    SUMMARY=$(sh "$MANAGER" summary 2>/dev/null || :)
+    if platform_ready; then
+        PLATFORM='READY'
+    else
+        PLATFORM='DEGRADED'
+    fi
+    printf 'VEGAS-inject\n'
+    printf '============\n'
+    printf 'Platform: %s\n' "$PLATFORM"
+    printf 'Read-only: YES\n'
+    printf 'Plugins: 3\n'
+    printf 'Safety: ENFORCED\n\n'
+    printf 'Plugins:\n'
+    for ID in $PLUGIN_IDS; do
+        printf '  %-28s %s\n' "$ID" "$(plugin_readiness "$ID")"
+    done
+    printf '\nEvidence:\n'
+    printf '  CPU:       %s\n' "$(json_value cpu_utilization "$GAMING")"
+    printf '  GPU:       %s\n' "$(json_value gpu_utilization "$GAMING")"
+    printf '  Memory:    %s\n' "$(json_value memory_usage_percent "$GAMING")"
+    printf '  Thermal:   %s\n' "$(json_value thermal_temp_c "$GAMING")"
+    printf '  FPS:       %s\n' "$(json_value fps "$GAMING")"
+    printf '  Battery:   %s\n' "$(json_value battery_percent "$GAMING")"
+    printf '  Power:     %s\n' "$(json_value power_state "$GAMING")"
+    printf '\nPolicy:\n'
+    DECISION=$(json_object decision "$GAMING")
+    printf '  State: %s\n' "$(json_value state "$DECISION")"
+    printf '  Confidence: %s\n' "$(json_value confidence "$DECISION")"
+    printf '  Reason: %s\n' "$(json_value reason "$DECISION")"
+    printf '\nVEGAS_INJECT=%s\n' "$PLATFORM"
+    printf 'PLUGINS_DISCOVERED=%s\n' "$(key_value PLUGINS_DISCOVERED "$SUMMARY")"
+    printf 'PLUGINS_VALID=%s\n' "$(key_value PLUGINS_VALID "$SUMMARY")"
+    printf 'READ_ONLY=YES\nHARDWARE_WRITES=NO\n'
+}
+
+unified_capabilities() {
+    cat <<'EOF'
+VEGAS-INJECT CAPABILITIES
+=========================
+
+OBSERVATION
+  CPU telemetry
+  GPU telemetry
+  Memory telemetry
+  Thermal telemetry
+  FPS telemetry
+  Battery telemetry
+  Power telemetry
+  System information
+  Gaming session information
+
+POLICY
+  Conservative recommendation
+  Performance recommendation
+  Thermal safety recommendation
+  Memory safety recommendation
+
+CONTROL
+  NONE
+
+Hardware control capabilities: NONE
+Read-only: YES
+EOF
+}
+
+unified_inspect() {
+    printf 'VEGAS-INJECT INSPECT\n'
+    printf '====================\n'
+    printf 'Product: VEGAS-inject\n'
+    printf 'Version: %s\n' "$(product_version)"
+    printf 'Plugin count: 3\n'
+    printf 'Read-only: YES\n'
+    printf 'Safety classification: READ_ONLY_OBSERVABILITY\n'
+    printf 'Registered plugins: ax-t615-game-optimizer, system-observer, performance-observer\n'
+    printf 'Supported operations: status, snapshot, inspect, capabilities, plugin health, gaming, system, performance\n'
+    printf 'Evidence categories: cpu, gpu, memory, thermal, fps, battery, power, system, gaming\n'
+    printf 'Control capabilities: NONE\n'
+}
+
+plugin_health() {
+    FAILED=0
+    printf 'VEGAS PLUGIN HEALTH\n'
+    printf '===================\n'
+    for ID in $PLUGIN_IDS; do
+        REGISTRY='FAIL'
+        METADATA='FAIL'
+        ADAPTER='FAIL'
+        OPERATIONS='FAIL'
+        SAFETY='FAIL'
+        STATUS=$(plugin_status_data "$ID")
+        case "$STATUS" in
+            *'PLUGIN_ERROR=UNREGISTERED'*) ;;
+            *) REGISTRY='PASS' ;;
+        esac
+        VALIDATION=$(sh "$MANAGER" validate "$ID" 2>/dev/null || :)
+        case "$VALIDATION" in
+            *'PLUGIN_VALID=YES'*) METADATA='PASS' ;;
+        esac
+        ADAPTER_PATH="$APP_ROOT/plugins/$ID/plugin.sh"
+        if [ -r "$ADAPTER_PATH" ] && sh -n "$ADAPTER_PATH" 2>/dev/null; then
+            ADAPTER='PASS'
+        fi
+        if sh "$MANAGER" capabilities "$ID" >/dev/null 2>&1; then
+            OPERATIONS='PASS'
+        fi
+        case "$VALIDATION" in
+            *'READ_ONLY=YES'*'HARDWARE_WRITES=NO'*'FORBIDDEN_ACTIONS_BLOCKED=YES'*) SAFETY='PASS' ;;
+        esac
+        printf '\n%s\n' "$ID"
+        printf '  Registry: %s\n' "$REGISTRY"
+        printf '  Metadata: %s\n' "$METADATA"
+        printf '  Adapter: %s\n' "$ADAPTER"
+        printf '  Supported operations: %s\n' "$OPERATIONS"
+        printf '  Safety: %s\n' "$SAFETY"
+        if [ "$REGISTRY" = 'PASS' ] && [ "$METADATA" = 'PASS' ] && [ "$ADAPTER" = 'PASS' ] && [ "$OPERATIONS" = 'PASS' ] && [ "$SAFETY" = 'PASS' ]; then
+            :
+        else
+            FAILED=1
+        fi
+    done
+    [ "$FAILED" -eq 0 ]
+}
+
 case "${1:-help}" in
     status)
-        printf 'VEGAS_INJECT=READY\n'
-        exec sh "$MANAGER" summary
+        [ "$#" -eq 1 ] || { usage >&2; exit 2; }
+        unified_status
+        ;;
+    snapshot)
+        [ "$#" -eq 1 ] || { usage >&2; exit 2; }
+        unified_snapshot
+        ;;
+    inspect)
+        [ "$#" -eq 1 ] || { usage >&2; exit 2; }
+        unified_inspect
+        ;;
+    capabilities)
+        [ "$#" -eq 1 ] || { usage >&2; exit 2; }
+        unified_capabilities
         ;;
     plugin)
         shift
-        exec sh "$MANAGER" "$@"
+        case "${1:-}" in
+            health)
+                [ "$#" -eq 1 ] || { usage >&2; exit 2; }
+                plugin_health
+                ;;
+            *) exec sh "$MANAGER" "$@" ;;
+        esac
         ;;
     gaming)
         shift
         case "${1:-status}" in
-            status) exec sh "$MANAGER" invoke "$PLUGIN" status ;;
-            dashboard) shift; exec sh "$MANAGER" invoke "$PLUGIN" dashboard "${1:-path}" ;;
-            capabilities) exec sh "$MANAGER" invoke "$PLUGIN" capabilities ;;
-            games) exec sh "$MANAGER" invoke "$PLUGIN" games ;;
-            detect) exec sh "$MANAGER" invoke "$PLUGIN" game-detection ;;
-            profiles) exec sh "$MANAGER" invoke "$PLUGIN" profiles ;;
-            fps) exec sh "$MANAGER" invoke "$PLUGIN" fps-analysis ;;
-            performance) exec sh "$MANAGER" invoke "$PLUGIN" performance-analysis ;;
-            memory) exec sh "$MANAGER" invoke "$PLUGIN" memory-monitoring ;;
-            thermal) exec sh "$MANAGER" invoke "$PLUGIN" thermal-monitoring ;;
-            power) exec sh "$MANAGER" invoke "$PLUGIN" power-telemetry ;;
-            orchestrator) exec sh "$MANAGER" invoke "$PLUGIN" orchestrator-status ;;
-            dry-run) exec sh "$MANAGER" invoke "$PLUGIN" dry-run ;;
+            status) [ "$#" -le 1 ] || { usage >&2; exit 2; }; exec sh "$MANAGER" invoke "$PLUGIN" status ;;
+            snapshot) [ "$#" -eq 1 ] || { usage >&2; exit 2; }; exec sh "$MANAGER" invoke "$PLUGIN" dashboard core-snapshot ;;
+            dashboard) shift; [ "$#" -le 1 ] || { usage >&2; exit 2; }; exec sh "$MANAGER" invoke "$PLUGIN" dashboard "${1:-path}" ;;
+            capabilities) [ "$#" -eq 1 ] || { usage >&2; exit 2; }; exec sh "$MANAGER" invoke "$PLUGIN" capabilities ;;
+            games) [ "$#" -eq 1 ] || { usage >&2; exit 2; }; exec sh "$MANAGER" invoke "$PLUGIN" games ;;
+            detect) [ "$#" -eq 1 ] || { usage >&2; exit 2; }; exec sh "$MANAGER" invoke "$PLUGIN" game-detection ;;
+            profiles) [ "$#" -eq 1 ] || { usage >&2; exit 2; }; exec sh "$MANAGER" invoke "$PLUGIN" profiles ;;
+            fps) [ "$#" -eq 1 ] || { usage >&2; exit 2; }; exec sh "$MANAGER" invoke "$PLUGIN" fps-analysis ;;
+            performance) [ "$#" -eq 1 ] || { usage >&2; exit 2; }; exec sh "$MANAGER" invoke "$PLUGIN" performance-analysis ;;
+            memory) [ "$#" -eq 1 ] || { usage >&2; exit 2; }; exec sh "$MANAGER" invoke "$PLUGIN" memory-monitoring ;;
+            thermal) [ "$#" -eq 1 ] || { usage >&2; exit 2; }; exec sh "$MANAGER" invoke "$PLUGIN" thermal-monitoring ;;
+            power) [ "$#" -eq 1 ] || { usage >&2; exit 2; }; exec sh "$MANAGER" invoke "$PLUGIN" power-telemetry ;;
+            orchestrator) [ "$#" -eq 1 ] || { usage >&2; exit 2; }; exec sh "$MANAGER" invoke "$PLUGIN" orchestrator-status ;;
+            dry-run) [ "$#" -eq 1 ] || { usage >&2; exit 2; }; exec sh "$MANAGER" invoke "$PLUGIN" dry-run ;;
             *) usage >&2; exit 2 ;;
         esac
         ;;
     system)
         shift
         case "${1:-status}" in
-            status|capabilities|inspect|snapshot) exec sh "$MANAGER" invoke system-observer "${1:-status}" ;;
+            status|capabilities|inspect|snapshot) [ "$#" -le 1 ] || { usage >&2; exit 2; }; exec sh "$MANAGER" invoke system-observer "${1:-status}" ;;
             *) usage >&2; exit 2 ;;
         esac
         ;;
     performance)
         shift
         case "${1:-status}" in
-            status|capabilities|inspect|snapshot) exec sh "$MANAGER" invoke performance-observer "${1:-status}" ;;
+            status|capabilities|inspect|snapshot) [ "$#" -le 1 ] || { usage >&2; exit 2; }; exec sh "$MANAGER" invoke performance-observer "${1:-status}" ;;
             *) usage >&2; exit 2 ;;
         esac
         ;;

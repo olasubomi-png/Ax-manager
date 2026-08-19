@@ -49,6 +49,12 @@ contains "$SNAPSHOT" '"sensitive_information":"NOT_COLLECTED"' "System Observer 
 contains "$SNAPSHOT" '"performance_observer":{"schema":"1","source":"performance-observer-read-only"' "snapshot exposes optional Performance Observer envelope"
 contains "$SNAPSHOT" '"observed_telemetry":"AX-T615_ORCHESTRATOR_EVIDENCE"' "Performance Observer dashboard envelope declares evidence provenance"
 
+CORE_SNAPSHOT=$(ORCH_EVIDENCE_FILE="$FIXTURES/healthy/evidence.env" AXGO_ROOT="$MODULE_ROOT" DASHBOARD_RUNTIME_DIR="$TMP/core-runtime" ORCH_RUNTIME_DIR="$TMP/core-orchestrator" sh "$MODULE_ROOT/bin/dashboard" core-snapshot)
+contains "$CORE_SNAPSHOT" '"decision":{"state":"balanced"' "core snapshot preserves orchestrator decision"
+contains "$CORE_SNAPSHOT" '"plugins":{}' "core snapshot omits duplicated observer envelopes"
+not_contains "$CORE_SNAPSHOT" '"system_observer"' "core snapshot excludes nested System Observer data"
+not_contains "$CORE_SNAPSHOT" '"performance_observer"' "core snapshot excludes nested Performance Observer data"
+
 cp "$FIXTURES/healthy/evidence.env" "$TMP/evidence.env"
 EXPORT_OUTPUT=$(ORCH_EVIDENCE_FILE="$TMP/evidence.env" AXGO_ROOT="$MODULE_ROOT" DASHBOARD_RUNTIME_DIR="$TMP/export-runtime" ORCH_RUNTIME_DIR="$TMP/export-orchestrator" sh "$MODULE_ROOT/bin/dashboard" export)
 contains "$EXPORT_OUTPUT" 'DASHBOARD_SNAPSHOT=' "export reports destination"
@@ -64,6 +70,10 @@ not_contains "$STATIC_CONTENT" '/proc/' "dashboard does not expose procfs writes
 contains "$(cat "$MODULE_ROOT/dashboard/index.html")" 'No fabricated telemetry.' "UI states no fabricated telemetry"
 contains "$(cat "$MODULE_ROOT/dashboard/index.html")" 'DRY-RUN ONLY' "UI labels dry-run"
 contains "$(cat "$MODULE_ROOT/dashboard/index.html")" 'POLICY OUTPUT / NOT APPLIED' "UI labels policy output"
+contains "$(cat "$MODULE_ROOT/dashboard/index.html")" 'Hardware control' "UI exposes the no-control boundary"
+contains "$(cat "$MODULE_ROOT/dashboard/index.html")" 'Hardware control capabilities:' "UI explicitly states hardware controls are none"
+contains "$(cat "$MODULE_ROOT/dashboard/assets/app.js")" 'raw.product === "VEGAS-inject"' "UI recognizes unified VEGAS snapshots"
+contains "$(cat "$MODULE_ROOT/dashboard/assets/app.js")" 'textContent' "UI keeps unified values text-safe"
 
 printf 'STEP12_DASHBOARD_TESTS: %s passed, %s failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

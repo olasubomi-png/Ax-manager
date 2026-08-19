@@ -183,7 +183,7 @@ invoke() {
             ;;
         ax-t615-game-optimizer:dashboard)
             case "$ARGUMENT" in
-                ''|path|snapshot) exec sh "$PLUGIN_ENTRYPOINT" dashboard "${ARGUMENT:-path}" ;;
+                ''|path|snapshot|core-snapshot) exec sh "$PLUGIN_ENTRYPOINT" dashboard "${ARGUMENT:-path}" ;;
                 *) printf 'PLUGIN_ERROR=OPERATION_REJECTED\n' >&2; return 2 ;;
             esac
             ;;

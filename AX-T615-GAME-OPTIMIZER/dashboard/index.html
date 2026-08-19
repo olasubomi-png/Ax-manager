@@ -45,10 +45,11 @@
             <p class="eyebrow">System observability / policy console</p>
             <h1 id="overview-title">Measure first.<br /><em>Protect always.</em></h1>
             <p class="hero-text">VEGAS-inject translates existing, read-only device evidence into a clear gaming-performance recommendation. It does not write hardware settings or claim changes it did not make.</p>
-            <div class="operational-strip" aria-label="Operational boundary summary">
+            <div class="operational-strip" aria-label="Unified VEGAS-inject operating boundary summary">
+              <div><span>Platform</span><strong id="unifiedProduct">VEGAS-INJECT</strong></div>
+              <div><span>Plugins</span><strong id="unifiedPluginCount">3 REGISTERED</strong></div>
               <div><span>Evidence</span><strong id="evidenceHeader">NO DATA</strong></div>
-              <div><span>Safety boundary</span><strong>READ-ONLY</strong></div>
-              <div><span>Device change</span><strong>NONE</strong></div>
+              <div><span>Hardware control</span><strong id="unifiedControl">NONE</strong></div>
             </div>
             <div class="hero-actions">
               <label class="button button-primary" for="snapshotInput">Load safe snapshot</label>
@@ -141,7 +142,7 @@
 
         <section id="safety" class="safety-panel" aria-labelledby="safety-title">
           <div class="safety-copy"><p class="eyebrow">Safety boundary</p><h2 id="safety-title">The protective layer has the final word.</h2><p>VEGAS-inject blocks unsafe operations before a performance recommendation can be considered. This dashboard makes the boundary visible rather than offering a bypass.</p><div class="safety-status"><span class="shield-mark">✓</span><div><strong id="guardStatus">Safety guard active</strong><small id="guardDetail">Read-only policy is enforced.</small></div></div></div>
-          <div class="blocked-list"><p class="eyebrow">Blocked action classes</p><ul id="blockedActions"><li>Unavailable until evidence is loaded</li></ul><p class="safety-footnote">CPU/GPU governor, frequency, Power HAL, charging, kernel, process, ZRAM/swap, LMKD/OOM, thermal, and battery modifications are not exposed.</p></div>
+          <div class="blocked-list"><p class="eyebrow">Blocked action classes</p><ul id="blockedActions"><li>Unavailable until evidence is loaded</li></ul><p class="safety-footnote">Hardware control capabilities: <strong>NONE</strong>. CPU/GPU governor, frequency, Power HAL, charging, kernel, process, ZRAM/swap, LMKD/OOM, thermal, and battery modifications are not exposed.</p></div>
         </section>
 
         <footer><p>VEGAS-INJECT / AX-T615 PLUGIN / SAFETY-FIRST OBSERVABILITY</p><p>Static dashboard. No polling. No arbitrary commands. No fabricated telemetry.</p></footer>

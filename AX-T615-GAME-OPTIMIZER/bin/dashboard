@@ -10,10 +10,11 @@ OUTPUT_FILE="$DASHBOARD_DIR/data/current-snapshot.json"
 
 usage() {
     cat <<'EOF'
-Usage: dashboard {path|snapshot|export|help}
+Usage: dashboard {path|snapshot|core-snapshot|export|help}
 
   path       Print the static dashboard entry point.
   snapshot   Print a normalized, read-only JSON dashboard snapshot to stdout.
+  core-snapshot  Print the AX-T615 snapshot without nested observer envelopes.
   export     Write a normalized snapshot only to dashboard/data/current-snapshot.json.
   help       Print this message.
 
@@ -86,6 +87,7 @@ json_pair() {
 }
 
 snapshot() {
+    INCLUDE_PLUGIN_ENVELOPES="${1:-yes}"
     mkdir -p "$RUNTIME_DIR" 2>/dev/null || :
     TMP_EVIDENCE="$RUNTIME_DIR/dashboard-evidence.$$.env"
     trap 'rm -f "$TMP_EVIDENCE" 2>/dev/null || :' EXIT HUP INT TERM
@@ -163,7 +165,11 @@ snapshot() {
     profile_json "$PROFILE_LIST"
     printf ','
     printf '"plugins":'
-    plugin_observability_json
+    if [ "$INCLUDE_PLUGIN_ENVELOPES" = 'yes' ]; then
+        plugin_observability_json
+    else
+        printf '{}'
+    fi
     printf ','
     printf '"safety":{'
     json_pair blocked_actions "$(value BLOCKED_ACTIONS "$DECISION")"; printf ','
@@ -175,7 +181,8 @@ snapshot() {
 
 case "${1:-help}" in
     path) printf '%s\n' "$DASHBOARD_DIR/index.html" ;;
-    snapshot) snapshot ;;
+    snapshot) snapshot yes ;;
+    core-snapshot) snapshot no ;;
     export)
         mkdir -p "$DASHBOARD_DIR/data" 2>/dev/null || exit 1
         snapshot > "$OUTPUT_FILE" || exit 1
