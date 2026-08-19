@@ -1,0 +1,12 @@
+{
+  "id": "performance-observer",
+  "name": "Performance Observer",
+  "version": "1.0.0",
+  "description": "Read-only VEGAS-inject performance telemetry normalizer with explicit UNKNOWN evidence handling",
+  "type": "gaming",
+  "entrypoint": "plugin.sh",
+  "capabilities": ["status", "capabilities", "inspect", "snapshot", "read_cpu", "read_gpu", "read_memory", "read_thermal", "read_fps", "read_battery", "read_power"],
+  "read_only": true,
+  "hardware_writes": false,
+  "minimum_app_version": "1.0.0"
+}

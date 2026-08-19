@@ -723,7 +723,7 @@ The Step 11 test suites cover evidence normalization, decision priority and unkn
 
 ## VEGAS-inject integration — Modular Application Layer
 
-VEGAS-inject adds a compatible application layer above this module without replacing its AX-T615 command, configuration, runtime, or test contracts. The module is registered at `plugins/ax-t615-game-optimizer` beside the independent `plugins/system-observer` plugin; its existing `bin/axgo` router remains authoritative, and the repository-level `bin/axgo` wrapper delegates to it for compatibility.
+VEGAS-inject adds a compatible application layer above this module without replacing its AX-T615 command, configuration, runtime, or test contracts. The module is registered at `plugins/ax-t615-game-optimizer` beside the independent `plugins/system-observer` and `plugins/performance-observer` plugins; its existing `bin/axgo` router remains authoritative, and the repository-level `bin/axgo` wrapper delegates to it for compatibility.
 
 The `bin/vegas` CLI routes only a fixed set of read-only operations through `bin/plugin-manager`. Plugin metadata is declarative data: validation requires identity, version, description, type, literal `plugin.sh` entrypoint, `read_only: true`, and `hardware_writes: false`. Metadata containing executable keys (`command`, `script`, `exec`, `shell`, or `action`) or blocked operation identifiers is rejected. The adapter maps only established AXGO observations and dry-runs; it cannot call arbitrary paths or execute metadata.
 
@@ -737,10 +737,14 @@ sh ../bin/vegas gaming dry-run
 sh ../bin/vegas system status
 sh ../bin/vegas system inspect
 sh ../bin/vegas system snapshot
+sh ../bin/vegas performance status
+sh ../bin/vegas performance capabilities
+sh ../bin/vegas performance inspect
+sh ../bin/vegas performance snapshot
 sh ../bin/axgo status
 ```
 
-The product name **VEGAS-inject** denotes the modular application packaging only. It does not inject code into games, alter game data, write Android settings, or perform a hardware operation. The System Observer adapter is independently fixed to bounded application/host observability and cannot invoke AX-T615 operations; the AX-T615 plugin remains read-only and continues to enforce all previously documented safeguards. The Step 12 snapshot includes optional `plugins.system_observer` data when the top-level manager is available, otherwise it emits an explicit unavailable envelope without changing AX-T615 fields.
+The product name **VEGAS-inject** denotes the modular application packaging only. It does not inject code into games, alter game data, write Android settings, or perform a hardware operation. The System Observer adapter is independently fixed to bounded application/host observability and cannot invoke AX-T615 operations. Performance Observer is also independently dispatched, but its fixed adapter normalizes only existing AX-T615 orchestrator evidence into named CPU, GPU, memory, thermal, FPS, battery, and power categories. It reports unavailable fields as `UNKNOWN`, declares `derived_values: NONE`, and cannot apply a hardware or game change. The AX-T615 plugin remains read-only and continues to enforce all previously documented safeguards. The Step 12 snapshot now includes optional `plugins.system_observer` and `plugins.performance_observer` data when the top-level manager is available, otherwise it emits explicit unavailable envelopes without changing AX-T615 fields.
 
 ## Step 12 — Dashboard/UI & Final Validation
 

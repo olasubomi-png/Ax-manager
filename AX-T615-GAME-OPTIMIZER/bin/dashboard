@@ -68,11 +68,15 @@ profile_json() {
 plugin_observability_json() {
     APP_ROOT=$(CDPATH= cd -- "$AXGO_ROOT/.." 2>/dev/null && pwd || :)
     MANAGER="${VEGAS_PLUGIN_MANAGER:-$APP_ROOT/bin/plugin-manager}"
+    SYSTEM=''
+    PERFORMANCE=''
     if [ -n "$APP_ROOT" ] && [ -r "$MANAGER" ]; then
-        OBSERVER=$(sh "$MANAGER" invoke system-observer snapshot 2>/dev/null || :)
-        [ -n "$OBSERVER" ] && { printf '{"system_observer":%s}' "$OBSERVER"; return 0; }
+        SYSTEM=$(ORCH_EVIDENCE_FILE="${TMP_EVIDENCE:-${ORCH_EVIDENCE_FILE:-}}" sh "$MANAGER" invoke system-observer snapshot 2>/dev/null || :)
+        PERFORMANCE=$(ORCH_EVIDENCE_FILE="${TMP_EVIDENCE:-${ORCH_EVIDENCE_FILE:-}}" sh "$MANAGER" invoke performance-observer snapshot 2>/dev/null || :)
     fi
-    printf '{"system_observer":{"schema":"1","source":"unavailable","read_only":true,"plugin":{"id":"system-observer","status":"UNAVAILABLE","lifecycle":"UNKNOWN"},"system":{},"safety":{"read_only":"YES","hardware_writes":"NO","forbidden_actions_blocked":"YES","sensitive_information":"NOT_COLLECTED"}}}'
+    [ -n "$SYSTEM" ] || SYSTEM='{"schema":"1","source":"unavailable","read_only":true,"plugin":{"id":"system-observer","status":"UNAVAILABLE","lifecycle":"UNKNOWN"},"system":{},"safety":{"read_only":"YES","hardware_writes":"NO","forbidden_actions_blocked":"YES","sensitive_information":"NOT_COLLECTED"}}'
+    [ -n "$PERFORMANCE" ] || PERFORMANCE='{"schema":"1","source":"unavailable","read_only":true,"plugin":{"id":"performance-observer","name":"Performance Observer","status":"UNAVAILABLE","lifecycle":"UNKNOWN"},"evidence":{"cpu":{"utilization":"UNAVAILABLE","state":"UNAVAILABLE"},"gpu":{"utilization":"UNAVAILABLE","state":"UNAVAILABLE"},"memory":{"usage_percent":"UNAVAILABLE","available_mb":"UNAVAILABLE","state":"UNAVAILABLE"},"thermal":{"temperature_c":"UNAVAILABLE","peak_c":"UNAVAILABLE","state":"UNAVAILABLE","trend":"UNAVAILABLE"},"fps":{"value":"UNAVAILABLE","frame_time_ms":"UNAVAILABLE","frame_pacing":"UNAVAILABLE","trend":"UNAVAILABLE"},"battery":{"percent":"UNAVAILABLE","charging":"UNAVAILABLE","temperature_c":"UNAVAILABLE","health":"UNAVAILABLE"},"power":{"voltage_mv":"UNAVAILABLE","current_ma":"UNAVAILABLE","estimated_watts":"UNAVAILABLE","drain_rate":"UNAVAILABLE","state":"UNAVAILABLE"}},"provenance":{"observed_telemetry":"UNAVAILABLE","unavailable_telemetry":"UNAVAILABLE","derived_values":"NONE"},"safety":{"read_only":"YES","hardware_writes":"NO","forbidden_actions_blocked":"YES","network_access":"NOT_AVAILABLE","process_control":"NOT_AVAILABLE"}}'
+    printf '{"system_observer":%s,"performance_observer":%s}' "$SYSTEM" "$PERFORMANCE"
 }
 
 json_pair() {

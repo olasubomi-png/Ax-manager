@@ -46,6 +46,8 @@ contains "$SNAPSHOT" '"forbidden_actions_blocked":"YES"' "snapshot exposes safet
 contains "$SNAPSHOT" '"blocked_actions":"write_proc,write_sys' "snapshot exposes blocked policy actions"
 contains "$SNAPSHOT" '"plugins":{"system_observer":{' "snapshot exposes optional System Observer envelope"
 contains "$SNAPSHOT" '"sensitive_information":"NOT_COLLECTED"' "System Observer dashboard envelope excludes sensitive information"
+contains "$SNAPSHOT" '"performance_observer":{"schema":"1","source":"performance-observer-read-only"' "snapshot exposes optional Performance Observer envelope"
+contains "$SNAPSHOT" '"observed_telemetry":"AX-T615_ORCHESTRATOR_EVIDENCE"' "Performance Observer dashboard envelope declares evidence provenance"
 
 cp "$FIXTURES/healthy/evidence.env" "$TMP/evidence.env"
 EXPORT_OUTPUT=$(ORCH_EVIDENCE_FILE="$TMP/evidence.env" AXGO_ROOT="$MODULE_ROOT" DASHBOARD_RUNTIME_DIR="$TMP/export-runtime" ORCH_RUNTIME_DIR="$TMP/export-orchestrator" sh "$MODULE_ROOT/bin/dashboard" export)

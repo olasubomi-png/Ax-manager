@@ -9,7 +9,7 @@
 ```text
 VEGAS-inject CLI and plugin manager
         ↓ fixed registry, validated metadata, fixed operation allowlist
-AX-T615 Game Optimizer plugin     System Observer plugin
+AX-T615 Game Optimizer plugin     System Observer plugin     Performance Observer plugin
         ↓ read-only telemetry and policy engines
         ↓ bounded non-sensitive application and host observation
 Orchestrator evidence → decision → lifecycle / hysteresis / audit
@@ -33,17 +33,21 @@ The existing `AX-T615-GAME-OPTIMIZER/bin/axgo` remains the direct compatibility 
 | `sh bin/vegas system status` | Report the independent System Observer lifecycle and safety boundary. |
 | `sh bin/vegas system inspect` | Report bounded non-sensitive application and host evidence. |
 | `sh bin/vegas system snapshot` | Emit the System Observer’s read-only JSON snapshot. |
+| `sh bin/vegas performance status` | Report the independent Performance Observer lifecycle and fixed safety boundary. |
+| `sh bin/vegas performance capabilities` | List read-only CPU, GPU, memory, thermal, FPS, battery, and power observation categories. |
+| `sh bin/vegas performance inspect` | Report bounded plugin metadata, evidence categories, and unavailable-data handling. |
+| `sh bin/vegas performance snapshot` | Emit the normalized Performance Observer JSON evidence snapshot. |
 | `sh bin/axgo status` | Use the unchanged AXGO compatibility route. |
 
 ## Plugin model
 
 Discovery starts from `plugins/registry.json`. A plugin must be registered, identify itself, declare `read_only: true`, declare `hardware_writes: false`, use the fixed `plugin.sh` entrypoint, and omit executable metadata (`command`, `script`, `exec`, `shell`, or `action`). Metadata is validated as data only and cannot provide an arbitrary command path.
 
-The AX-T615 plugin exposes only established observability operations: status, capabilities, games, game detection, profiles, FPS and performance analysis, memory/thermal/power telemetry, orchestrator status, dashboard access, and dry-run reports. The independent System Observer plugin exposes only `status`, `capabilities`, `inspect`, and `snapshot`; its fixed adapter reports application version, OS/kernel/architecture, a sanitized hostname when safe, uptime, and available memory summary. It does not call the AX-T615 engines and has no access to their runtime state. Existing `AXGO_*` paths, variables, configuration, runtime, and module identifiers are retained.
+The AX-T615 plugin exposes only established observability operations: status, capabilities, games, game detection, profiles, FPS and performance analysis, memory/thermal/power telemetry, orchestrator status, dashboard access, and dry-run reports. The independent System Observer plugin exposes only `status`, `capabilities`, `inspect`, and `snapshot`; its fixed adapter reports application version, OS/kernel/architecture, a sanitized hostname when safe, uptime, and available memory summary. Performance Observer exposes the same fixed operation set and normalizes only existing AX-T615 orchestrator evidence across CPU, GPU, memory, thermal, FPS, battery, and power categories. Its unavailable values remain `UNKNOWN`, its provenance is declared, and it reports no derived values. Existing `AXGO_*` paths, variables, configuration, runtime, and module identifiers are retained.
 
 ## Safety guarantees
 
-VEGAS-inject and both bundled plugins are **read-only and recommendation-only**. They do not write `/proc` or `/sys`, alter CPU/GPU governors or frequencies, change Android properties, Power HAL behavior, display mode, charging, battery controls, thermal policy, ZRAM, swap, LMKD/OOM settings, or processes. They do not kill or force-stop applications, execute profile/telemetry/metadata content, inject into games, or expose raw hardware-control commands. System Observer does not collect personal files, credentials, account data, messages, persistent identifiers, or arbitrary environment variables.
+VEGAS-inject and all bundled plugins are **read-only and recommendation-only**. They do not write `/proc` or `/sys`, alter CPU/GPU governors or frequencies, change Android properties, Power HAL behavior, display mode, charging, battery controls, thermal policy, ZRAM, swap, LMKD/OOM settings, or processes. They do not kill or force-stop applications, execute profile/telemetry/metadata content, inject into games, or expose raw hardware-control commands. System Observer does not collect personal files, credentials, account data, messages, persistent identifiers, or arbitrary environment variables. Performance Observer does not access the network, run arbitrary commands, or infer missing performance values.
 
 Unknown telemetry remains unavailable. Safety policy prioritizes thermal and battery protection over performance requests, and dashboard output is a visible policy recommendation rather than a device action.
 

@@ -16,6 +16,7 @@ Usage:
   vegas plugin {list|info <plugin>|inspect <plugin>|status <plugin>|capabilities <plugin>|validate [plugin]}
   vegas gaming {status|dashboard [path|snapshot]|capabilities|games|detect|profiles|fps|performance|memory|thermal|power|orchestrator|dry-run}
   vegas system {status|capabilities|inspect|snapshot}
+  vegas performance {status|capabilities|inspect|snapshot}
 
 VEGAS-inject does not inject code, modify games, write hardware controls, or execute plugin metadata.
 EOF
@@ -53,6 +54,13 @@ case "${1:-help}" in
         shift
         case "${1:-status}" in
             status|capabilities|inspect|snapshot) exec sh "$MANAGER" invoke system-observer "${1:-status}" ;;
+            *) usage >&2; exit 2 ;;
+        esac
+        ;;
+    performance)
+        shift
+        case "${1:-status}" in
+            status|capabilities|inspect|snapshot) exec sh "$MANAGER" invoke performance-observer "${1:-status}" ;;
             *) usage >&2; exit 2 ;;
         esac
         ;;

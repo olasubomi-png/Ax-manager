@@ -12,6 +12,11 @@
       "id": "system-observer",
       "path": "plugins/system-observer",
       "enabled": true
+    },
+    {
+      "id": "performance-observer",
+      "path": "plugins/performance-observer",
+      "enabled": true
     }
   ]
 }

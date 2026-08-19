@@ -5,7 +5,7 @@ set -u
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
 APP_ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
 REGISTRY="$APP_ROOT/plugins/registry.json"
-PLUGIN_IDS='ax-t615-game-optimizer system-observer'
+PLUGIN_IDS='ax-t615-game-optimizer system-observer performance-observer'
 FORBIDDEN_CAPABILITIES='write_proc write_sys write_power_hal write_governor write_charging_limit modify_battery kill_process force_stop modify_zram modify_swap modify_lmkd disable_thermal_protection disable_battery_protection'
 FORBIDDEN_METADATA_KEYS='command script exec shell action path'
 
@@ -31,7 +31,7 @@ json_bool() {
 
 valid_id() {
     case "$1" in
-        ax-t615-game-optimizer|system-observer) return 0 ;;
+        ax-t615-game-optimizer|system-observer|performance-observer) return 0 ;;
         *) return 1 ;;
     esac
 }
@@ -120,6 +120,9 @@ plugin_capabilities() {
         system-observer)
             CAPS='status,capabilities,inspect,snapshot'
             ;;
+        performance-observer)
+            CAPS='status,capabilities,inspect,snapshot'
+            ;;
         *) exit 1 ;;
     esac
     printf 'PLUGIN_ID=%s\nCAPABILITIES=%s\nREAD_ONLY=YES\nHARDWARE_WRITES=NO\nFORBIDDEN_ACTIONS_BLOCKED=YES\n' "$ID" "$CAPS"
@@ -167,6 +170,10 @@ invoke() {
     set_plugin_paths "$ID"
     case "$ID:$OPERATION" in
         system-observer:status|system-observer:capabilities|system-observer:inspect|system-observer:snapshot)
+            [ -z "$ARGUMENT" ] || { printf 'PLUGIN_ERROR=OPERATION_REJECTED\n' >&2; return 2; }
+            exec sh "$PLUGIN_ENTRYPOINT" "$OPERATION"
+            ;;
+        performance-observer:status|performance-observer:capabilities|performance-observer:inspect|performance-observer:snapshot)
             [ -z "$ARGUMENT" ] || { printf 'PLUGIN_ERROR=OPERATION_REJECTED\n' >&2; return 2; }
             exec sh "$PLUGIN_ENTRYPOINT" "$OPERATION"
             ;;

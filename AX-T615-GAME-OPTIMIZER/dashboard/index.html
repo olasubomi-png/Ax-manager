@@ -131,6 +131,14 @@
           </div>
         </section>
 
+        <section class="section-block plugin-observer performance-observer" aria-labelledby="performance-observer-title">
+          <div class="section-heading"><div><p class="eyebrow">Independent plugin / normalized evidence</p><h2 id="performance-observer-title">Performance Observer</h2></div><p class="section-note">Fixed read-only performance categories are normalized from available AX-T615 evidence. Unknown values remain visible as unavailable.</p></div>
+          <div class="observer-panel">
+            <div class="observer-intro"><span class="paper-tab">READ-ONLY PLUGIN</span><h3 id="perfObserverName">Performance Observer</h3><p id="perfObserverStatus">No performance snapshot loaded.</p><p class="microcopy">This plugin aggregates existing bounded telemetry only. It does not infer, estimate, tune, or apply CPU, GPU, thermal, charging, process, or game changes.</p></div>
+            <dl class="observer-ledger performance-ledger"><div><dt>Lifecycle</dt><dd id="perfObserverLifecycle">Unavailable</dd></div><div><dt>CPU utilization</dt><dd id="perfObserverCpu">Unavailable</dd></div><div><dt>GPU utilization</dt><dd id="perfObserverGpu">Unavailable</dd></div><div><dt>Memory usage</dt><dd id="perfObserverMemory">Unavailable</dd></div><div><dt>Thermal temperature</dt><dd id="perfObserverThermal">Unavailable</dd></div><div><dt>FPS</dt><dd id="perfObserverFps">Unavailable</dd></div><div><dt>Frame time</dt><dd id="perfObserverFrameTime">Unavailable</dd></div><div><dt>Power state</dt><dd id="perfObserverPower">Unavailable</dd></div></dl>
+          </div>
+        </section>
+
         <section id="safety" class="safety-panel" aria-labelledby="safety-title">
           <div class="safety-copy"><p class="eyebrow">Safety boundary</p><h2 id="safety-title">The protective layer has the final word.</h2><p>VEGAS-inject blocks unsafe operations before a performance recommendation can be considered. This dashboard makes the boundary visible rather than offering a bypass.</p><div class="safety-status"><span class="shield-mark">✓</span><div><strong id="guardStatus">Safety guard active</strong><small id="guardDetail">Read-only policy is enforced.</small></div></div></div>
           <div class="blocked-list"><p class="eyebrow">Blocked action classes</p><ul id="blockedActions"><li>Unavailable until evidence is loaded</li></ul><p class="safety-footnote">CPU/GPU governor, frequency, Power HAL, charging, kernel, process, ZRAM/swap, LMKD/OOM, thermal, and battery modifications are not exposed.</p></div>
