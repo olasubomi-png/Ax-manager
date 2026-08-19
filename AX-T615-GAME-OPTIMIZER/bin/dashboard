@@ -1,0 +1,161 @@
+#!/usr/bin/env sh
+# Step 12 design contract: dashboard exports evidence from existing read-only Axmanager engines; it never contains hardware-control logic.
+set -u
+
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
+AXGO_ROOT="${AXGO_ROOT:-$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)}"
+DASHBOARD_DIR="$AXGO_ROOT/dashboard"
+RUNTIME_DIR="${DASHBOARD_RUNTIME_DIR:-$AXGO_ROOT/runtime/dashboard}"
+OUTPUT_FILE="$DASHBOARD_DIR/data/current-snapshot.json"
+
+usage() {
+    cat <<'EOF'
+Usage: dashboard {path|snapshot|export|help}
+
+  path       Print the static dashboard entry point.
+  snapshot   Print a normalized, read-only JSON dashboard snapshot to stdout.
+  export     Write a normalized snapshot only to dashboard/data/current-snapshot.json.
+  help       Print this message.
+
+The dashboard is an observability and policy interface. It never applies CPU, GPU,
+thermal, power, charging, memory, or process-control changes.
+EOF
+}
+
+json_escape() {
+    printf '%s' "$1" | tr -d '\r\n' | sed 's/\\/\\\\/g; s/"/\\"/g'
+}
+
+value() {
+    KEY="$1"
+    DATA="$2"
+    RESULT=$(printf '%s\n' "$DATA" | awk -F= -v key="$KEY" '$1 == key { value=$0; sub(/^[^=]*=/, "", value); print value }' | tail -n 1)
+    [ -n "$RESULT" ] && printf '%s' "$RESULT" || printf '%s' "UNKNOWN"
+}
+
+line_value() {
+    KEY="$1"
+    DATA="$2"
+    RESULT=$(printf '%s\n' "$DATA" | awk -v key="$KEY" 'index($0, key ":") == 1 { value=$0; sub(/^[^:]*:[[:space:]]*/, "", value); print value }' | tail -n 1)
+    [ -n "$RESULT" ] && printf '%s' "$RESULT" || printf '%s' "UNKNOWN"
+}
+
+profile_json() {
+    DATA="$1"
+    printf '['
+    printf '%s\n' "$DATA" | awk -F ' \| ' '
+        NR > 2 && NF >= 4 {
+            for (i = 1; i <= 4; i++) {
+                gsub(/^[[:space:]]+|[[:space:]]+$/, "", $i)
+                gsub(/\\/, "\\\\", $i)
+                gsub(/\"/, "\\\"", $i)
+            }
+            printf "%s{\"id\":\"%s\",\"name\":\"%s\",\"mode\":\"%s\",\"packages\":\"%s\"}", (seen++ ? "," : ""), $1, $2, $3, $4
+        }
+    '
+    printf ']'
+}
+
+json_pair() {
+    KEY="$1"
+    RAW="$2"
+    printf '"%s":"%s"' "$KEY" "$(json_escape "$RAW")"
+}
+
+snapshot() {
+    mkdir -p "$RUNTIME_DIR" 2>/dev/null || :
+    TMP_EVIDENCE="$RUNTIME_DIR/dashboard-evidence.$$.env"
+    trap 'rm -f "$TMP_EVIDENCE" 2>/dev/null || :' EXIT HUP INT TERM
+
+    if [ -n "${ORCH_EVIDENCE_FILE:-}" ] && [ -r "$ORCH_EVIDENCE_FILE" ]; then
+        ORCH_EVIDENCE_FILE="$ORCH_EVIDENCE_FILE" AXGO_ROOT="$AXGO_ROOT" sh "$AXGO_ROOT/bin/orchestrator-evidence" > "$TMP_EVIDENCE"
+    else
+        AXGO_ROOT="$AXGO_ROOT" AXGO_DATA_ROOT="${AXGO_DATA_ROOT:-$AXGO_ROOT}" sh "$AXGO_ROOT/bin/orchestrator-evidence" > "$TMP_EVIDENCE"
+    fi
+
+    EVIDENCE=$(cat "$TMP_EVIDENCE")
+    DECISION=$(ORCH_EVIDENCE_FILE="$TMP_EVIDENCE" AXGO_ROOT="$AXGO_ROOT" sh "$AXGO_ROOT/bin/orchestrator-decision")
+    ORCHESTRATOR=$(AXGO_ROOT="$AXGO_ROOT" ORCH_RUNTIME_DIR="${ORCH_RUNTIME_DIR:-$AXGO_ROOT/runtime/orchestrator}" sh "$AXGO_ROOT/bin/orchestrator" status 2>/dev/null || :)
+    SESSION=$(AXGO_ROOT="$AXGO_ROOT" sh "$AXGO_ROOT/bin/session" status 2>/dev/null || :)
+    PROFILE=$(AXGO_ROOT="$AXGO_ROOT" sh "$AXGO_ROOT/bin/profile" get 2>/dev/null || :)
+    PROFILE_LIST=$(AXGO_ROOT="$AXGO_ROOT" sh "$AXGO_ROOT/bin/game-profile" list 2>/dev/null || :)
+
+    printf '{'
+    json_pair schema "1"; printf ','
+    json_pair generated_at "$(value TIMESTAMP "$EVIDENCE")"; printf ','
+    json_pair source "axmanager-read-only-cli"; printf ','
+    printf '"read_only":true,'
+    printf '"evidence":{'
+    json_pair game "$(value GAME "$EVIDENCE")"; printf ','
+    json_pair package "$(value PACKAGE "$EVIDENCE")"; printf ','
+    json_pair profile "$(value PROFILE "$EVIDENCE")"; printf ','
+    json_pair cpu_utilization "$(value CPU_UTILIZATION "$EVIDENCE")"; printf ','
+    json_pair cpu_state "$(value CPU_STATE "$EVIDENCE")"; printf ','
+    json_pair gpu_utilization "$(value GPU_UTILIZATION "$EVIDENCE")"; printf ','
+    json_pair gpu_state "$(value GPU_STATE "$EVIDENCE")"; printf ','
+    json_pair memory_usage_percent "$(value MEMORY_USAGE_PERCENT "$EVIDENCE")"; printf ','
+    json_pair memory_available_mb "$(value MEMORY_AVAILABLE_MB "$EVIDENCE")"; printf ','
+    json_pair memory_state "$(value MEMORY_STATE "$EVIDENCE")"; printf ','
+    json_pair thermal_temp_c "$(value THERMAL_TEMP_C "$EVIDENCE")"; printf ','
+    json_pair thermal_peak_c "$(value THERMAL_PEAK_C "$EVIDENCE")"; printf ','
+    json_pair thermal_state "$(value THERMAL_STATE "$EVIDENCE")"; printf ','
+    json_pair thermal_trend "$(value THERMAL_TREND "$EVIDENCE")"; printf ','
+    json_pair fps "$(value FPS "$EVIDENCE")"; printf ','
+    json_pair frame_time_ms "$(value FRAME_TIME_MS "$EVIDENCE")"; printf ','
+    json_pair frame_pacing "$(value FRAME_PACING "$EVIDENCE")"; printf ','
+    json_pair fps_trend "$(value FPS_TREND "$EVIDENCE")"; printf ','
+    json_pair battery_percent "$(value BATTERY_PERCENT "$EVIDENCE")"; printf ','
+    json_pair charging_state "$(value CHARGING_STATE "$EVIDENCE")"; printf ','
+    json_pair battery_health "$(value BATTERY_HEALTH "$EVIDENCE")"; printf ','
+    json_pair battery_temp_c "$(value BATTERY_TEMP_C "$EVIDENCE")"; printf ','
+    json_pair voltage_mv "$(value VOLTAGE_MV "$EVIDENCE")"; printf ','
+    json_pair current_ma "$(value CURRENT_MA "$EVIDENCE")"; printf ','
+    json_pair estimated_watts "$(value ESTIMATED_WATTS "$EVIDENCE")"; printf ','
+    json_pair drain_rate "$(value DRAIN_RATE "$EVIDENCE")"; printf ','
+    json_pair power_state "$(value POWER_STATE "$EVIDENCE")"
+    printf '},'
+    printf '"decision":{'
+    json_pair state "$(value SELECTED_STATE "$DECISION")"; printf ','
+    json_pair confidence "$(value CONFIDENCE "$DECISION")"; printf ','
+    json_pair priority "$(value PRIORITY "$DECISION")"; printf ','
+    json_pair reason "$(value REASON "$DECISION")"; printf ','
+    json_pair evidence_summary "$(value EVIDENCE_SUMMARY "$DECISION")"; printf ','
+    json_pair recommended_actions "$(value RECOMMENDED_ACTIONS "$DECISION")"; printf ','
+    json_pair recovery_conditions "$(value RECOVERY_CONDITIONS "$DECISION")"; printf ','
+    json_pair safety_classification "$(value SAFETY_CLASSIFICATION "$DECISION")"; printf ','
+    json_pair evidence_status "$(value EVIDENCE_STATUS "$DECISION")"
+    printf '},'
+    printf '"orchestrator":{'
+    json_pair lifecycle "$(value ORCHESTRATOR_LIFECYCLE "$ORCHESTRATOR")"; printf ','
+    json_pair state "$(value ORCHESTRATOR_STATE "$ORCHESTRATOR")"; printf ','
+    json_pair stable_samples "$(value STABLE_SAMPLES "$ORCHESTRATOR")"
+    printf '},'
+    printf '"session":{'
+    json_pair status "$(line_value "Gaming session" "$SESSION")"; printf ','
+    json_pair game "$(line_value "Current game" "$SESSION")"; printf ','
+    json_pair profile "$(line_value "Profile" "$SESSION")"; printf ','
+    json_pair selected_profile "$(line_value "Current profile" "$PROFILE")"
+    printf '},'
+    printf '"profiles":'
+    profile_json "$PROFILE_LIST"
+    printf ','
+    printf '"safety":{'
+    json_pair blocked_actions "$(value BLOCKED_ACTIONS "$DECISION")"; printf ','
+    json_pair forbidden_actions_blocked "$(value FORBIDDEN_ACTIONS_BLOCKED "$DECISION")"; printf ','
+    json_pair read_only "$(value READ_ONLY "$DECISION")"
+    printf '}'
+    printf '}\n'
+}
+
+case "${1:-help}" in
+    path) printf '%s\n' "$DASHBOARD_DIR/index.html" ;;
+    snapshot) snapshot ;;
+    export)
+        mkdir -p "$DASHBOARD_DIR/data" 2>/dev/null || exit 1
+        snapshot > "$OUTPUT_FILE" || exit 1
+        printf 'DASHBOARD_SNAPSHOT=%s\n' "$OUTPUT_FILE"
+        printf 'READ_ONLY=YES\n'
+        ;;
+    help|-h|--help) usage ;;
+    *) usage >&2; exit 2 ;;
+esac

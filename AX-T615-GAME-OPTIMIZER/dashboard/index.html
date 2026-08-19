@@ -1,0 +1,135 @@
+<!doctype html>
+<!-- Step 12 design contract: Calibrated Instrument Panel — a safety-first, evidence-led workspace; no display element claims a hardware change. -->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#182225" />
+    <meta name="description" content="Axmanager read-only gaming performance observability dashboard." />
+    <title>Axmanager — Safety-first gaming telemetry</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="assets/styles.css" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to dashboard</a>
+    <div class="app-shell">
+      <aside class="rail" aria-label="Dashboard navigation">
+        <a class="brand" href="#overview" aria-label="Axmanager overview">
+          <img src="/manus-storage/axmanager-logo_31db0166.png" width="42" height="42" alt="" onerror="this.hidden=true" />
+          <span><b>AX</b>MANAGER<small>read-only console</small></span>
+        </a>
+        <nav class="nav-list" aria-label="Sections">
+          <a class="nav-item active" href="#overview"><span class="nav-mark"></span>Overview</a>
+          <a class="nav-item" href="#telemetry"><span class="nav-mark"></span>Telemetry</a>
+          <a class="nav-item" href="#orchestrator"><span class="nav-mark"></span>Orchestrator</a>
+          <a class="nav-item" href="#profiles"><span class="nav-mark"></span>Profiles</a>
+          <a class="nav-item" href="#safety"><span class="nav-mark"></span>Safety</a>
+        </nav>
+        <div class="rail-footer">
+          <span class="eyebrow">Operating boundary</span>
+          <p><strong>Read-only.</strong> Evidence and recommendations are visible; device tuning is not exposed here.</p>
+        </div>
+      </aside>
+
+      <main id="main" tabindex="-1">
+        <header class="status-bar">
+          <div class="live-indicator"><span class="pulse" aria-hidden="true"></span><span id="sourceLabel">No snapshot loaded</span></div>
+          <div class="status-summary"><span>Mode</span><strong id="modeLabel">READ-ONLY</strong><i></i><span>Last update</span><strong id="updatedAt">Unavailable</strong></div>
+        </header>
+
+        <section id="overview" class="hero" aria-labelledby="overview-title">
+          <div class="hero-copy">
+            <p class="eyebrow">System observability / policy console</p>
+            <h1 id="overview-title">Measure first.<br /><em>Protect always.</em></h1>
+            <p class="hero-text">Axmanager translates existing, read-only device evidence into a clear gaming-performance recommendation. It does not write hardware settings or claim changes it did not make.</p>
+            <div class="operational-strip" aria-label="Operational boundary summary">
+              <div><span>Evidence</span><strong id="evidenceHeader">NO DATA</strong></div>
+              <div><span>Safety boundary</span><strong>READ-ONLY</strong></div>
+              <div><span>Device change</span><strong>NONE</strong></div>
+            </div>
+            <div class="hero-actions">
+              <label class="button button-primary" for="snapshotInput">Load safe snapshot</label>
+              <button class="button button-quiet" id="resetButton" type="button">Clear view</button>
+              <input id="snapshotInput" type="file" accept="application/json" hidden />
+            </div>
+            <p class="file-hint" id="fileStatus" role="status">Export a snapshot with <code>sh bin/dashboard export</code>, then load it here.</p>
+          </div>
+          <div class="hero-dial" aria-label="Current safety posture">
+            <div class="dial-caption"><span>Safety dossier</span><strong id="postureValue">Awaiting evidence</strong></div>
+            <div class="dial-ring"><span id="postureState">NO DATA</span><small>no device change</small></div>
+            <div class="dial-foot"><span>Decision source</span><b>ORCHESTRATOR</b></div>
+            <div class="dossier-boundary"><span>Blocked policy operations</span><strong id="blockedOperationHeader">AWAITING VERIFIED SNAPSHOT</strong><small>Governor, frequency, kernel, charging, process, memory, thermal and battery modifications remain unavailable.</small></div>
+          </div>
+        </section>
+
+        <section class="briefing-grid" aria-label="Current operating briefing">
+          <article class="briefing-main">
+            <p class="eyebrow">Current recommendation</p>
+            <div class="recommendation-line"><span class="state-dot" id="recommendationDot" aria-hidden="true"></span><h2 id="recommendationState">Unavailable</h2><span class="chip" id="priorityChip">NO PRIORITY</span></div>
+            <p id="recommendationReason">No safe telemetry snapshot has been loaded. Axmanager will not infer device values.</p>
+            <dl class="briefing-facts">
+              <div><dt>Confidence</dt><dd id="confidenceValue">Unavailable</dd></div>
+              <div><dt>Recovery condition</dt><dd id="recoveryValue">Unavailable</dd></div>
+              <div><dt>Suggested actions</dt><dd id="actionsValue">Unavailable</dd></div>
+            </dl>
+            <div class="dry-run-flow" aria-label="Dry-run sequence">
+              <span>Evidence</span><b>→</b><span>Decision</span><b>→</b><span>Recommendation</span><b>→</b><span>Safety checks</span>
+              <strong>DRY-RUN ONLY</strong>
+            </div>
+          </article>
+          <aside class="session-card" aria-labelledby="session-title">
+            <div class="session-top"><p class="eyebrow" id="session-title">Gaming session</p><span class="chip neutral" id="sessionStatus">NOT DETECTED</span></div>
+            <div class="session-game"><span class="game-glyph">A</span><div><strong id="gameName">No active game</strong><small id="packageName">Package unavailable</small></div></div>
+            <dl class="session-meta"><div><dt>Selected profile</dt><dd id="profileValue">Unavailable</dd></div><div><dt>Orchestrator</dt><dd id="orchestratorValue">Unavailable</dd></div><div><dt>Recovery samples</dt><dd id="stableSamplesValue">Unavailable</dd></div><div><dt>Session duration</dt><dd id="sessionDurationValue">Unavailable</dd></div></dl>
+          </aside>
+        </section>
+
+        <section id="telemetry" class="section-block" aria-labelledby="telemetry-title">
+          <div class="section-heading"><div><p class="eyebrow">Live evidence, when exported</p><h2 id="telemetry-title">System telemetry</h2></div><p class="section-note">Unavailable sensors remain unavailable. Values are never estimated by this interface.</p></div>
+          <div class="metric-grid">
+            <article class="metric-card"><p>CPU</p><strong id="cpuValue">—</strong><span id="cpuState">Unavailable</span><i></i></article>
+            <article class="metric-card"><p>GPU</p><strong id="gpuValue">—</strong><span id="gpuState">Unavailable</span><i></i></article>
+            <article class="metric-card"><p>Memory</p><strong id="memoryValue">—</strong><span id="memoryState">Unavailable</span><i></i></article>
+            <article class="metric-card thermal"><p>Thermal</p><strong id="thermalValue">—</strong><span id="thermalState">Unavailable</span><i></i></article>
+            <article class="metric-card"><p>Battery</p><strong id="batteryValue">—</strong><span id="batteryState">Unavailable</span><i></i></article>
+            <article class="metric-card"><p>Frame rate</p><strong id="fpsValue">—</strong><span id="fpsState">Unavailable</span><i></i></article>
+          </div>
+          <div class="telemetry-ledger" aria-label="Detailed available evidence">
+            <div><span>Thermal peak</span><strong id="thermalPeakValue">Unavailable</strong><small id="thermalTrendValue">No thermal trend</small></div>
+            <div><span>Battery health</span><strong id="batteryHealthValue">Unavailable</strong><small id="batteryTemperatureValue">Temperature unavailable</small></div>
+            <div><span>Electrical input</span><strong id="voltageValue">Unavailable</strong><small id="currentValue">Current unavailable</small></div>
+            <div><span>Session drain</span><strong id="drainValue">Unavailable</strong><small id="powerStateValue">Power state unavailable</small></div>
+          </div>
+          <div class="monitoring-panel">
+            <div class="monitoring-copy"><p class="eyebrow">Bounded-session telemetry</p><h3>Performance timeline</h3><p id="timelineDescription">No bounded-session history was included in this snapshot.</p><dl><div><dt>Frame time</dt><dd id="frameTimeValue">Unavailable</dd></div><div><dt>Frame pacing</dt><dd id="pacingValue">Unavailable</dd></div><div><dt>Power estimate</dt><dd id="powerValue">Unavailable</dd></div></dl></div>
+            <div class="chart-frame" aria-label="Telemetry trend chart"><div class="chart-grid" aria-hidden="true"></div><svg id="trendChart" viewBox="0 0 560 170" preserveAspectRatio="none" role="img" aria-label="No telemetry history"><polyline id="trendLine" points="" /></svg><p id="chartEmpty">No data</p></div>
+          </div>
+        </section>
+
+        <section id="orchestrator" class="section-block orchestration" aria-labelledby="orchestrator-title">
+          <div class="section-heading"><div><p class="eyebrow">Decision trace</p><h2 id="orchestrator-title">Orchestrator dossier</h2></div><span class="read-only-stamp">POLICY OUTPUT / NOT APPLIED</span></div>
+          <div class="dossier-grid">
+            <article class="evidence-panel"><h3>Supporting evidence</h3><p id="evidenceSummary">No evidence summary available.</p><div class="evidence-key" id="evidenceKey"></div></article>
+            <article class="actions-panel"><h3>Recommended logical actions</h3><ul id="actionsList"><li>Unavailable</li></ul><p class="microcopy">These are logical recommendations only. This dashboard does not run them as hardware actions.</p></article>
+            <article class="recovery-panel"><h3>Recovery status</h3><strong id="recoveryState">Not assessed</strong><p id="recoveryDetail">Load a normalized Axmanager snapshot to see the current recovery condition.</p><dl class="dossier-facts"><div><dt>Previous state</dt><dd id="previousStateValue">Unavailable</dd></div><div><dt>Lifecycle</dt><dd id="lifecycleValue">Unavailable</dd></div></dl></article>
+          </div>
+        </section>
+
+        <section id="profiles" class="section-block profile-layout" aria-labelledby="profiles-title">
+          <div class="profile-copy"><p class="eyebrow">Game policy</p><h2 id="profiles-title">Profiles remain policy-only</h2><p>Profile inspection and selection stay in the existing CLI policy layer. The dashboard displays the active policy but cannot invent hardware settings or bypass the core guardrails.</p><code>sh bin/axgo profile get</code><code>sh bin/axgo profile set &lt;balanced|performance|conservative&gt;</code></div>
+          <div class="profile-paper"><span class="paper-tab">CURRENT POLICY</span><dl><div><dt>Profile</dt><dd id="profilePaperValue">Unavailable</dd></div><div><dt>Evidence status</dt><dd id="evidenceStatusValue">Unavailable</dd></div><div><dt>Policy decision</dt><dd id="policyDecisionValue">Unavailable</dd></div></dl><p class="profile-inventory-label">Available profiles</p><ul id="profilesList" class="profile-inventory"><li>Unavailable</li></ul><p class="microcopy">Profile selection is a safe policy operation. It is not presented as a frequency, governor, or charging change.</p></div>
+        </section>
+
+        <section id="safety" class="safety-panel" aria-labelledby="safety-title">
+          <div class="safety-copy"><p class="eyebrow">Safety boundary</p><h2 id="safety-title">The protective layer has the final word.</h2><p>Axmanager blocks unsafe operations before a performance recommendation can be considered. This dashboard makes the boundary visible rather than offering a bypass.</p><div class="safety-status"><span class="shield-mark">✓</span><div><strong id="guardStatus">Safety guard active</strong><small id="guardDetail">Read-only policy is enforced.</small></div></div></div>
+          <div class="blocked-list"><p class="eyebrow">Blocked action classes</p><ul id="blockedActions"><li>Unavailable until evidence is loaded</li></ul><p class="safety-footnote">CPU/GPU governor, frequency, Power HAL, charging, kernel, process, ZRAM/swap, LMKD/OOM, thermal, and battery modifications are not exposed.</p></div>
+        </section>
+
+        <footer><p>AXMANAGER / STEP 12 / SAFETY-FIRST OBSERVABILITY</p><p>Static dashboard. No polling. No arbitrary commands. No fabricated telemetry.</p></footer>
+      </main>
+    </div>
+    <script src="assets/app.js"></script>
+  </body>
+</html>

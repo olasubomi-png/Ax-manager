@@ -720,3 +720,55 @@ The `dry-run` command renders the proposed logical action plan and explicitly re
 The existing `bin/session` coordinator invokes the orchestrator once at game-session start, once for each bounded sample path, and once at stop. This integration adds unified evidence and lifecycle visibility without replacing the thermal, memory, FPS, profile, GPU, CPU, or power engines. Step 11 therefore remains a recommendation and audit layer: it coordinates safe logical states, preserves all earlier read-only guarantees, and never claims that a hardware setting was applied.
 
 The Step 11 test suites cover evidence normalization, decision priority and unknown fallback, lifecycle idempotence, bounded monitoring, protection and performance hysteresis, session integration, blocked-action reporting, static forbidden-write scanning, dry-run behavior, audit/runtime cleanup, fixture immutability, and top-level `axgo` routing. The complete repository regression suite remains required after every orchestration change.
+
+## Step 12 — Dashboard/UI & Final Validation
+
+Step 12 completes the planned Axmanager milestone with a separate, responsive dashboard for the existing read-only engines and a final end-to-end validation layer. The dashboard is an **observability and policy interface**: it renders only a normalized snapshot from the same Axmanager CLI and orchestration contracts used by terminal users. It does not contain its own decision algorithm, hardware-control path, arbitrary command execution, mutation API, or background collector.
+
+```text
+Read-only device telemetry
+  → CPU/GPU/memory/thermal/FPS/profile/power controllers
+  → orchestrator evidence → decision → lifecycle, hysteresis, audit
+  → bin/dashboard snapshot/export
+  → static dashboard/index.html
+```
+
+### Dashboard workflow
+
+The dashboard is dependency-free static HTML, CSS, and browser JavaScript under `dashboard/`. `bin/dashboard` is its small read-only service boundary. It calls existing controller and orchestrator commands, normalizes their output into a JSON snapshot, and never writes to a device-control interface. The browser validates snapshot shape, requires an explicit read-only marker, caps loaded local snapshot files at 1 MB, renders text through DOM text nodes rather than HTML injection, and rejects malformed or non-read-only data.
+
+```sh
+./bin/dashboard path
+./bin/dashboard snapshot
+./bin/dashboard export
+```
+
+`snapshot` prints a JSON document to standard output. `export` writes only `dashboard/data/current-snapshot.json`, which is ignored as runtime data, and reports `READ_ONLY=YES`. Open `dashboard/index.html` in a modern local browser and use **Load safe snapshot** to choose the exported JSON. The user interface is responsive for desktop, tablet, and narrow mobile widths; it presents unavailable hardware data as `Unavailable`, `Unsupported`, `Not detected`, or `No data` instead of fabricating a measurement.
+
+The overview presents system health, CPU/GPU/memory/thermal/battery/FPS information when evidence exists, game-session/profile status, bounded monitoring context, a recommendation dossier, recovery status, blocked policy-operation classes, and a dry-run chain. The profiles panel is policy-only: it lists known profile catalog entries from the existing profile engine and shows the CLI commands that support inspection or safe selection. It does **not** assert that profile selection changes a governor, clock, charging policy, or any device setting.
+
+### Orchestrator and session compatibility
+
+The top-level `axgo` CLI and every earlier controller remain unchanged. The dashboard exporter delegates all recommendations to `bin/orchestrator-decision`, and it derives evidence through `bin/orchestrator-evidence`. Session and profile information comes from the existing `bin/session`, `bin/profile`, and `bin/game-profile` interfaces. The dashboard does not introduce a second policy source, and its dry-run representation is explicitly labeled as a recommendation, not an applied optimization.
+
+### Safety, security, and deployment model
+
+Step 12 preserves the complete read-only boundary. It does not write `/proc` or `/sys`, change CPU/GPU governors or frequencies, call a Power HAL, set Android properties, modify charging limits, alter battery or thermal protection, change ZRAM/swap/LMKD/OOM settings, or kill/force-stop processes. The dashboard exposes no secret material, filesystem browser, or arbitrary shell endpoint. Snapshot values are treated as display data only; no value from a snapshot is executed as shell or browser code.
+
+The expected model is a local static dashboard opened by the device owner, or a separately hosted static copy behind an operator-controlled access boundary. It has no authentication layer because it has no remote command API and reads a locally selected, read-only snapshot. If an operator chooses to host snapshots remotely, transport security and access control are the operator's responsibility; Axmanager does not provide remote device control.
+
+### Final validation
+
+`tests/test_dashboard.sh` verifies snapshot export, read-only markers, decision/safety propagation, static browser-script syntax, bounded JSON rendering safeguards, dry-run wording, and the absence of unsafe UI operations. `tests/test_e2e_final.sh` covers realistic healthy-gaming, thermal escalation, low-battery, conflicting-signal, unavailable-telemetry, and recovery scenarios using labeled fixture evidence. The full `tests/test_*.sh` suite remains the final regression gate and includes all earlier CPU, thermal, GPU, memory, FPS, profile, power, and orchestration tests.
+
+```sh
+sh tests/test_dashboard.sh
+sh tests/test_e2e_final.sh
+failed=0; for test_file in tests/test_*.sh; do sh "$test_file" || failed=1; done; exit "$failed"
+```
+
+The release review also checks shell and browser-script syntax, `git diff --check`, static forbidden-write patterns, CLI smoke paths, runtime cleanup, fixture immutability, and absence of generated runtime files. The final Step 12 validation run completed **70 test suites with 0 failures**; the focused dashboard suite completed **24 assertions with 0 failures**, and the end-to-end suite completed **16 assertions with 0 failures**.
+
+### Final limitations
+
+Axmanager is limited by the hardware and Android interfaces that the target device actually exposes. Sensors, GPU utilization, FPS/frame-time data, battery electrical fields, foreground-game detection, and session durations can be unavailable or unsupported. Historical charts are intentionally absent unless bounded-session telemetry is supplied. Profile selection is policy-only, and all recommendations remain recommendations. Android and manufacturer thermal and battery protection remain authoritative at all times.
