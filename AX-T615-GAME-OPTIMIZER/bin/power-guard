@@ -1,0 +1,248 @@
+#!/system/bin/sh
+set -u
+
+# AX-T615 Step 10: power-aware recommendation guard.
+# This policy layer reads telemetry and writes only AX-manager-owned state.
+# It never applies CPU/GPU, charging, thermal, Android, kernel, /proc, or /sys settings.
+
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname "$0" 2>/dev/null)" && pwd)"
+AXGO_ROOT="${AXGO_ROOT:-$(CDPATH= cd -- "$SCRIPT_DIR/.." 2>/dev/null && pwd)}"
+AXGO_DATA_ROOT="${AXGO_DATA_ROOT:-$AXGO_ROOT}"
+POWER_GUARD_DATA_ROOT="${POWER_GUARD_DATA_ROOT:-$AXGO_DATA_ROOT}"
+POWER_POLICY_FILE="${POWER_POLICY_FILE:-$AXGO_ROOT/config/power-policy.json}"
+POWER_CONTROLLER="${POWER_CONTROLLER:-$AXGO_ROOT/bin/power-controller}"
+POWER_RUNTIME_DIR="${POWER_RUNTIME_DIR:-$POWER_GUARD_DATA_ROOT/runtime/power-guard}"
+POWER_LOG_FILE="${POWER_LOG_FILE:-$POWER_GUARD_DATA_ROOT/logs/power-guard.log}"
+POWER_OVERRIDE_FILE="${POWER_OVERRIDE_FILE:-$POWER_GUARD_DATA_ROOT/runtime/power-guard/override.state}"
+
+policy_value() {
+    KEY="$1"
+    [ -r "$POWER_POLICY_FILE" ] || return 1
+    VALUE="$(sed -n "s/.*\"$KEY\"[[:space:]]*:[[:space:]]*\([-0-9.][0-9.]*\).*/\1/p" "$POWER_POLICY_FILE" 2>/dev/null | head -n 1)"
+    [ -n "$VALUE" ] && { printf '%s' "$VALUE"; return; }
+    sed -n "s/.*\"$KEY\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p" "$POWER_POLICY_FILE" 2>/dev/null | head -n 1
+}
+policy_default() { VALUE="$(policy_value "$1" 2>/dev/null || :)"; [ -n "$VALUE" ] && printf '%s' "$VALUE" || printf '%s' "$2"; }
+state_order() { case "${1:-UNKNOWN}" in PERFORMANCE_ALLOWED) echo 0;; BALANCED) echo 1;; CONSERVATIVE) echo 2;; PERFORMANCE_BLOCKED) echo 3;; UNKNOWN) echo 2;; *) echo 2;; esac; }
+number_ok() { case "${1:-}" in ''|*[!0-9.-]*) return 1;; esac; return 0; }
+number_ge() { number_ok "$1" && number_ok "$2" || return 1; awk -v a="$1" -v b="$2" 'BEGIN{exit !(a>=b)}' 2>/dev/null; }
+
+read_state() { [ -r "$1" ] && cat "$1" 2>/dev/null || :; }
+write_state() { mkdir -p "$POWER_RUNTIME_DIR" 2>/dev/null || return 1; printf '%s\n' "$2" > "$1" 2>/dev/null; }
+set_override() {
+    MODE="$(printf '%s' "${1:-}" | tr '[:lower:]' '[:upper:]')"
+    case "$MODE" in PERFORMANCE_ALLOWED|BALANCED|CONSERVATIVE|PERFORMANCE_BLOCKED) : ;; *) echo "Invalid override mode: $MODE" >&2; return 2 ;; esac
+    MINUTES="${2:-30}"
+    case "$MINUTES" in ''|*[!0-9]*) echo "Invalid override duration" >&2; return 2 ;; esac
+    NOW="$(date +%s 2>/dev/null || echo 0)"
+    EXPIRES=$((NOW + MINUTES * 60))
+    mkdir -p "$(dirname "$POWER_OVERRIDE_FILE")" 2>/dev/null || return 1
+    printf '%s|%s\n' "$MODE" "$EXPIRES" > "$POWER_OVERRIDE_FILE" 2>/dev/null || return 1
+    echo "Temporary override: $MODE"
+    echo "Expires in: ${MINUTES} minutes"
+    echo "Read-only recommendation override; no hardware settings changed."
+}
+clear_override() { rm -f "$POWER_OVERRIDE_FILE" 2>/dev/null || :; echo "Temporary power override: CLEARED"; }
+load_override() {
+    POWER_OVERRIDE_MODE=""
+    [ -r "$POWER_OVERRIDE_FILE" ] || return 0
+    RECORD="$(cat "$POWER_OVERRIDE_FILE" 2>/dev/null || :)"
+    MODE="${RECORD%%|*}"; EXPIRES="${RECORD#*|}"
+    NOW="$(date +%s 2>/dev/null || echo 0)"
+    case "$EXPIRES" in ''|*[!0-9]*) clear_override >/dev/null; return 0;; esac
+    if [ "$EXPIRES" -le "$NOW" ] 2>/dev/null; then clear_override >/dev/null; return 0; fi
+    POWER_OVERRIDE_MODE="$MODE"
+}
+override_status() {
+    load_override
+    if [ -n "${POWER_OVERRIDE_MODE:-}" ]; then echo "Temporary override: $POWER_OVERRIDE_MODE"; else echo "Temporary override: NONE"; fi
+    echo "Read-only: YES"
+}
+log_line() { mkdir -p "$(dirname "$POWER_LOG_FILE")" 2>/dev/null || :; printf '%s [%s] %s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z' 2>/dev/null || echo unknown-time)" "${1:-INFO}" "${2:-}" >> "$POWER_LOG_FILE" 2>/dev/null || :; }
+
+load_snapshot() {
+    SNAPSHOT="$(POWER_DATA_ROOT="$POWER_GUARD_DATA_ROOT" POWER_RUNTIME_DIR="${POWER_BATTERY_RUNTIME_DIR:-$POWER_GUARD_DATA_ROOT/runtime/power}" POWER_THERMAL_STATE="${POWER_THERMAL_STATE:-}" POWER_MEMORY_STATE="${POWER_MEMORY_STATE:-}" sh "$POWER_CONTROLLER" snapshot 2>/dev/null || :)"
+    BATTERY_PERCENT="$(printf '%s\n' "$SNAPSHOT" | sed -n 's/^BATTERY_PERCENT=//p' | head -n 1)"
+    BATTERY_STATE="$(printf '%s\n' "$SNAPSHOT" | sed -n 's/^BATTERY_STATE=//p' | head -n 1)"
+    CHARGING="$(printf '%s\n' "$SNAPSHOT" | sed -n 's/^CHARGING=//p' | head -n 1)"
+    POWER_SOURCE="$(printf '%s\n' "$SNAPSHOT" | sed -n 's/^POWER_SOURCE=//p' | head -n 1)"
+    BATTERY_HEALTH="$(printf '%s\n' "$SNAPSHOT" | sed -n 's/^BATTERY_HEALTH=//p' | head -n 1)"
+    BATTERY_TEMP="$(printf '%s\n' "$SNAPSHOT" | sed -n 's/^BATTERY_TEMP=//p' | head -n 1)"
+    BATTERY_TEMP_STATE="$(printf '%s\n' "$SNAPSHOT" | sed -n 's/^BATTERY_TEMP_STATE=//p' | head -n 1)"
+    POWER_STATE="$(printf '%s\n' "$SNAPSHOT" | sed -n 's/^POWER_STATE=//p' | head -n 1)"
+    THERMAL_STATE="${POWER_THERMAL_STATE:-$(printf '%s\n' "$SNAPSHOT" | sed -n 's/^THERMAL_STATE=//p' | head -n 1)}"
+    MEMORY_STATE="${POWER_MEMORY_STATE:-$(printf '%s\n' "$SNAPSHOT" | sed -n 's/^MEMORY_STATE=//p' | head -n 1)}"
+    [ -n "$BATTERY_STATE" ] || BATTERY_STATE=UNKNOWN
+    [ -n "$CHARGING" ] || CHARGING=UNKNOWN
+    [ -n "$BATTERY_TEMP_STATE" ] || BATTERY_TEMP_STATE=UNKNOWN
+    [ -n "$POWER_STATE" ] || POWER_STATE=UNKNOWN
+    [ -n "$THERMAL_STATE" ] || THERMAL_STATE=UNKNOWN
+    [ -n "$MEMORY_STATE" ] || MEMORY_STATE=UNKNOWN
+}
+
+profile_recommendation() {
+    RAW="${POWER_PROFILE_RECOMMENDATION:-${GAME_PROFILE_RECOMMENDATION:-}}"
+    TARGET="${POWER_PROFILE_TARGET:-${GAME_PROFILE_TARGET:-}}"
+    if [ -z "$RAW" ] && [ -n "$TARGET" ] && [ -x "$AXGO_ROOT/bin/game-profile" ]; then
+        RAW="$(AXGO_ROOT="$AXGO_ROOT" GAME_PROFILE_DATA_ROOT="$POWER_GUARD_DATA_ROOT" GAME_PROFILE_DIR="${GAME_PROFILE_DIR:-$AXGO_ROOT/config/game-profiles}" sh "$AXGO_ROOT/bin/game-profile" recommend "$TARGET" 2>/dev/null || :)"
+    fi
+    if [ -z "$RAW" ] && [ -z "$TARGET" ]; then
+        echo PERFORMANCE_ALLOWED
+        return 0
+    fi
+    RAW="$(printf '%s\n' "$RAW" | tr '[:lower:]' '[:upper:]')"
+    case "$RAW" in
+        *PERFORMANCE_BLOCKED*|*BLOCKED*) echo PERFORMANCE_BLOCKED ;;
+        *CONSERVATIVE*|*COOL*) echo CONSERVATIVE ;;
+        *BALANCED*) echo BALANCED ;;
+        *PERFORMANCE_ALLOWED*|*BOOST_ALLOWED*|*BOOST*|*PERFORMANCE*) echo PERFORMANCE_ALLOWED ;;
+        *) echo UNKNOWN ;;
+    esac
+}
+
+fps_recommendation() {
+    RAW="${POWER_FPS_RECOMMENDATION:-${POWER_FPS_STATE:-}}"
+    if [ -z "$RAW" ]; then
+        echo PERFORMANCE_ALLOWED
+        return 0
+    fi
+    RAW="$(printf '%s\n' "$RAW" | tr '[:lower:]' '[:upper:]')"
+    case "$RAW" in *BLOCKED*|*CRITICAL*) echo PERFORMANCE_BLOCKED;; *CONSERVATIVE*|*UNSTABLE*) echo CONSERVATIVE;; *BALANCED*|*VARIABLE*) echo BALANCED;; *ALLOWED*|*STABLE*) echo PERFORMANCE_ALLOWED;; *) echo UNKNOWN;; esac
+}
+
+merge_recommendation() {
+    CANDIDATE="$1"
+    CURRENT="$2"
+    [ "$(state_order "$CANDIDATE")" -gt "$(state_order "$CURRENT")" ] && echo "$CANDIDATE" || echo "$CURRENT"
+}
+
+target_recommendation() {
+    PROFILE_REC="$(profile_recommendation)"
+    FPS_REC="$(fps_recommendation)"
+    TARGET=PERFORMANCE_ALLOWED
+    case "$BATTERY_STATE" in
+        CRITICAL) TARGET="$(merge_recommendation PERFORMANCE_BLOCKED "$TARGET")" ;;
+        LOW) TARGET="$(merge_recommendation CONSERVATIVE "$TARGET")" ;;
+        UNKNOWN) TARGET="$(merge_recommendation CONSERVATIVE "$TARGET")" ;;
+        MEDIUM) TARGET="$(merge_recommendation BALANCED "$TARGET")" ;;
+    esac
+    case "$POWER_STATE" in
+        BATTERY_CRITICAL) TARGET="$(merge_recommendation PERFORMANCE_BLOCKED "$TARGET")" ;;
+        BATTERY_LOW|POWER_LIMITED|CHARGING_HOT) TARGET="$(merge_recommendation CONSERVATIVE "$TARGET")" ;;
+        UNKNOWN) TARGET="$(merge_recommendation CONSERVATIVE "$TARGET")" ;;
+    esac
+    case "$BATTERY_TEMP_STATE" in
+        CRITICAL|HIGH) [ "$CHARGING" = CHARGING ] && TARGET="$(merge_recommendation CONSERVATIVE "$TARGET")" ;;
+        UNKNOWN) [ "$BATTERY_TEMP" = UNKNOWN ] && TARGET="$(merge_recommendation CONSERVATIVE "$TARGET")" ;;
+    esac
+    case "$BATTERY_HEALTH" in
+        OVERHEAT|DEAD|OVER_VOLTAGE|UNSPECIFIED_FAILURE|COLD) TARGET="$(merge_recommendation CONSERVATIVE "$TARGET")" ;;
+        UNKNOWN) TARGET="$(merge_recommendation CONSERVATIVE "$TARGET")" ;;
+    esac
+    case "$THERMAL_STATE" in
+        CRITICAL) TARGET="$(merge_recommendation PERFORMANCE_BLOCKED "$TARGET")" ;;
+        THROTTLED|CAUTION) TARGET="$(merge_recommendation CONSERVATIVE "$TARGET")" ;;
+        UNKNOWN) TARGET="$(merge_recommendation CONSERVATIVE "$TARGET")" ;;
+    esac
+    case "$MEMORY_STATE" in
+        CRITICAL) TARGET="$(merge_recommendation PERFORMANCE_BLOCKED "$TARGET")" ;;
+        HIGH_PRESSURE|PRESSURE|CAUTION) TARGET="$(merge_recommendation CONSERVATIVE "$TARGET")" ;;
+        UNKNOWN) TARGET="$(merge_recommendation CONSERVATIVE "$TARGET")" ;;
+    esac
+    case "$PROFILE_REC" in
+        PERFORMANCE_BLOCKED) TARGET="$(merge_recommendation PERFORMANCE_BLOCKED "$TARGET")" ;;
+        CONSERVATIVE) TARGET="$(merge_recommendation CONSERVATIVE "$TARGET")" ;;
+        BALANCED) TARGET="$(merge_recommendation BALANCED "$TARGET")" ;;
+        UNKNOWN) TARGET="$(merge_recommendation CONSERVATIVE "$TARGET")" ;;
+    esac
+    case "$FPS_REC" in
+        PERFORMANCE_BLOCKED) TARGET="$(merge_recommendation PERFORMANCE_BLOCKED "$TARGET")" ;;
+        CONSERVATIVE) TARGET="$(merge_recommendation CONSERVATIVE "$TARGET")" ;;
+        BALANCED) TARGET="$(merge_recommendation BALANCED "$TARGET")" ;;
+        UNKNOWN) TARGET="$(merge_recommendation CONSERVATIVE "$TARGET")" ;;
+    esac
+    MODE="${POWER_CHARGING_GAMING_MODE:-$(policy_default chargingGamingMode AUTO)}"
+    MODE="$(printf '%s' "$MODE" | tr '[:lower:]' '[:upper:]')"
+    [ "$MODE" = CONSERVATIVE ] && TARGET="$(merge_recommendation CONSERVATIVE "$TARGET")"
+    case "${POWER_OVERRIDE_MODE:-}" in
+        PERFORMANCE_BLOCKED) TARGET="$(merge_recommendation PERFORMANCE_BLOCKED "$TARGET")" ;;
+        CONSERVATIVE) TARGET="$(merge_recommendation CONSERVATIVE "$TARGET")" ;;
+        BALANCED) TARGET="$(merge_recommendation BALANCED "$TARGET")" ;;
+        PERFORMANCE_ALLOWED) : ;;
+    esac
+    printf '%s' "$TARGET"
+}
+
+apply_hysteresis() {
+    TARGET="$1"
+    STATE_FILE="$POWER_RUNTIME_DIR/guard.state"
+    COUNT_FILE="$POWER_RUNTIME_DIR/recovery.count"
+    PREVIOUS="$(read_state "$STATE_FILE")"; [ -n "$PREVIOUS" ] || PREVIOUS=UNKNOWN
+    COUNT="$(read_state "$COUNT_FILE")"; case "$COUNT" in ''|*[!0-9]*) COUNT=0;; esac
+    PREV_ORDER="$(state_order "$PREVIOUS")"; TARGET_ORDER="$(state_order "$TARGET")"
+    REQUIRED="$(policy_default stable_recovery_samples 3)"; case "$REQUIRED" in ''|*[!0-9]*) REQUIRED=3;; esac
+    if [ "$PREVIOUS" = UNKNOWN ]; then COUNT=0; write_state "$COUNT_FILE" "$COUNT"; write_state "$STATE_FILE" "$TARGET"; echo "$TARGET"; return; fi
+    if [ "$TARGET_ORDER" -gt "$PREV_ORDER" ]; then COUNT=0; write_state "$COUNT_FILE" "$COUNT"; write_state "$STATE_FILE" "$TARGET"; echo "$TARGET"; return; fi
+    if [ "$TARGET_ORDER" -eq "$PREV_ORDER" ]; then COUNT=0; write_state "$COUNT_FILE" "$COUNT"; echo "$PREVIOUS"; return; fi
+    COUNT=$((COUNT + 1))
+    if [ "$COUNT" -ge "$REQUIRED" ]; then
+        COUNT=0
+        case "$PREVIOUS" in PERFORMANCE_BLOCKED) NEXT=CONSERVATIVE;; CONSERVATIVE) NEXT=BALANCED;; BALANCED) NEXT=PERFORMANCE_ALLOWED;; *) NEXT="$TARGET";; esac
+        write_state "$STATE_FILE" "$NEXT"
+    else NEXT="$PREVIOUS"; fi
+    write_state "$COUNT_FILE" "$COUNT"
+    echo "$NEXT"
+}
+
+load_snapshot
+load_override
+TARGET="$(target_recommendation)"
+RECOMMENDATION="$(apply_hysteresis "$TARGET")"
+
+print_guard() {
+    TITLE="$1"
+    echo "$TITLE"
+    echo "================"
+    echo "Battery: ${BATTERY_PERCENT}% ($BATTERY_STATE)"
+    echo "Charging: $CHARGING"
+    echo "Power source: $POWER_SOURCE"
+    echo "Battery temperature: ${BATTERY_TEMP}°C ($BATTERY_TEMP_STATE)"
+    echo "Battery health: $BATTERY_HEALTH"
+    echo "Power state: $POWER_STATE"
+    echo "Thermal state: $THERMAL_STATE"
+    echo "Memory state: $MEMORY_STATE"
+    echo "Game profile recommendation: $(profile_recommendation)"
+    echo "FPS recommendation: $(fps_recommendation)"
+    echo "Charging gaming mode: ${POWER_CHARGING_GAMING_MODE:-$(policy_default chargingGamingMode AUTO)}"
+    echo
+    echo "Recommendation: $RECOMMENDATION"
+    echo "CPU recommendation forwarded: $RECOMMENDATION"
+    echo "GPU recommendation forwarded: $RECOMMENDATION"
+    echo "Game profile recommendation forwarded: $RECOMMENDATION"
+    case "$RECOMMENDATION" in
+        PERFORMANCE_BLOCKED) echo "Reason: thermal, memory, battery, or health safety takes priority." ;;
+        CONSERVATIVE) echo "Reason: battery-aware stability and safety policy is active." ;;
+        BALANCED) echo "Reason: balanced performance is appropriate for the current power state." ;;
+        PERFORMANCE_ALLOWED) echo "Reason: battery and coordinated telemetry permit normal performance." ;;
+        *) echo "Reason: power information is unavailable; fail-safe behavior is active." ;;
+    esac
+    echo "Read-only: YES"
+}
+
+case "${1:-status}" in
+    override)
+        case "${2:-status}" in
+            set) set_override "${3:-}" "${4:-30}" ;;
+            clear) clear_override ;;
+            status) override_status ;;
+            *) echo "Usage: power-guard override {set <mode> [minutes]|clear|status}" >&2; exit 2 ;;
+        esac
+        exit $?
+        ;;
+    status) [ "$#" -eq 1 ] || exit 2; print_guard "POWER GUARD STATUS" ;;
+    check|recommend) [ "$#" -eq 1 ] || exit 2; print_guard "POWER GUARD RECOMMENDATION" ;;
+    dry-run) [ "$#" -eq 1 ] || exit 2; echo "POWER GUARD DRY-RUN"; print_guard "POWER GUARD RECOMMENDATION" ;;
+    *) echo "Usage: power-guard {status|check|recommend}" >&2; exit 2 ;;
+esac
+log_line INFO "decision battery=$BATTERY_STATE power=$POWER_STATE thermal=$THERMAL_STATE memory=$MEMORY_STATE recommendation=$RECOMMENDATION"
+exit 0

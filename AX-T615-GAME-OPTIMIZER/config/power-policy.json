@@ -1,0 +1,23 @@
+{
+  "battery_full_percent": 100,
+  "battery_high_min_percent": 60,
+  "battery_medium_min_percent": 30,
+  "battery_low_min_percent": 15,
+  "battery_critical_recovery_percent": 20,
+  "battery_low_recovery_percent": 35,
+  "battery_medium_recovery_percent": 65,
+  "battery_temp_normal_max_c": 40,
+  "battery_temp_high_max_c": 48,
+  "battery_temp_critical_min_c": 50,
+  "battery_temp_recovery_c": 42,
+  "chargingGamingMode": "AUTO",
+  "long_session_minutes": 60,
+  "monitor_interval_seconds": 10,
+  "stable_recovery_samples": 3,
+  "recovery_step": 1,
+  "read_only": true,
+  "allow_charging_changes": false,
+  "allow_battery_settings": false,
+  "allow_thermal_changes": false,
+  "allow_cpu_gpu_changes": false
+}

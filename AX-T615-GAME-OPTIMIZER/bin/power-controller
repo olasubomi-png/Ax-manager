@@ -1,0 +1,449 @@
+#!/system/bin/sh
+set -u
+
+# AX-T615 Step 10: read-only power and battery telemetry controller.
+# This file only reads battery/power sources and writes AX-manager-owned
+# observation/session state. It never changes Android or hardware settings.
+
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname "$0" 2>/dev/null)" && pwd)"
+AXGO_ROOT="${AXGO_ROOT:-$(CDPATH= cd -- "$SCRIPT_DIR/.." 2>/dev/null && pwd)}"
+AXGO_DATA_ROOT="${AXGO_DATA_ROOT:-$AXGO_ROOT}"
+POWER_DATA_ROOT="${POWER_DATA_ROOT:-$AXGO_DATA_ROOT}"
+POWER_SYSFS_ROOT="${POWER_SYSFS_ROOT:-/sys/class/power_supply}"
+POWER_BATTERY_ROOT="${POWER_BATTERY_ROOT:-$POWER_SYSFS_ROOT/battery}"
+POWER_DUMPSYS_FILE="${POWER_DUMPSYS_FILE:-}"
+POWER_POLICY_FILE="${POWER_POLICY_FILE:-$AXGO_ROOT/config/power-policy.json}"
+POWER_RUNTIME_DIR="${POWER_RUNTIME_DIR:-$POWER_DATA_ROOT/runtime/power}"
+POWER_LOG_FILE="${POWER_LOG_FILE:-$POWER_DATA_ROOT/logs/power.log}"
+
+policy_value() {
+    KEY="$1"
+    [ -r "$POWER_POLICY_FILE" ] || return 1
+    VALUE="$(sed -n "s/.*\"$KEY\"[[:space:]]*:[[:space:]]*\([-0-9.][0-9.]*\).*/\1/p" "$POWER_POLICY_FILE" 2>/dev/null | head -n 1)"
+    [ -n "$VALUE" ] && { printf '%s' "$VALUE"; return 0; }
+    sed -n "s/.*\"$KEY\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p" "$POWER_POLICY_FILE" 2>/dev/null | head -n 1
+}
+
+policy_default() {
+    VALUE="$(policy_value "$1" 2>/dev/null || :)"
+    [ -n "$VALUE" ] && printf '%s' "$VALUE" || printf '%s' "$2"
+}
+
+is_number() {
+    case "${1:-}" in
+        ''|*[!0-9.-]*) return 1 ;;
+    esac
+    return 0
+}
+
+number_ge() {
+    is_number "$1" && is_number "$2" || return 1
+    awk -v a="$1" -v b="$2" 'BEGIN { exit !(a >= b) }' 2>/dev/null
+}
+
+number_lt() {
+    is_number "$1" && is_number "$2" || return 1
+    awk -v a="$1" -v b="$2" 'BEGIN { exit !(a < b) }' 2>/dev/null
+}
+
+trim() {
+    printf '%s' "$1" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//'
+}
+
+read_file() {
+    [ -r "$1" ] && cat "$1" 2>/dev/null || :
+}
+
+power_now() {
+    date '+%Y-%m-%dT%H:%M:%S%z' 2>/dev/null || printf '%s' unknown-time
+}
+
+power_log() {
+    mkdir -p "$(dirname "$POWER_LOG_FILE")" 2>/dev/null || :
+    printf '%s [%s] %s\n' "$(power_now)" "${1:-INFO}" "${2:-}" >> "$POWER_LOG_FILE" 2>/dev/null || :
+}
+
+ensure_runtime() {
+    mkdir -p "$POWER_RUNTIME_DIR" 2>/dev/null || return 1
+}
+
+read_state() {
+    [ -r "$1" ] && cat "$1" 2>/dev/null || :
+}
+
+write_state() {
+    ensure_runtime || return 1
+    printf '%s\n' "$2" > "$1" 2>/dev/null
+}
+
+remove_state() {
+    [ -e "$1" ] && rm -f "$1" 2>/dev/null || :
+}
+
+dumpsys_text() {
+    if [ -n "$POWER_DUMPSYS_FILE" ] && [ -r "$POWER_DUMPSYS_FILE" ]; then
+        cat "$POWER_DUMPSYS_FILE" 2>/dev/null
+    elif [ -r "$POWER_DATA_ROOT/dumpsys.battery" ]; then
+        cat "$POWER_DATA_ROOT/dumpsys.battery" 2>/dev/null
+    elif command -v dumpsys >/dev/null 2>&1; then
+        dumpsys battery 2>/dev/null
+    fi
+}
+
+find_battery_root() {
+    if [ -d "$POWER_BATTERY_ROOT" ]; then
+        printf '%s' "$POWER_BATTERY_ROOT"
+        return 0
+    fi
+    if [ -d "$POWER_SYSFS_ROOT" ]; then
+        for CANDIDATE in "$POWER_SYSFS_ROOT"/*; do
+            [ -d "$CANDIDATE" ] || continue
+            if [ -r "$CANDIDATE/capacity" ] || [ -r "$CANDIDATE/status" ] || [ -r "$CANDIDATE/uevent" ]; then
+                printf '%s' "$CANDIDATE"
+                return 0
+            fi
+        done
+    fi
+    printf '%s' ""
+}
+
+file_value() {
+    ROOT="$1"
+    shift
+    for NAME in "$@"; do
+        [ -r "$ROOT/$NAME" ] && { read_file "$ROOT/$NAME" | head -n 1; return 0; }
+    done
+    return 1
+}
+
+dump_value() {
+    KEY="$1"
+    dumpsys_text | sed -n "s/^[[:space:]]*$KEY[[:space:]]*:[[:space:]]*//Ip" | head -n 1
+}
+
+bool_dump_value() {
+    KEY="$1"
+    VALUE="$(dumpsys_text | sed -n "s/^[[:space:]]*$KEY[[:space:]]*:[[:space:]]*//Ip" | head -n 1 | tr '[:upper:]' '[:lower:]')"
+    case "$VALUE" in true|1|yes) printf '%s' true ;; *) printf '%s' false ;; esac
+}
+
+normalize_temp() {
+    RAW="$(trim "${1:-}")"
+    is_number "$RAW" || { printf '%s' UNKNOWN; return 0; }
+    awk -v v="$RAW" 'BEGIN { if (v > 200) printf "%.1f", v / 10; else printf "%.1f", v }'
+}
+
+normalize_voltage() {
+    RAW="$(trim "${1:-}")"
+    is_number "$RAW" || { printf '%s' UNKNOWN; return 0; }
+    awk -v v="$RAW" 'BEGIN { if (v > 100000) printf "%.3f", v / 1000000; else if (v > 1000) printf "%.3f", v / 1000; else printf "%.3f", v }'
+}
+
+normalize_current() {
+    RAW="$(trim "${1:-}")"
+    is_number "$RAW" || { printf '%s' UNKNOWN; return 0; }
+    awk -v v="$RAW" 'BEGIN { if (v < 0) v = -v; if (v > 10000) printf "%.3f", v / 1000000; else if (v > 1000) printf "%.3f", v / 1000; else printf "%.3f", v }'
+}
+
+battery_percent() {
+    ROOT="$1"
+    VALUE="$(file_value "$ROOT" capacity capacity_percent level 2>/dev/null || :)"
+    [ -n "$VALUE" ] || VALUE="$(dump_value level)"
+    VALUE="$(trim "$VALUE")"
+    case "$VALUE" in ''|*[!0-9]*) printf '%s' UNKNOWN ;; *) printf '%s' "$VALUE" ;; esac
+}
+
+battery_status_raw() {
+    ROOT="$1"
+    VALUE="$(file_value "$ROOT" status 2>/dev/null || :)"
+    [ -n "$VALUE" ] || VALUE="$(dump_value status)"
+    printf '%s' "$(trim "$VALUE")"
+}
+
+battery_health() {
+    ROOT="$1"
+    VALUE="$(file_value "$ROOT" health 2>/dev/null || :)"
+    [ -n "$VALUE" ] || VALUE="$(dump_value health)"
+    VALUE="$(printf '%s' "$VALUE" | tr '[:lower:]' '[:upper:]' | tr ' ' '_')"
+    case "$VALUE" in
+        GOOD|2) printf '%s' GOOD ;;
+        OVERHEAT|OVER_HEAT|3) printf '%s' OVERHEAT ;;
+        DEAD|4) printf '%s' DEAD ;;
+        OVER_VOLTAGE|OVER_VOLTAGE|5) printf '%s' OVER_VOLTAGE ;;
+        UNSPECIFIED_FAILURE|6) printf '%s' UNSPECIFIED_FAILURE ;;
+        COLD|7) printf '%s' COLD ;;
+        ''|UNKNOWN|0) printf '%s' UNKNOWN ;;
+        *) printf '%s' UNKNOWN ;;
+    esac
+}
+
+charging_state() {
+    ROOT="$1"
+    STATUS="$(battery_status_raw "$ROOT" | tr '[:lower:]' '[:upper:]')"
+    AC="$(file_value "$ROOT" online ac 2>/dev/null || :)"
+    USB="$(file_value "$ROOT" online usb 2>/dev/null || :)"
+    WIRELESS="$(file_value "$ROOT" online wireless 2>/dev/null || :)"
+    [ -n "$AC" ] || AC="$(bool_dump_value 'AC powered')"
+    [ -n "$USB" ] || USB="$(bool_dump_value 'USB powered')"
+    [ -n "$WIRELESS" ] || WIRELESS="$(bool_dump_value 'Wireless powered')"
+    case "$STATUS" in
+        FULL|5) printf '%s' FULL ;;
+        CHARGING|2) printf '%s' CHARGING ;;
+        NOT_CHARGING|DISCHARGING|1|3|4) printf '%s' NOT_CHARGING ;;
+        *)
+            case "$AC:$USB:$WIRELESS" in *1*:*|true:*|*:true*) printf '%s' CHARGING ;; *) printf '%s' UNKNOWN ;; esac
+            ;;
+    esac
+}
+
+power_source() {
+    ROOT="$1"
+    TYPE="$(file_value "$ROOT" type power_source 2>/dev/null || :)"
+    TYPE="$(printf '%s' "$TYPE" | tr '[:lower:]' '[:upper:]')"
+    AC="$(file_value "$ROOT" ac online 2>/dev/null || :)"
+    USB="$(file_value "$ROOT" usb online 2>/dev/null || :)"
+    WIRELESS="$(file_value "$ROOT" wireless online 2>/dev/null || :)"
+    [ -n "$AC" ] || AC="$(bool_dump_value 'AC powered')"
+    [ -n "$USB" ] || USB="$(bool_dump_value 'USB powered')"
+    [ -n "$WIRELESS" ] || WIRELESS="$(bool_dump_value 'Wireless powered')"
+    case "$TYPE" in
+        AC|MAINS) printf '%s' AC ;;
+        USB|USB_C|USB-C) printf '%s' USB ;;
+        WIRELESS|WLAN) printf '%s' WIRELESS ;;
+        *) case "$AC:$USB:$WIRELESS" in *1*:*|true:* ) printf '%s' AC ;; *:1:*|*:true:* ) printf '%s' USB ;; *:*:1|*:*:true ) printf '%s' WIRELESS ;; *) printf '%s' UNKNOWN ;; esac ;;
+    esac
+}
+
+battery_temperature() {
+    ROOT="$1"
+    RAW="$(file_value "$ROOT" temp temperature battery_temp 2>/dev/null || :)"
+    [ -n "$RAW" ] || RAW="$(dump_value temperature)"
+    normalize_temp "$RAW"
+}
+
+battery_voltage() {
+    ROOT="$1"
+    RAW="$(file_value "$ROOT" voltage_now voltage voltage_mv 2>/dev/null || :)"
+    [ -n "$RAW" ] || RAW="$(dump_value voltage)"
+    normalize_voltage "$RAW"
+}
+
+battery_current() {
+    ROOT="$1"
+    RAW="$(file_value "$ROOT" current_now current current_ma 2>/dev/null || :)"
+    [ -n "$RAW" ] || RAW="$(dump_value current)"
+    normalize_current "$RAW"
+}
+
+temperature_state() {
+    TEMP="$1"
+    if [ "$TEMP" = UNKNOWN ] || ! is_number "$TEMP"; then
+        printf '%s' UNKNOWN
+        return 0
+    fi
+    NORMAL_MAX="$(policy_default battery_temp_normal_max_c 40)"
+    HIGH_MAX="$(policy_default battery_temp_high_max_c 48)"
+    CRITICAL_MIN="$(policy_default battery_temp_critical_min_c 50)"
+    if number_lt "$TEMP" "$NORMAL_MAX"; then printf '%s' NORMAL
+    elif number_lt "$TEMP" "$HIGH_MAX"; then printf '%s' ELEVATED
+    elif number_lt "$TEMP" "$CRITICAL_MIN"; then printf '%s' HIGH
+    else printf '%s' CRITICAL
+    fi
+}
+
+battery_state() {
+    PERCENT="$1"
+    STATUS="$2"
+    [ "$STATUS" = FULL ] && { printf '%s' FULL; return 0; }
+    is_number "$PERCENT" || { printf '%s' UNKNOWN; return 0; }
+    FULL_MIN="$(policy_default battery_full_percent 100)"
+    HIGH_MIN="$(policy_default battery_high_min_percent 60)"
+    MEDIUM_MIN="$(policy_default battery_medium_min_percent 30)"
+    LOW_MIN="$(policy_default battery_low_min_percent 15)"
+    if number_ge "$PERCENT" "$FULL_MIN"; then printf '%s' FULL
+    elif number_ge "$PERCENT" "$HIGH_MIN"; then printf '%s' HIGH
+    elif number_ge "$PERCENT" "$MEDIUM_MIN"; then printf '%s' MEDIUM
+    elif number_ge "$PERCENT" "$LOW_MIN"; then printf '%s' LOW
+    else printf '%s' CRITICAL
+    fi
+}
+
+coordination_state() {
+    KIND="$1"
+    case "$KIND" in
+        thermal)
+            [ -n "${POWER_THERMAL_STATE:-}" ] && { printf '%s' "$POWER_THERMAL_STATE" | tr '[:lower:]' '[:upper:]'; return; }
+            [ -r "$POWER_DATA_ROOT/runtime/thermal/guard.state" ] && { cat "$POWER_DATA_ROOT/runtime/thermal/guard.state" 2>/dev/null | tr '[:lower:]' '[:upper:]'; return; }
+            ;;
+        memory)
+            [ -n "${POWER_MEMORY_STATE:-}" ] && { printf '%s' "$POWER_MEMORY_STATE" | tr '[:lower:]' '[:upper:]'; return; }
+            [ -r "$POWER_DATA_ROOT/runtime/memory/guard.state" ] && { cat "$POWER_DATA_ROOT/runtime/memory/guard.state" 2>/dev/null | tr '[:lower:]' '[:upper:]'; return; }
+            ;;
+    esac
+    printf '%s' UNKNOWN
+}
+
+collect() {
+    BATTERY_ROOT="$(find_battery_root)"
+    BATTERY_PERCENT_VALUE="$(battery_percent "$BATTERY_ROOT")"
+    BATTERY_STATUS_VALUE="$(battery_status_raw "$BATTERY_ROOT")"
+    CHARGING_VALUE="$(charging_state "$BATTERY_ROOT")"
+    POWER_SOURCE_VALUE="$(power_source "$BATTERY_ROOT")"
+    BATTERY_HEALTH_VALUE="$(battery_health "$BATTERY_ROOT")"
+    BATTERY_TEMP_VALUE="$(battery_temperature "$BATTERY_ROOT")"
+    BATTERY_TEMP_STATE_VALUE="$(temperature_state "$BATTERY_TEMP_VALUE")"
+    BATTERY_VOLTAGE_VALUE="$(battery_voltage "$BATTERY_ROOT")"
+    BATTERY_CURRENT_VALUE="$(battery_current "$BATTERY_ROOT")"
+    BATTERY_STATE_VALUE="$(battery_state "$BATTERY_PERCENT_VALUE" "$CHARGING_VALUE")"
+    THERMAL_STATE_VALUE="$(coordination_state thermal)"
+    MEMORY_STATE_VALUE="$(coordination_state memory)"
+    if [ "$BATTERY_STATE_VALUE" = CRITICAL ]; then POWER_STATE_VALUE=BATTERY_CRITICAL
+    elif [ "$CHARGING_VALUE" = CHARGING ] && { [ "$BATTERY_TEMP_STATE_VALUE" = HIGH ] || [ "$BATTERY_TEMP_STATE_VALUE" = CRITICAL ]; }; then POWER_STATE_VALUE=CHARGING_HOT
+    elif [ "$THERMAL_STATE_VALUE" = CRITICAL ]; then POWER_STATE_VALUE=POWER_LIMITED
+    elif [ "$MEMORY_STATE_VALUE" = CRITICAL ]; then POWER_STATE_VALUE=POWER_LIMITED
+    elif [ "$BATTERY_HEALTH_VALUE" != GOOD ] && [ "$BATTERY_HEALTH_VALUE" != UNKNOWN ]; then POWER_STATE_VALUE=POWER_LIMITED
+    elif [ "$BATTERY_STATE_VALUE" = LOW ]; then POWER_STATE_VALUE=BATTERY_LOW
+    elif [ "$BATTERY_STATE_VALUE" = UNKNOWN ]; then POWER_STATE_VALUE=UNKNOWN
+    elif [ "$BATTERY_STATE_VALUE" = HIGH ] || [ "$BATTERY_STATE_VALUE" = FULL ]; then
+        [ "$CHARGING_VALUE" = NOT_CHARGING ] && POWER_STATE_VALUE=OPTIMAL || POWER_STATE_VALUE=NORMAL
+    else POWER_STATE_VALUE=NORMAL
+    fi
+    if is_number "$BATTERY_VOLTAGE_VALUE" && is_number "$BATTERY_CURRENT_VALUE"; then
+        ESTIMATED_POWER_VALUE="$(awk -v v="$BATTERY_VOLTAGE_VALUE" -v c="$BATTERY_CURRENT_VALUE" 'BEGIN { printf "%.3f", v*c }')"
+    else ESTIMATED_POWER_VALUE=UNAVAILABLE
+    fi
+}
+
+print_status() {
+    collect
+    echo "POWER STATUS"
+    echo "============"
+    echo "Battery: ${BATTERY_PERCENT_VALUE}%"
+    echo "Battery state: $BATTERY_STATE_VALUE"
+    echo "Battery status: ${BATTERY_STATUS_VALUE:-UNKNOWN}"
+    echo "Charging: $CHARGING_VALUE"
+    echo "Power source: $POWER_SOURCE_VALUE"
+    echo "Battery health: $BATTERY_HEALTH_VALUE"
+    echo "Battery temperature: ${BATTERY_TEMP_VALUE}°C"
+    echo "Battery temperature state: $BATTERY_TEMP_STATE_VALUE"
+    echo "Voltage: ${BATTERY_VOLTAGE_VALUE} V"
+    echo "Current: ${BATTERY_CURRENT_VALUE} A"
+    if [ "$ESTIMATED_POWER_VALUE" = UNAVAILABLE ]; then echo "Estimated power: UNAVAILABLE"; else echo "Estimated power: ${ESTIMATED_POWER_VALUE} W (ESTIMATED)"; fi
+    echo "Thermal engine state: $THERMAL_STATE_VALUE"
+    echo "Memory state: $MEMORY_STATE_VALUE"
+    echo "Power state: $POWER_STATE_VALUE"
+    echo "Read-only: YES"
+}
+
+print_battery() { collect; print_status | sed -n '/Battery:/,/Charging:/p'; }
+print_charging() { collect; echo "Charging: $CHARGING_VALUE"; echo "Power source: $POWER_SOURCE_VALUE"; }
+print_health() { collect; echo "Battery health: $BATTERY_HEALTH_VALUE"; }
+print_temperature() { collect; echo "Battery temperature: ${BATTERY_TEMP_VALUE}°C"; echo "Battery temperature state: $BATTERY_TEMP_STATE_VALUE"; echo "Thermal engine state: $THERMAL_STATE_VALUE"; }
+print_estimate() { collect; if [ "$ESTIMATED_POWER_VALUE" = UNAVAILABLE ]; then echo "Power: UNAVAILABLE"; else echo "Power: ${ESTIMATED_POWER_VALUE} W (ESTIMATED)"; echo "This is not total device power consumption."; fi; }
+
+print_inspect() {
+    collect
+    echo "POWER INSPECT"
+    echo "============="
+    echo "Battery source root: ${BATTERY_ROOT:-UNAVAILABLE}"
+    echo "dumpsys battery source: $([ -n "$POWER_DUMPSYS_FILE" ] && echo "$POWER_DUMPSYS_FILE" || echo AUTO)"
+    echo "Capacity: ${BATTERY_PERCENT_VALUE}%"
+    echo "Status: ${BATTERY_STATUS_VALUE:-UNKNOWN}"
+    echo "Health: $BATTERY_HEALTH_VALUE"
+    echo "Temperature: ${BATTERY_TEMP_VALUE}°C"
+    echo "Voltage: ${BATTERY_VOLTAGE_VALUE} V"
+    echo "Current: ${BATTERY_CURRENT_VALUE} A"
+    echo "Read-only: YES"
+    echo "No battery, charging, thermal, CPU, GPU, kernel, property, /proc, or /sys settings are modified."
+}
+
+session_start() {
+    GAME="${1:-$(read_state "$POWER_DATA_ROOT/runtime/current_game")}"; [ -n "$GAME" ] || GAME=UNKNOWN
+    collect
+    ensure_runtime || :
+    write_state "$POWER_RUNTIME_DIR/session.started" "$(power_now)"
+    write_state "$POWER_RUNTIME_DIR/session.started_epoch" "$(date +%s 2>/dev/null || echo 0)"
+    write_state "$POWER_RUNTIME_DIR/session.game" "$GAME"
+    write_state "$POWER_RUNTIME_DIR/start.battery" "$BATTERY_PERCENT_VALUE"
+    write_state "$POWER_RUNTIME_DIR/start.temperature" "$BATTERY_TEMP_VALUE"
+    write_state "$POWER_RUNTIME_DIR/start.health" "$BATTERY_HEALTH_VALUE"
+    write_state "$POWER_RUNTIME_DIR/start.charging" "$CHARGING_VALUE"
+    write_state "$POWER_RUNTIME_DIR/start.source" "$POWER_SOURCE_VALUE"
+    write_state "$POWER_RUNTIME_DIR/start.power" "$POWER_STATE_VALUE"
+    write_state "$POWER_RUNTIME_DIR/start.thermal" "$THERMAL_STATE_VALUE"
+    write_state "$POWER_RUNTIME_DIR/start.memory" "$MEMORY_STATE_VALUE"
+    : > "$POWER_RUNTIME_DIR/samples" 2>/dev/null || :
+    echo "POWER SESSION START"
+    echo "Game: $GAME"
+    echo "Starting battery: ${BATTERY_PERCENT_VALUE}%"
+    echo "Charging: $CHARGING_VALUE"
+    echo "Battery temperature: ${BATTERY_TEMP_VALUE}°C"
+    echo "Battery health: $BATTERY_HEALTH_VALUE"
+    echo "Power state: $POWER_STATE_VALUE"
+}
+
+session_sample() {
+    collect
+    ensure_runtime || :
+    printf '%s|%s|%s|%s|%s|%s|%s|%s\n' "$(power_now)" "$BATTERY_PERCENT_VALUE" "$BATTERY_TEMP_VALUE" "$CHARGING_VALUE" "$POWER_SOURCE_VALUE" "$POWER_STATE_VALUE" "$THERMAL_STATE_VALUE" "$MEMORY_STATE_VALUE" >> "$POWER_RUNTIME_DIR/samples" 2>/dev/null || :
+    echo "Power sample: battery=${BATTERY_PERCENT_VALUE}% temperature=${BATTERY_TEMP_VALUE}°C charging=$CHARGING_VALUE power_state=$POWER_STATE_VALUE"
+}
+
+session_stop() {
+    [ -r "$POWER_RUNTIME_DIR/session.started" ] || { echo "No active power session."; return 0; }
+    collect
+    session_sample >/dev/null 2>&1 || :
+    START_TIME="$(read_state "$POWER_RUNTIME_DIR/session.started")"
+    START_EPOCH="$(read_state "$POWER_RUNTIME_DIR/session.started_epoch")"
+    GAME="$(read_state "$POWER_RUNTIME_DIR/session.game")"
+    START_BATTERY="$(read_state "$POWER_RUNTIME_DIR/start.battery")"
+    START_TEMP="$(read_state "$POWER_RUNTIME_DIR/start.temperature")"
+    START_HEALTH="$(read_state "$POWER_RUNTIME_DIR/start.health")"
+    START_CHARGING="$(read_state "$POWER_RUNTIME_DIR/start.charging")"
+    START_POWER="$(read_state "$POWER_RUNTIME_DIR/start.power")"
+    START_THERMAL="$(read_state "$POWER_RUNTIME_DIR/start.thermal")"
+    START_MEMORY="$(read_state "$POWER_RUNTIME_DIR/start.memory")"
+    if is_number "$START_BATTERY" && is_number "$BATTERY_PERCENT_VALUE"; then
+        DRAIN="$(awk -v s="$START_BATTERY" -v e="$BATTERY_PERCENT_VALUE" 'BEGIN { printf "%.2f", s-e }')"
+        END_EPOCH="$(date +%s 2>/dev/null || echo 0)"
+        case "$START_EPOCH" in ''|*[!0-9]*) START_EPOCH="$END_EPOCH";; esac
+        ELAPSED=$((END_EPOCH - START_EPOCH))
+        [ "$ELAPSED" -gt 0 ] 2>/dev/null || ELAPSED=0
+        if [ "$ELAPSED" -gt 0 ]; then RATE="$(awk -v d="$DRAIN" -v t="$ELAPSED" 'BEGIN { printf "%.2f%%/hour", d*3600/t }')"; else RATE="UNAVAILABLE"; fi
+    else DRAIN=UNAVAILABLE; RATE=UNAVAILABLE
+    fi
+    echo "POWER PERFORMANCE REPORT"
+    echo "========================"
+    echo "Game: $GAME"
+    echo "Duration: ${ELAPSED:-UNAVAILABLE} seconds"
+    echo "Starting battery: ${START_BATTERY}%"
+    echo "Ending battery: ${BATTERY_PERCENT_VALUE}%"
+    echo "Battery drain: ${DRAIN}%"
+    echo "Observed drain rate: $RATE"
+    echo "Charging: start=${START_CHARGING} end=${CHARGING_VALUE}"
+    PEAK_TEMP="$(awk -F'|' 'BEGIN { max="" } $3 ~ /^[0-9.]+$/ { if (max=="" || $3>max) max=$3 } END { if (max=="") print "UNKNOWN"; else printf "%.1f", max }' "$POWER_RUNTIME_DIR/samples" 2>/dev/null || echo UNKNOWN)"
+    echo "Battery temperature: start=${START_TEMP}°C end=${BATTERY_TEMP_VALUE}°C peak=${PEAK_TEMP}°C"
+    echo "Battery health: start=${START_HEALTH} end=${BATTERY_HEALTH_VALUE}"
+    echo "Power state: start=${START_POWER} end=${POWER_STATE_VALUE}"
+    echo "Thermal state: start=${START_THERMAL} end=${THERMAL_STATE_VALUE}"
+    echo "Memory state: start=${START_MEMORY} end=${MEMORY_STATE_VALUE}"
+    echo "Performance recommendations: delegated to power-guard; no hardware settings applied."
+    rm -rf "$POWER_RUNTIME_DIR" 2>/dev/null || :
+}
+
+case "${1:-status}" in
+    status) [ "$#" -eq 1 ] || exit 2; print_status ;;
+    inspect) [ "$#" -eq 1 ] || exit 2; print_inspect ;;
+    battery) [ "$#" -eq 1 ] || exit 2; print_battery ;;
+    charging) [ "$#" -eq 1 ] || exit 2; print_charging ;;
+    health) [ "$#" -eq 1 ] || exit 2; print_health ;;
+    temperature) [ "$#" -eq 1 ] || exit 2; print_temperature ;;
+    estimate) [ "$#" -eq 1 ] || exit 2; print_estimate ;;
+    dry-run) [ "$#" -eq 1 ] || exit 2; echo "POWER DRY-RUN"; echo "No charging, battery, thermal, CPU, GPU, kernel, property, /proc, or /sys settings would be modified."; print_status ;;
+    snapshot) [ "$#" -eq 1 ] || exit 2; collect; printf 'BATTERY_PERCENT=%s\nBATTERY_STATE=%s\nCHARGING=%s\nPOWER_SOURCE=%s\nBATTERY_HEALTH=%s\nBATTERY_TEMP=%s\nBATTERY_TEMP_STATE=%s\nVOLTAGE=%s\nCURRENT=%s\nESTIMATED_POWER=%s\nPOWER_STATE=%s\nTHERMAL_STATE=%s\nMEMORY_STATE=%s\n' "$BATTERY_PERCENT_VALUE" "$BATTERY_STATE_VALUE" "$CHARGING_VALUE" "$POWER_SOURCE_VALUE" "$BATTERY_HEALTH_VALUE" "$BATTERY_TEMP_VALUE" "$BATTERY_TEMP_STATE_VALUE" "$BATTERY_VOLTAGE_VALUE" "$BATTERY_CURRENT_VALUE" "$ESTIMATED_POWER_VALUE" "$POWER_STATE_VALUE" "$THERMAL_STATE_VALUE" "$MEMORY_STATE_VALUE" ;;
+    session-start|game-start) session_start "${2:-UNKNOWN}" ;;
+    sample|session-sample) session_sample ;;
+    session-stop|game-stop) session_stop ;;
+    *) echo "Usage: power-controller {status|inspect|battery|charging|health|temperature|estimate|dry-run}" >&2; exit 2 ;;
+esac
+exit 0

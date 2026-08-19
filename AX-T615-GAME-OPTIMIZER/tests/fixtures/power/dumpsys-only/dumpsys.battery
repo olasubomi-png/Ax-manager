@@ -1,0 +1,9 @@
+Current Battery Service state:
+  AC powered: false
+  USB powered: true
+  Wireless powered: false
+  status: 2
+  health: 2
+  level: 72
+  voltage: 4100000
+  temperature: 330

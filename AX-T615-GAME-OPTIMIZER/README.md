@@ -635,3 +635,50 @@ A bounded hysteresis policy in `config/game-profile-policy.json` prevents rapid 
 The existing `bin/session` coordinator invokes the Step 9 profile engine at game start, samples it while the session is active, and emits a `GAME PERFORMANCE REPORT` at game stop. The report includes game and package identity, profile, duration, target FPS, available FPS/frame-pacing evidence, thermal and memory evidence, CPU/GPU state, performance mode, mode transitions, intervention counts, bottleneck/confidence fields when available, and the Step 9 read-only safety statement. Step 9 does not restore values that it never changed.
 
 Step 9 remains strictly read-only. It does not write `/proc` or `/sys`, change display settings, set Android properties, change CPU/GPU frequencies or governors, modify ZRAM/swap/LMKD/OOM behavior, alter thermal protection, kill or force-stop processes, or invoke shell evaluation. The Step 9 test suites cover detector behavior, profile commands, schema validation, malicious-profile rejection, safety scanning, recommendation priority, hysteresis and stable recovery, session integration, runtime cleanup, and fixture immutability.
+
+
+## Step 10 — Power & Battery-Aware Gaming Engine
+
+Step 10 adds a read-only power and battery-awareness layer for game sessions. `bin/power-controller` dynamically discovers Android battery evidence from `/sys/class/power_supply` and, when available, `dumpsys battery`. It tolerantly reports battery percentage, status, health, temperature, voltage, current, capacity, charging state, and charger source without assuming a fixed vendor layout or fabricating missing values.
+
+```sh
+./bin/power-controller status
+./bin/power-controller inspect
+./bin/power-controller battery
+./bin/power-controller charging
+./bin/power-controller health
+./bin/power-controller temperature
+./bin/power-controller estimate
+./bin/power-controller dry-run
+./bin/power-monitor --once
+./bin/power-monitor --interval 10 --samples 3
+./bin/power-guard status
+./bin/power-guard check
+./bin/power-guard recommend
+./bin/power-guard dry-run
+./bin/power-guard override set conservative 30
+./bin/power-guard override status
+./bin/power-guard override clear
+./bin/axgo power status
+./bin/axgo power inspect
+./bin/axgo power battery
+./bin/axgo power charging
+./bin/axgo power health
+./bin/axgo power temperature
+./bin/axgo power estimate
+./bin/axgo power monitor --once
+./bin/axgo power guard recommend
+./bin/axgo power guard dry-run
+```
+
+Battery classification is policy-driven through `config/power-policy.json`. Readable percentage values are classified as `FULL`, `HIGH`, `MEDIUM`, `LOW`, `CRITICAL`, or `UNKNOWN`; charging is reported as `NOT_CHARGING`, `CHARGING`, `FULL`, or `UNKNOWN`; and health is reported as `GOOD`, `OVERHEAT`, `DEAD`, `OVER_VOLTAGE`, `UNSPECIFIED_FAILURE`, `COLD`, or `UNKNOWN`. Battery temperature is kept distinct from SoC temperature. The power state combines battery, charging, battery-temperature, health, and thermal evidence into `OPTIMAL`, `NORMAL`, `POWER_LIMITED`, `BATTERY_LOW`, `BATTERY_CRITICAL`, `CHARGING_HOT`, or `UNKNOWN`.
+
+`bin/power-guard` produces logical recommendations only: `PERFORMANCE_ALLOWED`, `BALANCED`, `CONSERVATIVE`, `PERFORMANCE_BLOCKED`, or `UNKNOWN`. Restrictive evidence wins. Critical thermal and memory states remain blocking, critical battery blocks performance, low battery is conservative, charging while hot is conservative, and unknown evidence fails safe. Normal high-battery operation can allow performance when optional profile and FPS evidence is absent rather than being invented. Game-profile, FPS, CPU/GPU, thermal, and memory recommendations are forwarded as logical evidence only; no controller applies a hardware setting. `AUTO`, `NORMAL`, and `CONSERVATIVE` charging gaming modes are recommendation-only. Temporary guard overrides have bounded expiration and can be cleared without changing persistent policy or hardware.
+
+`bin/power-monitor` defaults to a ten-second interval and supports bounded `--interval`, `--samples`, and `--once` operation. It records timestamp, battery percentage, battery temperature, charging state, voltage, current, source, and estimated electrical power. Instantaneous power is calculated only when readable voltage and current are available, is labeled `ESTIMATED`, and is explicitly not a measurement of total device power consumption. Missing voltage or current remains `UNAVAILABLE`.
+
+Power sessions capture starting battery percentage, charging, temperature, health, source, power state, thermal state, and memory state. Samples track battery, temperature, charging, power state, recommendation, and coordination evidence. Game stop emits a `POWER PERFORMANCE REPORT` with game identity, duration, start/end battery, drain, drain rate in percent per hour, charging transition, battery-temperature start/end/peak, health, power/thermal/memory states, and logical recommendation observations. The `long_session_minutes` policy increases monitoring awareness for long sessions but does not automatically reduce performance or change a device setting. Hysteresis escalates immediately and requires configured stable recovery samples before moving down one recommendation level at a time.
+
+The top-level `bin/session` coordinator invokes power session start after the existing thermal, memory, FPS, and game-profile lifecycle calls; it samples power and guard state while a game is active; and it emits the power report during the existing stop path. Runtime state is isolated under the session data root and is removed at stop. `axgo` exposes the power command family without replacing earlier Steps 1–9 routes.
+
+Step 10 is strictly read-only. It does not write battery, charging, thermal, CPU, GPU, governor, kernel, Power HAL, ZRAM, swap, LMKD, or OOM controls. It does not change charging limits, bypass charging protection, set Android properties, write `/proc` or `/sys`, kill or force-stop processes, or claim exact total device power consumption. Battery and power safety mechanisms remain under Android and the device manufacturer’s control. The Step 10 test data is explicitly labeled `TEST DATA`, and the test suites verify discovery, charging, health, temperature, estimation, guard priority, hysteresis, session reporting, monitor bounds, fixture immutability, and forbidden-write scanning.

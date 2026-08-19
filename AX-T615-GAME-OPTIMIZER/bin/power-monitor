@@ -1,0 +1,46 @@
+#!/system/bin/sh
+set -u
+
+# AX-T615 Step 10: read-only power telemetry monitor.
+
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname "$0" 2>/dev/null)" && pwd)"
+AXGO_ROOT="${AXGO_ROOT:-$(CDPATH= cd -- "$SCRIPT_DIR/.." 2>/dev/null && pwd)}"
+AXGO_DATA_ROOT="${AXGO_DATA_ROOT:-$AXGO_ROOT}"
+POWER_DATA_ROOT="${POWER_DATA_ROOT:-$AXGO_DATA_ROOT}"
+POWER_RUNTIME_DIR="${POWER_RUNTIME_DIR:-$POWER_DATA_ROOT/runtime/power}"
+POWER_LOG_FILE="${POWER_LOG_FILE:-$POWER_DATA_ROOT/logs/power-monitor.log}"
+INTERVAL="${POWER_MONITOR_INTERVAL:-10}"
+MAX_SAMPLES="${POWER_MONITOR_MAX_SAMPLES:-0}"
+
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --interval) [ "$#" -ge 2 ] || exit 2; INTERVAL="$2"; shift 2 ;;
+        --samples) [ "$#" -ge 2 ] || exit 2; MAX_SAMPLES="$2"; shift 2 ;;
+        --once) MAX_SAMPLES=1; shift ;;
+        *) echo "Usage: power-monitor [--interval seconds] [--samples count] [--once]" >&2; exit 2 ;;
+    esac
+done
+case "$INTERVAL" in ''|*[!0-9]*|0) INTERVAL=10;; esac
+[ "$INTERVAL" -ge 1 ] 2>/dev/null || INTERVAL=10
+case "$MAX_SAMPLES" in ''|*[!0-9]*) MAX_SAMPLES=0;; esac
+
+mkdir -p "$POWER_RUNTIME_DIR" "$(dirname "$POWER_LOG_FILE")" 2>/dev/null || :
+COUNT=0
+printf '%s\n' "POWER MONITOR (read-only)" "Interval: ${INTERVAL}s" "Telemetry only; no charging or power settings are changed."
+while :; do
+    SNAPSHOT="$(POWER_DATA_ROOT="$POWER_DATA_ROOT" POWER_RUNTIME_DIR="${POWER_BATTERY_RUNTIME_DIR:-$POWER_DATA_ROOT/runtime/power}" POWER_SYSFS_ROOT="${POWER_SYSFS_ROOT:-/sys/class/power_supply}" POWER_BATTERY_ROOT="${POWER_BATTERY_ROOT:-}" POWER_DUMPSYS_FILE="${POWER_DUMPSYS_FILE:-}" sh "$AXGO_ROOT/bin/power-controller" snapshot 2>/dev/null || :)"
+    TIMESTAMP="$(date '+%Y-%m-%dT%H:%M:%S%z' 2>/dev/null || echo unknown-time)"
+    BATTERY="$(printf '%s\n' "$SNAPSHOT" | sed -n 's/^BATTERY_PERCENT=//p' | head -n 1)"
+    TEMP="$(printf '%s\n' "$SNAPSHOT" | sed -n 's/^BATTERY_TEMP=//p' | head -n 1)"
+    CHARGING="$(printf '%s\n' "$SNAPSHOT" | sed -n 's/^CHARGING=//p' | head -n 1)"
+    SOURCE="$(printf '%s\n' "$SNAPSHOT" | sed -n 's/^POWER_SOURCE=//p' | head -n 1)"
+    VOLTAGE="$(printf '%s\n' "$SNAPSHOT" | sed -n 's/^VOLTAGE=//p' | head -n 1)"
+    CURRENT="$(printf '%s\n' "$SNAPSHOT" | sed -n 's/^CURRENT=//p' | head -n 1)"
+    POWER="$(printf '%s\n' "$SNAPSHOT" | sed -n 's/^ESTIMATED_POWER=//p' | head -n 1)"
+    LINE="$TIMESTAMP|battery=$BATTERY|temperature=$TEMP|charging=$CHARGING|source=$SOURCE|voltage=$VOLTAGE|current=$CURRENT|estimated_power=$POWER"
+    printf '%s\n' "$LINE" | tee -a "$POWER_LOG_FILE"
+    COUNT=$((COUNT + 1))
+    [ "$MAX_SAMPLES" -gt 0 ] 2>/dev/null && [ "$COUNT" -ge "$MAX_SAMPLES" ] 2>/dev/null && break
+    sleep "$INTERVAL"
+done
+exit 0

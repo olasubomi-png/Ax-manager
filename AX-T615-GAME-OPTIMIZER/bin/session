@@ -53,6 +53,13 @@ session_start() {
     echo "Memory performance CPU/GPU recommendation: $MEMORY_PERFORMANCE_RECOMMENDATION"
     FPS_OUTPUT="$(AXGO_ROOT="$AXGO_ROOT" FPS_DATA_ROOT="$AXGO_DATA_ROOT" DISPLAY_DATA_ROOT="$AXGO_DATA_ROOT" FPS_PACKAGE="$PACKAGE" sh "$AXGO_ROOT/bin/fps-controller" session-start "$NAME" 2>&1)"
     printf '%s\n' "$FPS_OUTPUT"
+    POWER_SESSION_OUTPUT="$(POWER_DATA_ROOT="$AXGO_DATA_ROOT" POWER_RUNTIME_DIR="$AXGO_DATA_ROOT/runtime/power" sh "$AXGO_ROOT/bin/power-controller" session-start "$NAME" 2>&1)"
+    printf '%s\n' "$POWER_SESSION_OUTPUT"
+    POWER_GUARD_OUTPUT="$(POWER_DATA_ROOT="$AXGO_DATA_ROOT" POWER_GUARD_DATA_ROOT="$AXGO_DATA_ROOT" POWER_PROFILE_TARGET="$PACKAGE" sh "$AXGO_ROOT/bin/power-guard" recommend 2>&1)"
+    printf '%s\n' "$POWER_GUARD_OUTPUT"
+    POWER_RECOMMENDATION="$(printf '%s\n' "$POWER_GUARD_OUTPUT" | sed -n 's/^Recommendation: //p' | head -n 1)"
+    [ -n "$POWER_RECOMMENDATION" ] || POWER_RECOMMENDATION=CONSERVATIVE
+    echo "Power guard recommendation: $POWER_RECOMMENDATION"
     GPU_DRY_RUN_OUTPUT="$(GPU_SKIP_THERMAL=true THERMAL_GUARD_RECOMMENDATION="$MEMORY_PERFORMANCE_RECOMMENDATION" sh "$AXGO_ROOT/bin/gpu-controller" dry-run "$PROFILE" 2>&1)"
     printf '%s\n' "$GPU_DRY_RUN_OUTPUT"
     CPU_APPLY_OUTPUT="$(THERMAL_GUARD_RECOMMENDATION="$MEMORY_PERFORMANCE_RECOMMENDATION" CPU_DATA_ROOT="$AXGO_DATA_ROOT" sh "$AXGO_ROOT/bin/cpu-controller" apply "$PROFILE" 2>&1)"
@@ -94,6 +101,8 @@ session_stop() {
     printf '%s\n' "$MEMORY_PERFORMANCE_REPORT"
     FPS_REPORT="$(AXGO_ROOT="$AXGO_ROOT" FPS_DATA_ROOT="$AXGO_DATA_ROOT" DISPLAY_DATA_ROOT="$AXGO_DATA_ROOT" FPS_PACKAGE="$PACKAGE" sh "$AXGO_ROOT/bin/fps-controller" session-stop 2>&1)"
     printf '%s\n' "$FPS_REPORT"
+    POWER_REPORT="$(POWER_DATA_ROOT="$AXGO_DATA_ROOT" POWER_RUNTIME_DIR="$AXGO_DATA_ROOT/runtime/power" sh "$AXGO_ROOT/bin/power-controller" session-stop 2>&1)"
+    printf '%s\n' "$POWER_REPORT"
     GAME_PROFILE_REPORT="$(AXGO_ROOT="$AXGO_ROOT" GAME_PROFILE_DATA_ROOT="$AXGO_DATA_ROOT" GAME_PROFILE_DIR="${GAME_PROFILE_DIR:-$AXGO_ROOT/config/game-profiles}" sh "$AXGO_ROOT/bin/game-profile" session-stop 2>&1 || :)"
     printf '%s\n' "$GAME_PROFILE_REPORT"
     axgo_log INFO "memory, FPS, and game profile performance reports generated at game stop"
@@ -116,6 +125,8 @@ session_status() {
         AXGO_ROOT="$AXGO_ROOT" MEMORY_PERFORMANCE_DATA_ROOT="$AXGO_DATA_ROOT" sh "$AXGO_ROOT/bin/memory-performance" sample >/dev/null 2>&1 || :
         AXGO_ROOT="$AXGO_ROOT" FPS_DATA_ROOT="$AXGO_DATA_ROOT" DISPLAY_DATA_ROOT="$AXGO_DATA_ROOT" FPS_PACKAGE="$(axgo_read_state "$AXGO_RUNTIME_DIR/current_package")" sh "$AXGO_ROOT/bin/fps-controller" session-sample >/dev/null 2>&1 || :
         AXGO_ROOT="$AXGO_ROOT" GAME_PROFILE_DATA_ROOT="$AXGO_DATA_ROOT" GAME_PROFILE_DIR="${GAME_PROFILE_DIR:-$AXGO_ROOT/config/game-profiles}" sh "$AXGO_ROOT/bin/game-profile" session-sample >/dev/null 2>&1 || :
+        POWER_DATA_ROOT="$AXGO_DATA_ROOT" POWER_RUNTIME_DIR="$AXGO_DATA_ROOT/runtime/power" sh "$AXGO_ROOT/bin/power-controller" sample >/dev/null 2>&1 || :
+        POWER_DATA_ROOT="$AXGO_DATA_ROOT" POWER_GUARD_DATA_ROOT="$AXGO_DATA_ROOT" POWER_PROFILE_TARGET="$(axgo_read_state "$AXGO_RUNTIME_DIR/current_package")" sh "$AXGO_ROOT/bin/power-guard" recommend >/dev/null 2>&1 || :
         echo "Gaming session: ACTIVE"
         echo "Current game: $(axgo_read_state "$AXGO_RUNTIME_DIR/current_game")"
         echo "Package: $(axgo_read_state "$AXGO_RUNTIME_DIR/current_package")"
