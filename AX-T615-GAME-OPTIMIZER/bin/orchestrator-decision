@@ -1,0 +1,134 @@
+#!/usr/bin/env sh
+set -u
+
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
+AXGO_ROOT="${AXGO_ROOT:-$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)}"
+EVIDENCE_FILE="${ORCH_EVIDENCE_FILE:-}"
+[ -n "$EVIDENCE_FILE" ] || EVIDENCE_FILE="${1:-}"
+
+value() {
+    KEY="$1"
+    [ -r "$EVIDENCE_FILE" ] || { printf '%s' UNKNOWN; return; }
+    RESULT="$(awk -F= -v key="$KEY" '$1 == key { value=$0; sub(/^[^=]*=/, "", value); print value }' "$EVIDENCE_FILE" 2>/dev/null | tail -n 1)"
+    [ -n "$RESULT" ] && printf '%s' "$RESULT" || printf '%s' UNKNOWN
+}
+
+contains() {
+    LIST="$1"
+    NEEDLE="$2"
+    printf '%s\n' ",$LIST," | grep -Fq ",$NEEDLE,"
+}
+
+is_number() { printf '%s' "$1" | awk 'BEGIN { ok=0 } /^[0-9]+([.][0-9]+)?$/ { ok=1 } END { exit(ok ? 0 : 1) }'; }
+lt() { is_number "$1" && awk -v a="$1" -v b="$2" 'BEGIN { exit(a < b ? 0 : 1) }'; }
+le() { is_number "$1" && awk -v a="$1" -v b="$2" 'BEGIN { exit(a <= b ? 0 : 1) }'; }
+ge() { is_number "$1" && awk -v a="$1" -v b="$2" 'BEGIN { exit(a >= b ? 0 : 1) }'; }
+
+TIMESTAMP="$(value TIMESTAMP)"
+SESSION_ID="$(value SESSION_ID)"
+GAME="$(value GAME)"
+PACKAGE="$(value PACKAGE)"
+PROFILE="$(value PROFILE)"
+CPU_STATE="$(value CPU_STATE)"
+GPU_STATE="$(value GPU_STATE)"
+MEMORY_STATE="$(value MEMORY_STATE)"
+THERMAL_STATE="$(value THERMAL_STATE)"
+THERMAL_TREND="$(value THERMAL_TREND)"
+TEMPERATURE_STATE="$(value TEMPERATURE_STATE)"
+FPS="$(value FPS)"
+FRAME_PACING="$(value FRAME_PACING)"
+FPS_TREND="$(value FPS_TREND)"
+BATTERY_PERCENT="$(value BATTERY_PERCENT)"
+BATTERY_HEALTH="$(value BATTERY_HEALTH)"
+CHARGING_STATE="$(value CHARGING_STATE)"
+POWER_STATE="$(value POWER_STATE)"
+DEMAND="$(value DEMAND)"
+SAFETY_STATE="$(value SAFETY_STATE)"
+TELEMETRY_ERROR="$(value TELEMETRY_ERROR)"
+
+STATE=balanced
+PRIORITY=PERFORMANCE
+CONFIDENCE=HIGH
+REASON="healthy telemetry and acceptable gaming conditions"
+ACTIONS="collect_telemetry,continue_monitoring"
+RECOVERY="maintain healthy evidence for 3 consecutive samples"
+SAFETY_CLASSIFICATION=READ_ONLY
+EVIDENCE_STATUS=OK
+
+UNKNOWN_COUNT=0
+for SIGNAL in "$CPU_STATE" "$GPU_STATE" "$MEMORY_STATE" "$THERMAL_STATE" "$FPS" "$FRAME_PACING" "$BATTERY_PERCENT" "$BATTERY_HEALTH" "$CHARGING_STATE"; do
+    [ "$SIGNAL" = UNKNOWN ] && UNKNOWN_COUNT=$((UNKNOWN_COUNT + 1))
+done
+[ "$UNKNOWN_COUNT" -ge 4 ] && { CONFIDENCE=LOW; EVIDENCE_STATUS=UNKNOWN; }
+[ "$UNKNOWN_COUNT" -ge 2 ] && [ "$CONFIDENCE" = HIGH ] && CONFIDENCE=MEDIUM
+
+if [ "$SAFETY_STATE" = UNSAFE ] || [ "$TELEMETRY_ERROR" = YES ]; then
+    STATE=conservative
+    PRIORITY=SAFETY
+    CONFIDENCE=LOW
+    REASON="unsafe or failed telemetry requires conservative fallback"
+    ACTIONS="recommend_conservative,collect_telemetry,continue_monitoring"
+elif contains "CRITICAL,EMERGENCY" "$THERMAL_STATE" || contains "CRITICAL,EMERGENCY" "$TEMPERATURE_STATE" || [ "$THERMAL_TREND" = DANGEROUS ] || [ "$THERMAL_TREND" = RISING_FAST ]; then
+    STATE=thermal-protection
+    PRIORITY=THERMAL
+    CONFIDENCE=HIGH
+    REASON="thermal protection evidence has priority over performance demand"
+    ACTIONS="recommend_thermal_protection,collect_telemetry,continue_monitoring"
+    RECOVERY="thermal state below caution and stable for 3 consecutive samples with cooldown satisfied"
+elif { le "$BATTERY_PERCENT" 15; } || [ "$POWER_STATE" = BATTERY_PROTECTION ] || [ "$POWER_STATE" = CRITICAL ] || contains "BAD,DEAD" "$BATTERY_HEALTH"; then
+    STATE=battery-protection
+    PRIORITY=POWER
+    CONFIDENCE=HIGH
+    REASON="battery level, health, or power state requires conservation"
+    ACTIONS="recommend_battery_protection,collect_telemetry,continue_monitoring"
+    RECOVERY="battery above caution, health usable, and stable for 3 consecutive samples"
+elif contains "CRITICAL,HIGH_PRESSURE" "$MEMORY_STATE" || contains "CRITICAL,HIGH,PRESSURE" "$CPU_STATE" || contains "CRITICAL,HIGH,PRESSURE" "$GPU_STATE" || [ "$FRAME_PACING" = UNSTABLE ] || [ "$FRAME_PACING" = JANKY ]; then
+    STATE=conservative
+    PRIORITY=STABILITY
+    REASON="resource pressure or unstable frame pacing makes performance behavior unsafe"
+    ACTIONS="recommend_conservative,collect_telemetry,continue_monitoring"
+    RECOVERY="pressure clears and frame pacing is stable for 3 consecutive samples"
+elif [ "$BATTERY_PERCENT" = UNKNOWN ] || [ "$BATTERY_HEALTH" = UNKNOWN ] || [ "$THERMAL_STATE" = UNKNOWN ]; then
+    STATE=conservative
+    PRIORITY=SAFETY
+    CONFIDENCE=LOW
+    REASON="required safety telemetry is unavailable"
+    ACTIONS="recommend_conservative,collect_telemetry,continue_monitoring"
+elif lt "$FPS" 45 || [ "$FPS_TREND" = DECLINING ] || [ "$DEMAND" = HIGH ] || [ "$PROFILE" = PERFORMANCE ] || [ "$PROFILE" = COMPETITIVE ]; then
+    STATE=performance
+    PRIORITY=FPS
+    REASON="safe telemetry indicates performance demand or frame-rate recovery need"
+    ACTIONS="recommend_performance,collect_telemetry,continue_monitoring"
+else
+    STATE=balanced
+    PRIORITY=STABILITY
+    REASON="telemetry is healthy and no performance escalation is justified"
+    ACTIONS="recommend_balanced,collect_telemetry,continue_monitoring"
+fi
+
+case "$STATE" in
+    thermal-protection|battery-protection) SAFETY_CLASSIFICATION=PROTECTION;;
+    conservative) SAFETY_CLASSIFICATION=CONSERVATIVE;;
+    performance|balanced) SAFETY_CLASSIFICATION=READ_ONLY;;
+esac
+
+printf '%s\n' \
+    "DECISION_SCHEMA=1" \
+    "EVIDENCE_SCHEMA=1" \
+    "EVIDENCE_STATUS=$EVIDENCE_STATUS" \
+    "TIMESTAMP=$TIMESTAMP" \
+    "SESSION_ID=$SESSION_ID" \
+    "GAME=$GAME" \
+    "PACKAGE=$PACKAGE" \
+    "PROFILE=$PROFILE" \
+    "SELECTED_STATE=$STATE" \
+    "CONFIDENCE=$CONFIDENCE" \
+    "PRIORITY=$PRIORITY" \
+    "REASON=$REASON" \
+    "EVIDENCE_SUMMARY=CPU_STATE:$CPU_STATE,GPU_STATE:$GPU_STATE,MEMORY_STATE:$MEMORY_STATE,THERMAL_STATE:$THERMAL_STATE,FPS:$FPS,FRAME_PACING:$FRAME_PACING,BATTERY_PERCENT:$BATTERY_PERCENT,BATTERY_HEALTH:$BATTERY_HEALTH,CHARGING_STATE:$CHARGING_STATE" \
+    "RECOMMENDED_ACTIONS=$ACTIONS" \
+    "BLOCKED_ACTIONS=write_proc,write_sys,write_power_hal,write_governor,write_charging_limit,modify_battery,kill_process,force_stop,modify_zram,modify_swap,modify_lmkd,disable_thermal_protection,disable_battery_protection" \
+    "FORBIDDEN_ACTIONS_BLOCKED=YES" \
+    "RECOVERY_CONDITIONS=$RECOVERY" \
+    "SAFETY_CLASSIFICATION=$SAFETY_CLASSIFICATION" \
+    "READ_ONLY=YES"

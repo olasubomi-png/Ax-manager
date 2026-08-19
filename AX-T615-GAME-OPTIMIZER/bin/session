@@ -72,6 +72,8 @@ session_start() {
     fi
     GAME_PROFILE_OUTPUT="$(AXGO_ROOT="$AXGO_ROOT" GAME_PROFILE_DATA_ROOT="$AXGO_DATA_ROOT" GAME_PROFILE_DIR="${GAME_PROFILE_DIR:-$AXGO_ROOT/config/game-profiles}" sh "$AXGO_ROOT/bin/game-profile" session-start "$PACKAGE" 2>&1 || :)"
     printf '%s\n' "$GAME_PROFILE_OUTPUT"
+    ORCHESTRATOR_OUTPUT="$(AXGO_ROOT="$AXGO_ROOT" AXGO_DATA_ROOT="$AXGO_DATA_ROOT" ORCH_RUNTIME_DIR="$AXGO_DATA_ROOT/runtime/orchestrator" ORCH_LOG_FILE="$AXGO_DATA_ROOT/logs/orchestrator.log" ORCH_GAME="$NAME" ORCH_PACKAGE="$PACKAGE" ORCH_PROFILE="$PROFILE" ORCH_DRY_RUN=YES sh "$AXGO_ROOT/bin/orchestrator" start "$NAME" 2>&1 || :)"
+    printf '%s\n' "$ORCHESTRATOR_OUTPUT"
     echo "Gaming session started"
     echo "Game: ${NAME:-unnamed game}"
     echo "Package: $PACKAGE"
@@ -103,6 +105,8 @@ session_stop() {
     printf '%s\n' "$FPS_REPORT"
     POWER_REPORT="$(POWER_DATA_ROOT="$AXGO_DATA_ROOT" POWER_RUNTIME_DIR="$AXGO_DATA_ROOT/runtime/power" sh "$AXGO_ROOT/bin/power-controller" session-stop 2>&1)"
     printf '%s\n' "$POWER_REPORT"
+    ORCHESTRATOR_REPORT="$(AXGO_ROOT="$AXGO_ROOT" AXGO_DATA_ROOT="$AXGO_DATA_ROOT" ORCH_RUNTIME_DIR="$AXGO_DATA_ROOT/runtime/orchestrator" ORCH_LOG_FILE="$AXGO_DATA_ROOT/logs/orchestrator.log" ORCH_DRY_RUN=YES sh "$AXGO_ROOT/bin/orchestrator" stop 2>&1 || :)"
+    printf '%s\n' "$ORCHESTRATOR_REPORT"
     GAME_PROFILE_REPORT="$(AXGO_ROOT="$AXGO_ROOT" GAME_PROFILE_DATA_ROOT="$AXGO_DATA_ROOT" GAME_PROFILE_DIR="${GAME_PROFILE_DIR:-$AXGO_ROOT/config/game-profiles}" sh "$AXGO_ROOT/bin/game-profile" session-stop 2>&1 || :)"
     printf '%s\n' "$GAME_PROFILE_REPORT"
     axgo_log INFO "memory, FPS, and game profile performance reports generated at game stop"
@@ -127,6 +131,7 @@ session_status() {
         AXGO_ROOT="$AXGO_ROOT" GAME_PROFILE_DATA_ROOT="$AXGO_DATA_ROOT" GAME_PROFILE_DIR="${GAME_PROFILE_DIR:-$AXGO_ROOT/config/game-profiles}" sh "$AXGO_ROOT/bin/game-profile" session-sample >/dev/null 2>&1 || :
         POWER_DATA_ROOT="$AXGO_DATA_ROOT" POWER_RUNTIME_DIR="$AXGO_DATA_ROOT/runtime/power" sh "$AXGO_ROOT/bin/power-controller" sample >/dev/null 2>&1 || :
         POWER_DATA_ROOT="$AXGO_DATA_ROOT" POWER_GUARD_DATA_ROOT="$AXGO_DATA_ROOT" POWER_PROFILE_TARGET="$(axgo_read_state "$AXGO_RUNTIME_DIR/current_package")" sh "$AXGO_ROOT/bin/power-guard" recommend >/dev/null 2>&1 || :
+        AXGO_ROOT="$AXGO_ROOT" AXGO_DATA_ROOT="$AXGO_DATA_ROOT" ORCH_RUNTIME_DIR="$AXGO_DATA_ROOT/runtime/orchestrator" ORCH_LOG_FILE="$AXGO_DATA_ROOT/logs/orchestrator.log" ORCH_DRY_RUN=YES sh "$AXGO_ROOT/bin/orchestrator" sample >/dev/null 2>&1 || :
         echo "Gaming session: ACTIVE"
         echo "Current game: $(axgo_read_state "$AXGO_RUNTIME_DIR/current_game")"
         echo "Package: $(axgo_read_state "$AXGO_RUNTIME_DIR/current_package")"

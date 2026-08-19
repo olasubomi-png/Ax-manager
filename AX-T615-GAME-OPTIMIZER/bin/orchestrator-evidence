@@ -1,0 +1,120 @@
+#!/usr/bin/env sh
+set -u
+
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
+AXGO_ROOT="${AXGO_ROOT:-$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)}"
+AXGO_DATA_ROOT="${AXGO_DATA_ROOT:-$AXGO_ROOT}"
+EVIDENCE_FILE="${ORCH_EVIDENCE_FILE:-}"
+
+file_value() {
+    KEY="$1"
+    [ -r "$EVIDENCE_FILE" ] || return 0
+    awk -F= -v key="$KEY" '$1 == key { value=$0; sub(/^[^=]*=/, "", value); print value }' "$EVIDENCE_FILE" 2>/dev/null | tail -n 1
+}
+
+controller_value() {
+    KEY="$1"
+    COMMAND="$2"
+    OUTPUT="$($COMMAND 2>/dev/null || :)"
+    printf '%s\n' "$OUTPUT" | awk -F= -v key="$KEY" '$1 == key { value=$0; sub(/^[^=]*=/, "", value); print value }' | tail -n 1
+}
+
+value_or_unknown() {
+    VALUE="$1"
+    [ -n "$VALUE" ] && printf '%s' "$VALUE" || printf '%s' "UNKNOWN"
+}
+
+upper() { printf '%s' "$1" | tr '[:lower:]' '[:upper:]'; }
+
+get_value() {
+    KEY="$1"
+    VALUE="$(file_value "$KEY")"
+    [ -n "$VALUE" ] && { printf '%s' "$VALUE"; return; }
+    case "$KEY" in
+        GAME) VALUE="${ORCH_GAME:-}";;
+        PACKAGE) VALUE="${ORCH_PACKAGE:-}";;
+        PROFILE) VALUE="${ORCH_PROFILE:-}";;
+        CPU_UTILIZATION) VALUE="${ORCH_CPU_UTILIZATION:-}";;
+        CPU_STATE) VALUE="${ORCH_CPU_STATE:-}";;
+        GPU_UTILIZATION) VALUE="${ORCH_GPU_UTILIZATION:-}";;
+        GPU_STATE) VALUE="${ORCH_GPU_STATE:-}";;
+        MEMORY_USAGE_PERCENT) VALUE="${ORCH_MEMORY_USAGE_PERCENT:-}";;
+        MEMORY_AVAILABLE_MB) VALUE="${ORCH_MEMORY_AVAILABLE_MB:-}";;
+        MEMORY_STATE) VALUE="${ORCH_MEMORY_STATE:-}";;
+        THERMAL_TEMP_C) VALUE="${ORCH_THERMAL_TEMP_C:-}";;
+        THERMAL_PEAK_C) VALUE="${ORCH_THERMAL_PEAK_C:-}";;
+        THERMAL_STATE) VALUE="${ORCH_THERMAL_STATE:-}";;
+        THERMAL_TREND) VALUE="${ORCH_THERMAL_TREND:-}";;
+        FPS) VALUE="${ORCH_FPS:-}";;
+        FRAME_TIME_MS) VALUE="${ORCH_FRAME_TIME_MS:-}";;
+        FRAME_PACING) VALUE="${ORCH_FRAME_PACING:-}";;
+        FPS_TREND) VALUE="${ORCH_FPS_TREND:-}";;
+        BATTERY_PERCENT) VALUE="${ORCH_BATTERY_PERCENT:-}";;
+        CHARGING_STATE) VALUE="${ORCH_CHARGING_STATE:-}";;
+        BATTERY_HEALTH) VALUE="${ORCH_BATTERY_HEALTH:-}";;
+        BATTERY_TEMP_C) VALUE="${ORCH_BATTERY_TEMP_C:-}";;
+        TEMPERATURE_STATE) VALUE="${ORCH_TEMPERATURE_STATE:-}";;
+        VOLTAGE_MV) VALUE="${ORCH_VOLTAGE_MV:-}";;
+        CURRENT_MA) VALUE="${ORCH_CURRENT_MA:-}";;
+        ESTIMATED_WATTS) VALUE="${ORCH_ESTIMATED_WATTS:-}";;
+        DRAIN_RATE) VALUE="${ORCH_DRAIN_RATE:-}";;
+        POWER_STATE) VALUE="${ORCH_POWER_STATE:-}";;
+    esac
+    printf '%s' "$VALUE"
+}
+
+collect_existing() {
+    CPU_OUTPUT="$(AXGO_ROOT="$AXGO_ROOT" AXGO_DATA_ROOT="$AXGO_DATA_ROOT" sh "$AXGO_ROOT/bin/cpu-controller" status 2>/dev/null || :)"
+    GPU_OUTPUT="$(AXGO_ROOT="$AXGO_ROOT" AXGO_DATA_ROOT="$AXGO_DATA_ROOT" sh "$AXGO_ROOT/bin/gpu-controller" status 2>/dev/null || :)"
+    MEMORY_OUTPUT="$(AXGO_ROOT="$AXGO_ROOT" MEMORY_PERFORMANCE_DATA_ROOT="$AXGO_DATA_ROOT" sh "$AXGO_ROOT/bin/memory-performance" status 2>/dev/null || :)"
+    THERMAL_OUTPUT="$(AXGO_ROOT="$AXGO_ROOT" THERMAL_DATA_ROOT="$AXGO_DATA_ROOT" sh "$AXGO_ROOT/bin/thermal-controller" status 2>/dev/null || :)"
+    FPS_OUTPUT="$(AXGO_ROOT="$AXGO_ROOT" FPS_DATA_ROOT="$AXGO_DATA_ROOT" DISPLAY_DATA_ROOT="$AXGO_DATA_ROOT" sh "$AXGO_ROOT/bin/fps-controller" status 2>/dev/null || :)"
+    POWER_OUTPUT="$(AXGO_ROOT="$AXGO_ROOT" POWER_DATA_ROOT="$AXGO_DATA_ROOT" POWER_RUNTIME_DIR="$AXGO_DATA_ROOT/runtime/power" sh "$AXGO_ROOT/bin/power-controller" status 2>/dev/null || :)"
+    PROFILE_OUTPUT="$(AXGO_ROOT="$AXGO_ROOT" GAME_PROFILE_DATA_ROOT="$AXGO_DATA_ROOT" GAME_PROFILE_DIR="${GAME_PROFILE_DIR:-$AXGO_ROOT/config/game-profiles}" sh "$AXGO_ROOT/bin/game-profile" status 2>/dev/null || :)"
+    printf '%s\n' "$CPU_OUTPUT" "$GPU_OUTPUT" "$MEMORY_OUTPUT" "$THERMAL_OUTPUT" "$FPS_OUTPUT" "$POWER_OUTPUT" "$PROFILE_OUTPUT" > "${AXGO_DATA_ROOT}/.orchestrator-controller-evidence.$$" 2>/dev/null || :
+    EVIDENCE_FILE="${AXGO_DATA_ROOT}/.orchestrator-controller-evidence.$$"
+}
+
+if [ -z "$EVIDENCE_FILE" ]; then
+    mkdir -p "$AXGO_DATA_ROOT" 2>/dev/null || :
+    collect_existing
+fi
+
+SESSION_ID="$(get_value SESSION_ID)"
+[ -n "$SESSION_ID" ] || SESSION_ID="${ORCH_SESSION_ID:-unknown-session}"
+
+printf '%s\n' \
+    "EVIDENCE_SCHEMA=1" \
+    "TIMESTAMP=$(date '+%Y-%m-%dT%H:%M:%S%z' 2>/dev/null || printf '%s' unknown-time)" \
+    "SESSION_ID=$SESSION_ID" \
+    "GAME=$(value_or_unknown "$(get_value GAME)")" \
+    "PACKAGE=$(value_or_unknown "$(get_value PACKAGE)")" \
+    "PROFILE=$(upper "$(value_or_unknown "$(get_value PROFILE)")")" \
+    "CPU_UTILIZATION=$(value_or_unknown "$(get_value CPU_UTILIZATION)")" \
+    "CPU_STATE=$(upper "$(value_or_unknown "$(get_value CPU_STATE)")")" \
+    "GPU_UTILIZATION=$(value_or_unknown "$(get_value GPU_UTILIZATION)")" \
+    "GPU_STATE=$(upper "$(value_or_unknown "$(get_value GPU_STATE)")")" \
+    "MEMORY_USAGE_PERCENT=$(value_or_unknown "$(get_value MEMORY_USAGE_PERCENT)")" \
+    "MEMORY_AVAILABLE_MB=$(value_or_unknown "$(get_value MEMORY_AVAILABLE_MB)")" \
+    "MEMORY_STATE=$(upper "$(value_or_unknown "$(get_value MEMORY_STATE)")")" \
+    "THERMAL_TEMP_C=$(value_or_unknown "$(get_value THERMAL_TEMP_C)")" \
+    "THERMAL_PEAK_C=$(value_or_unknown "$(get_value THERMAL_PEAK_C)")" \
+    "THERMAL_STATE=$(upper "$(value_or_unknown "$(get_value THERMAL_STATE)")")" \
+    "THERMAL_TREND=$(upper "$(value_or_unknown "$(get_value THERMAL_TREND)")")" \
+    "FPS=$(value_or_unknown "$(get_value FPS)")" \
+    "FRAME_TIME_MS=$(value_or_unknown "$(get_value FRAME_TIME_MS)")" \
+    "FRAME_PACING=$(upper "$(value_or_unknown "$(get_value FRAME_PACING)")")" \
+    "FPS_TREND=$(upper "$(value_or_unknown "$(get_value FPS_TREND)")")" \
+    "BATTERY_PERCENT=$(value_or_unknown "$(get_value BATTERY_PERCENT)")" \
+    "CHARGING_STATE=$(upper "$(value_or_unknown "$(get_value CHARGING_STATE)")")" \
+    "BATTERY_HEALTH=$(upper "$(value_or_unknown "$(get_value BATTERY_HEALTH)")")" \
+    "BATTERY_TEMP_C=$(value_or_unknown "$(get_value BATTERY_TEMP_C)")" \
+    "TEMPERATURE_STATE=$(upper "$(value_or_unknown "$(get_value TEMPERATURE_STATE)")")" \
+    "VOLTAGE_MV=$(value_or_unknown "$(get_value VOLTAGE_MV)")" \
+    "CURRENT_MA=$(value_or_unknown "$(get_value CURRENT_MA)")" \
+    "ESTIMATED_WATTS=$(value_or_unknown "$(get_value ESTIMATED_WATTS)")" \
+    "DRAIN_RATE=$(value_or_unknown "$(get_value DRAIN_RATE)")" \
+    "POWER_STATE=$(upper "$(value_or_unknown "$(get_value POWER_STATE)")")" \
+    "READ_ONLY=YES"
+
+[ -n "${AXGO_DATA_ROOT:-}" ] && [ -f "${AXGO_DATA_ROOT}/.orchestrator-controller-evidence.$$" ] && rm -f "${AXGO_DATA_ROOT}/.orchestrator-controller-evidence.$$" 2>/dev/null || :

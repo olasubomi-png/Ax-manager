@@ -682,3 +682,41 @@ Power sessions capture starting battery percentage, charging, temperature, healt
 The top-level `bin/session` coordinator invokes power session start after the existing thermal, memory, FPS, and game-profile lifecycle calls; it samples power and guard state while a game is active; and it emits the power report during the existing stop path. Runtime state is isolated under the session data root and is removed at stop. `axgo` exposes the power command family without replacing earlier Steps 1–9 routes.
 
 Step 10 is strictly read-only. It does not write battery, charging, thermal, CPU, GPU, governor, kernel, Power HAL, ZRAM, swap, LMKD, or OOM controls. It does not change charging limits, bypass charging protection, set Android properties, write `/proc` or `/sys`, kill or force-stop processes, or claim exact total device power consumption. Battery and power safety mechanisms remain under Android and the device manufacturer’s control. The Step 10 test data is explicitly labeled `TEST DATA`, and the test suites verify discovery, charging, health, temperature, estimation, guard priority, hysteresis, session reporting, monitor bounds, fixture immutability, and forbidden-write scanning.
+
+
+## Step 11 — Unified Gaming Performance Orchestration Engine
+
+Step 11 adds a unified, read-only orchestration layer that combines the evidence produced by the thermal, memory, FPS/frame-time, game-profile, GPU, CPU, and power engines. The flow is deliberately separated into three deterministic layers: `bin/orchestrator-evidence` normalizes labeled fixture data or live controller output; `bin/orchestrator-decision` applies the safety-first policy and returns a logical decision; and `bin/orchestrator` owns lifecycle state, bounded sampling, hysteresis, and transition auditing. Evidence is treated as data, not as executable configuration, and unavailable signals remain `UNKNOWN`.
+
+The orchestrator supports the following logical and lifecycle states: `idle`, `starting`, `balanced`, `performance`, `conservative`, `thermal-protection`, `battery-protection`, `recovery`, `stopping`, and `stopped`. Starting a session records a generated session identifier and game metadata, performs one bounded sample, and leaves the service in a visible active lifecycle. Repeated start and stop operations are idempotent; they report `already active` or `already stopped` rather than creating duplicate work or failing unsafely.
+
+```sh
+./bin/orchestrator status
+./bin/orchestrator start "Game Name"
+./bin/orchestrator sample
+./bin/orchestrator decision
+./bin/orchestrator inspect
+./bin/orchestrator monitor
+./bin/orchestrator dry-run
+./bin/orchestrator stop
+./bin/axgo orchestrator status
+./bin/axgo orchestrator start "Game Name"
+./bin/axgo orchestrator sample
+./bin/axgo orchestrator decision
+./bin/axgo orchestrator inspect
+./bin/axgo orchestrator monitor
+./bin/axgo orchestrator dry-run
+./bin/axgo orchestrator stop
+```
+
+The decision engine uses a strict safety-first priority order. Thermal danger and unsafe telemetry take precedence over every performance request; critical battery conditions then take precedence over performance; CPU, GPU, memory, thermal caution, charging, health, FPS, frame-time, display, and profile evidence constrain the result in descending safety importance. Healthy, known evidence may produce `balanced` or `performance`; pressure or uncertain evidence produces `conservative`; thermal and critical battery evidence produce the corresponding protection state. The output includes `DECISION_SCHEMA=1`, normalized evidence status, selected state, priority, confidence, reason, safe logical recommendations, and the complete blocked-action set.
+
+Protection escalation is immediate. Recovery is intentionally slower: a thermal or battery protection state remains held until `recovery_stable_samples` consecutive stable samples have been observed, then enters `recovery`; the recovery state requires the same stable threshold before returning to a normal state. Performance downgrades also use a bounded cooldown for ordinary demand fluctuations, while safety downgrades remain immediate. The default policy requires three stable samples and records the stable-sample count in every transition, preventing rapid oscillation around a threshold.
+
+`monitor` is bounded by `monitor_interval_seconds` and `monitor_max_duration_seconds` in `config/orchestrator-policy.json`; it reports completion and sample count instead of spawning an unbounded background process. Every state transition is written to `logs/orchestrator.log` with the session identifier, previous and next states, reason, priority, evidence source, safety classification, and timestamp. Runtime lifecycle data is isolated under `runtime/orchestrator/` and is removed or reset through the normal stop path.
+
+The `dry-run` command renders the proposed logical action plan and explicitly reports `HARDWARE_WRITES_PERFORMED=NO`. The canonical blocked actions are `write_proc`, `write_sys`, `write_power_hal`, `write_governor`, `write_charging_limit`, `modify_battery`, `kill_process`, `force_stop`, `modify_zram`, `modify_swap`, `modify_lmkd`, `disable_thermal_protection`, and `disable_battery_protection`. These are policy identifiers only; the orchestrator never invokes them. No Step 11 code writes `/proc` or `/sys`, changes CPU/GPU governors or frequencies, modifies charging limits, changes Power HAL behavior, changes ZRAM/swap/LMKD/OOM settings, disables thermal or battery protection, kills or force-stops processes, or evaluates commands from telemetry or profile data.
+
+The existing `bin/session` coordinator invokes the orchestrator once at game-session start, once for each bounded sample path, and once at stop. This integration adds unified evidence and lifecycle visibility without replacing the thermal, memory, FPS, profile, GPU, CPU, or power engines. Step 11 therefore remains a recommendation and audit layer: it coordinates safe logical states, preserves all earlier read-only guarantees, and never claims that a hardware setting was applied.
+
+The Step 11 test suites cover evidence normalization, decision priority and unknown fallback, lifecycle idempotence, bounded monitoring, protection and performance hysteresis, session integration, blocked-action reporting, static forbidden-write scanning, dry-run behavior, audit/runtime cleanup, fixture immutability, and top-level `axgo` routing. The complete repository regression suite remains required after every orchestration change.

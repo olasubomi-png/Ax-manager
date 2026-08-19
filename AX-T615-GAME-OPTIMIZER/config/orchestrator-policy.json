@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "states": ["idle", "starting", "balanced", "performance", "conservative", "thermal-protection", "battery-protection", "recovery", "stopping", "stopped"],
+  "default_state": "conservative",
+  "thresholds": {
+    "thermal_protection_states": ["CRITICAL", "EMERGENCY"],
+    "thermal_caution_states": ["CAUTION", "HOT"],
+    "battery_protection_percent": 15,
+    "battery_caution_percent": 25,
+    "battery_protection_states": ["CRITICAL", "UNKNOWN"],
+    "health_protection_states": ["BAD", "DEAD", "UNKNOWN"],
+    "memory_protection_states": ["CRITICAL", "HIGH_PRESSURE"],
+    "memory_caution_states": ["PRESSURE"],
+    "fps_performance_below": 45,
+    "fps_acceptable_at_or_above": 55,
+    "gpu_pressure_states": ["HIGH", "CRITICAL", "PRESSURE"],
+    "cpu_pressure_states": ["HIGH", "CRITICAL", "PRESSURE"],
+    "recovery_stable_samples": 3,
+    "recovery_cooldown_seconds": 5,
+    "monitor_interval_seconds": 1,
+    "monitor_max_duration_seconds": 30
+  },
+  "safety_priority": ["SAFETY", "THERMAL", "POWER", "STABILITY", "FPS", "PERFORMANCE"],
+  "allowed_logical_actions": [
+    "select_profile",
+    "recommend_balanced",
+    "recommend_performance",
+    "recommend_conservative",
+    "recommend_thermal_protection",
+    "recommend_battery_protection",
+    "collect_telemetry",
+    "continue_monitoring",
+    "enter_recovery"
+  ],
+  "forbidden_hardware_actions": [
+    "write_proc",
+    "write_sys",
+    "write_power_hal",
+    "write_governor",
+    "write_charging_limit",
+    "modify_battery",
+    "kill_process",
+    "force_stop",
+    "modify_zram",
+    "modify_swap",
+    "modify_lmkd",
+    "disable_thermal_protection",
+    "disable_battery_protection"
+  ],
+  "read_only": true,
+  "dry_run_only": true,
+  "hardware_writes_allowed": false
+}

@@ -1,0 +1,271 @@
+#!/usr/bin/env sh
+set -u
+
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
+AXGO_ROOT="${AXGO_ROOT:-$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)}"
+AXGO_DATA_ROOT="${AXGO_DATA_ROOT:-$AXGO_ROOT}"
+ORCH_RUNTIME_DIR="${ORCH_RUNTIME_DIR:-$AXGO_DATA_ROOT/runtime/orchestrator}"
+ORCH_LOG_FILE="${ORCH_LOG_FILE:-$AXGO_DATA_ROOT/logs/orchestrator.log}"
+ORCH_POLICY_FILE="${ORCH_POLICY_FILE:-$AXGO_ROOT/config/orchestrator-policy.json}"
+ORCH_EVIDENCE_PROVIDER="${ORCH_EVIDENCE_PROVIDER:-$AXGO_ROOT/bin/orchestrator-evidence}"
+ORCH_DECISION_ENGINE="${ORCH_DECISION_ENGINE:-$AXGO_ROOT/bin/orchestrator-decision}"
+ORCH_DRY_RUN="${ORCH_DRY_RUN:-YES}"
+
+mkdir -p "$ORCH_RUNTIME_DIR" "$(dirname "$ORCH_LOG_FILE")" 2>/dev/null || :
+
+state_file() { printf '%s/%s' "$ORCH_RUNTIME_DIR" "$1"; }
+read_state() { [ -r "$(state_file "$1")" ] && cat "$(state_file "$1")" 2>/dev/null || :; }
+write_state() { printf '%s\n' "$2" > "$(state_file "$1")" 2>/dev/null || :; }
+remove_state() { rm -f "$(state_file "$1")" 2>/dev/null || :; }
+now() { date '+%Y-%m-%dT%H:%M:%S%z' 2>/dev/null || printf '%s' unknown-time; }
+
+policy_number() {
+    KEY="$1"
+    RESULT="$(sed -n "s/.*\\\"${KEY}\\\"[[:space:]]*:[[:space:]]*\\([0-9][0-9]*\\).*/\\1/p" "$ORCH_POLICY_FILE" 2>/dev/null | head -n 1)"
+    printf '%s' "${RESULT:-0}"
+}
+
+log_transition() {
+    PREVIOUS="$1"; NEXT="$2"; REASON="$3"; PRIORITY="$4"; SESSION="$5"; EVIDENCE="$6"; SAFETY="$7"
+    printf 'DECISION|timestamp=%s|session_id=%s|previous_state=%s|next_state=%s|reason=%s|priority=%s|evidence=%s|safety=%s|read_only=YES\n' "$(now)" "$SESSION" "$PREVIOUS" "$NEXT" "$REASON" "$PRIORITY" "$EVIDENCE" "$SAFETY" >> "$ORCH_LOG_FILE" 2>/dev/null || :
+}
+
+parse_value() {
+    KEY="$1"; TEXT="$2"
+    printf '%s\n' "$TEXT" | sed -n "s/^${KEY}=//p" | tail -n 1
+}
+
+allowed_action_plan() {
+    ACTIONS="$1"
+    OLDIFS="$IFS"; IFS=','
+    for ACTION in $ACTIONS; do
+        case "$ACTION" in
+            select_profile|recommend_balanced|recommend_performance|recommend_conservative|recommend_thermal_protection|recommend_battery_protection|collect_telemetry|continue_monitoring|enter_recovery) :;;
+            *) IFS="$OLDIFS"; return 1;;
+        esac
+    done
+    IFS="$OLDIFS"
+    return 0
+}
+
+make_evidence() {
+    ORCH_EVIDENCE_FILE="${ORCH_EVIDENCE_FILE:-}" ORCH_GAME="${ORCH_GAME:-$(read_state game)}" ORCH_PACKAGE="${ORCH_PACKAGE:-$(read_state package)}" ORCH_PROFILE="${ORCH_PROFILE:-$(read_state profile)}" ORCH_SESSION_ID="${ORCH_SESSION_ID:-$(read_state session_id)}" \
+    sh "$ORCH_EVIDENCE_PROVIDER"
+}
+
+make_decision() {
+    EVIDENCE_TEXT="$1"
+    EVIDENCE_TMP="$ORCH_RUNTIME_DIR/evidence.current"
+    printf '%s\n' "$EVIDENCE_TEXT" > "$EVIDENCE_TMP" 2>/dev/null || :
+    DECISION_TEXT="$(ORCH_EVIDENCE_FILE="$EVIDENCE_TMP" sh "$ORCH_DECISION_ENGINE" 2>/dev/null || :)"
+    rm -f "$EVIDENCE_TMP" 2>/dev/null || :
+    printf '%s\n' "$DECISION_TEXT"
+}
+
+transition_for() {
+    PREVIOUS="$1"; DESIRED="$2"; STABLE="$3"
+    if [ "$PREVIOUS" = "$DESIRED" ]; then
+        printf '%s|%s|%s' "$PREVIOUS" "$STABLE" "stable"
+        return
+    fi
+    case "$DESIRED" in
+        thermal-protection|battery-protection)
+            printf '%s|0|protection escalation' "$DESIRED"
+            return
+            ;;
+    esac
+    case "$PREVIOUS" in
+        thermal-protection|battery-protection)
+            if [ "$STABLE" -ge "$(policy_number recovery_stable_samples)" ]; then
+                printf 'recovery|0|protection recovery threshold reached'
+            else
+                printf '%s|%s|recovery pending' "$PREVIOUS" "$((STABLE + 1))"
+            fi
+            return
+            ;;
+        recovery)
+            if [ "$STABLE" -ge "$(policy_number recovery_stable_samples)" ]; then
+                case "$DESIRED" in performance) printf 'balanced|0|recovery completed one level below performance';; *) printf '%s|0|recovery completed' "$DESIRED";; esac
+            else
+                printf 'recovery|%s|recovery stable sample pending' "$((STABLE + 1))"
+            fi
+            return
+            ;;
+        performance)
+            case "$DESIRED" in
+                thermal-protection|battery-protection|conservative) printf '%s|0|safety downgrade is immediate' "$DESIRED";;
+                balanced)
+                    if [ "$((STABLE + 1))" -ge "$(policy_number recovery_stable_samples)" ]; then
+                        printf 'balanced|0|performance cooldown completed'
+                    else
+                        printf 'performance|%s|performance cooldown pending' "$((STABLE + 1))"
+                    fi
+                    ;;
+                *) printf '%s|0|performance state transition' "$DESIRED";;
+            esac
+            return
+            ;;
+        *)
+            printf '%s|0|normal state evaluation' "$DESIRED"
+            return
+            ;;
+    esac
+}
+
+print_decision() {
+    DECISION="$1"; PREVIOUS="$2"; NEXT="$3"; SESSION="$4"; TRANSITION_REASON="$5"; DRY="$6"
+    SELECTED_STATE="$(parse_value SELECTED_STATE "$DECISION")"
+    PRIORITY="$(parse_value PRIORITY "$DECISION")"
+    REASON="$(parse_value REASON "$DECISION")"
+    CONFIDENCE="$(parse_value CONFIDENCE "$DECISION")"
+    EVIDENCE="$(parse_value EVIDENCE_SUMMARY "$DECISION")"
+    ACTIONS="$(parse_value RECOMMENDED_ACTIONS "$DECISION")"
+    BLOCKED="$(parse_value BLOCKED_ACTIONS "$DECISION")"
+    RECOVERY="$(parse_value RECOVERY_CONDITIONS "$DECISION")"
+    SAFETY="$(parse_value SAFETY_CLASSIFICATION "$DECISION")"
+    allowed_action_plan "$ACTIONS" || ACTIONS="recommend_conservative,collect_telemetry,continue_monitoring"
+    write_state current_state "$NEXT"
+    write_state last_decision "$DECISION"
+    write_state stable_samples "${STABLE_SAMPLES:-0}"
+    log_transition "$PREVIOUS" "$NEXT" "$TRANSITION_REASON" "$PRIORITY" "$SESSION" "$EVIDENCE" "$SAFETY"
+    printf '%s\n' "$DECISION" \
+        "ORCHESTRATOR_STATE=$NEXT" \
+        "PREVIOUS_STATE=$PREVIOUS" \
+        "NEXT_STATE=$NEXT" \
+        "STABLE_SAMPLES=${STABLE_SAMPLES:-0}" \
+        "TRANSITION_REASON=$TRANSITION_REASON" \
+        "TRANSITION_TIMESTAMP=$(now)" \
+        "TRANSITION_SESSION_ID=$SESSION" \
+        "DECISION_CONFIDENCE=$CONFIDENCE" \
+        "DECISION_PRIORITY=$PRIORITY" \
+        "ACTION_PLAN=$ACTIONS" \
+        "BLOCKED_ACTIONS=$BLOCKED" \
+        "RECOVERY_CONDITIONS=$RECOVERY" \
+        "DRY_RUN=$DRY" \
+        "HARDWARE_WRITES_PERFORMED=NO" \
+        "AUDIT_LOG=$ORCH_LOG_FILE"
+}
+
+sample_once() {
+    EVIDENCE="$(make_evidence)"
+    DECISION="$(make_decision "$EVIDENCE")"
+    PREVIOUS="$(read_state current_state)"; [ -n "$PREVIOUS" ] || PREVIOUS=idle
+    SESSION="$(read_state session_id)"; [ -n "$SESSION" ] || SESSION=unknown-session
+    DESIRED="$(parse_value SELECTED_STATE "$DECISION")"
+    STABLE_SAMPLES="$(read_state stable_samples)"; case "$STABLE_SAMPLES" in ''|*[!0-9]*) STABLE_SAMPLES=0;; esac
+    TRANSITION="$(transition_for "$PREVIOUS" "$DESIRED" "$STABLE_SAMPLES")"
+    NEXT="${TRANSITION%%|*}"; REMAINDER="${TRANSITION#*|}"; STABLE_SAMPLES="${REMAINDER%%|*}"; TRANSITION_REASON="${REMAINDER#*|}"
+    print_decision "$DECISION" "$PREVIOUS" "$NEXT" "$SESSION" "$TRANSITION_REASON" "${ORCH_DRY_RUN:-YES}"
+}
+
+start_session() {
+    if [ "$(read_state lifecycle)" = active ]; then
+        echo "ORCHESTRATOR_SESSION=ALREADY_ACTIVE"
+        echo "START_STATUS=already active"
+        status
+        return 0
+    fi
+    SESSION="orch-$(date '+%Y%m%d%H%M%S' 2>/dev/null || echo now)-$$"
+    write_state lifecycle active
+    write_state session_id "$SESSION"
+    write_state started "$(now)"
+    write_state current_state starting
+    write_state stable_samples 0
+    write_state game "${ORCH_GAME:-${2:-UNKNOWN}}"
+    write_state package "${ORCH_PACKAGE:-UNKNOWN}"
+    write_state profile "${ORCH_PROFILE:-BALANCED}"
+    echo "ORCHESTRATOR_SESSION=$SESSION"
+    echo "ORCHESTRATOR_LIFECYCLE=starting"
+    echo "ORCHESTRATOR_LIFECYCLE=active"
+    sample_once
+}
+
+stop_session() {
+    if [ "$(read_state lifecycle)" != active ]; then
+        echo "ORCHESTRATOR_LIFECYCLE=stopped"
+        echo "ORCHESTRATOR_SESSION=NONE"
+        echo "STOP_STATUS=already stopped"
+        echo "RUNTIME_ARTIFACTS_REMAINING=NO"
+        return 0
+    fi
+    PREVIOUS="$(read_state current_state)"; [ -n "$PREVIOUS" ] || PREVIOUS=idle
+    SESSION="$(read_state session_id)"
+    write_state current_state stopping
+    echo "ORCHESTRATOR_LIFECYCLE=stopping"
+    echo "ORCHESTRATOR_SESSION=$SESSION"
+    echo "FINAL_STATE=$PREVIOUS"
+    echo "SESSION_STARTED=$(read_state started)"
+    echo "SESSION_STOPPED=$(now)"
+    echo "AUDIT_LOG=$ORCH_LOG_FILE"
+    log_transition "$PREVIOUS" stopping "session stop requested" SAFETY "$SESSION" "final_state:$PREVIOUS" "READ_ONLY"
+    remove_state lifecycle
+    remove_state session_id
+    remove_state started
+    remove_state current_state
+    remove_state stable_samples
+    remove_state last_decision
+    remove_state game
+    remove_state package
+    remove_state profile
+    echo "ORCHESTRATOR_LIFECYCLE=stopped"
+    echo "RUNTIME_ARTIFACTS_REMAINING=NO"
+}
+
+status() {
+    LIFECYCLE="$(read_state lifecycle)"; [ -n "$LIFECYCLE" ] || LIFECYCLE=idle
+    CURRENT="$(read_state current_state)"; [ -n "$CURRENT" ] || CURRENT=idle
+    SESSION="$(read_state session_id)"; [ -n "$SESSION" ] || SESSION=NONE
+    printf '%s\n' "ORCHESTRATOR_LIFECYCLE=$LIFECYCLE" "ORCHESTRATOR_STATE=$CURRENT" "ORCHESTRATOR_SESSION=$SESSION" "GAME=$(read_state game)" "PROFILE=$(read_state profile)" "STABLE_SAMPLES=$(read_state stable_samples)" "DRY_RUN=${ORCH_DRY_RUN:-YES}" "READ_ONLY=YES"
+    [ -r "$(state_file last_decision)" ] && cat "$(state_file last_decision)"
+}
+
+monitor() {
+    INTERVAL="${ORCH_INTERVAL:-$(policy_number monitor_interval_seconds)}"
+    DURATION="${ORCH_DURATION:-$(policy_number monitor_max_duration_seconds)}"
+    case "$INTERVAL" in ''|*[!0-9]*) INTERVAL=1;; esac
+    case "$DURATION" in ''|*[!0-9]*) DURATION=30;; esac
+    START_EPOCH="$(date +%s 2>/dev/null || echo 0)"; COUNT=0
+    echo "ORCHESTRATOR_MONITOR=STARTED"
+    echo "INTERVAL_SECONDS=$INTERVAL"
+    echo "MAX_DURATION_SECONDS=$DURATION"
+    while [ "$COUNT" -lt "$DURATION" ]; do
+        sample_once
+        COUNT=$((COUNT + 1))
+        [ "$INTERVAL" -gt 0 ] && sleep "$INTERVAL"
+    done
+    echo "ORCHESTRATOR_MONITOR=STOPPED"
+    echo "MONITOR_STATUS=completed"
+    echo "SAMPLES=$COUNT"
+    echo "MONITOR_SAMPLES=$COUNT"
+    echo "ORPHANED_PROCESSES=NO"
+}
+
+usage() {
+    echo "Usage: orchestrator [status|start [game]|sample|decision|inspect|stop|monitor|dry-run]"
+}
+
+COMMAND="${1:-status}"
+case "$COMMAND" in
+    start)
+        ORCH_GAME="${ORCH_GAME:-${2:-UNKNOWN}}" start_session "$@"
+        ;;
+    dry-run)
+        ORCH_DRY_RUN=YES; shift; [ "${1:-}" = start ] && shift || :; start_session "start" "${1:-UNKNOWN}"
+        ;;
+    sample|decision)
+        sample_once
+        ;;
+    inspect|status)
+        status
+        ;;
+    stop)
+        stop_session
+        ;;
+    monitor)
+        monitor
+        ;;
+    *)
+        usage >&2
+        exit 2
+        ;;
+esac
